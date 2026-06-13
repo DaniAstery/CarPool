@@ -5,6 +5,7 @@ import {
   SafeAreaView,
   StyleSheet,
   TouchableOpacity,
+  Button,
 } from "react-native";
 //import MapView, { Marker } from "react-native-maps";
 
@@ -87,15 +88,17 @@ export default function PassengerJoinedPoolScreen({ route }) {
 
       {/* ACTIONS */}
       {status === "confirmed" && (
-        <TouchableOpacity
-          style={styles.button}
-          onPress={() => setStatus("enroute")}
-        >
-          <Text style={styles.buttonText}>
-            🚶 I'M ON MY WAY
-          </Text>
-        </TouchableOpacity>
-      )}
+              <Button
+            title="I'm On My Way"
+            onPress={async () => {
+              await axios.post(
+                `${API_URL}/api/bookings/${bookingId}/on-my-way`
+              );
+
+              navigation.navigate("LiveTracking");
+            }}
+          />
+          )}
 
       {status === "enroute" && (
         <TouchableOpacity
