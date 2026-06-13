@@ -3,6 +3,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import PassengerJoinedPoolScreen from "./src/screens/JoinedPoolScreen";
 import PassengerScreen from "./src/screens/PassengerScreen";
+import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
 const Stack = createNativeStackNavigator();
 
 export default function App() {
@@ -19,6 +20,11 @@ export default function App() {
         <Stack.Screen
           name="JoinedPool"
           component={PassengerJoinedPoolScreen}
+        />
+
+        <Stack.Screen 
+          name="LiveTrackingScreen" 
+          component={LivetrackingScreen} 
         />
 
       </Stack.Navigator>

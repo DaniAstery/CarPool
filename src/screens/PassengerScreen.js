@@ -11,6 +11,7 @@ import {
 
 import PoolOfferCard from "../components/PoolOfferCard";
 
+
 export default function PassengerScreen({ navigation }) {
   const [searchText, setSearchText] = useState("");
   const [hubs, setHubs] = useState([]);

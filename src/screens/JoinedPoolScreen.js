@@ -7,10 +7,9 @@ import {
   TouchableOpacity,
   Button,
 } from "react-native";
-//import MapView, { Marker } from "react-native-maps";
 
-export default function PassengerJoinedPoolScreen({ route }) {
-  const ride = route?.params?.ride;
+export default function PassengerJoinedPoolScreen({ route, navigation }) {
+  const ride = route?.params?.ride || {};
 
   const [status, setStatus] = useState("confirmed");
 
@@ -26,46 +25,21 @@ export default function PassengerJoinedPoolScreen({ route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* MAP */}
-      {/*<View style={styles.map}>
-       <MapView
-          style={{ flex: 1 }}
-          initialRegion={{
-            latitude: driverLocation.latitude,
-            longitude: driverLocation.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          }}
-        >
-          <Marker
-            coordinate={passengerLocation}
-            title="You"
-            pinColor="blue"
-          />
-
-          <Marker
-            coordinate={driverLocation}
-            title="Driver"
-            pinColor="red"
-          />
-       </MapView>
-      </View>*/}
 
       {/* STATUS CARD */}
       <View style={styles.successCard}>
         <Text style={styles.successTitle}>
-          🚖 {ride.start_location} → {ride.end_location}
+          🚖 {ride.start_location || "Start"} → {ride.end_location || "End"}
         </Text>
 
         <Text style={styles.successSubtitle}>
-          {status === "confirmed" && "Ride confirmed. Walk to driver."}
-          {status === "enroute" && "Walking to driver location..."}
+          {status === "confirmed" && "Ride confirmed. Tap I'm On My Way."}
+          {status === "enroute" && "Heading to driver location..."}
           {status === "arrived" && "Waiting for driver confirmation."}
         </Text>
 
         <Text style={styles.successSubtitle}>
-           👥 {ride.filled}/{ride.total_seats}
+          👥 {ride.filled ?? 0}/{ride.total_seats ?? 3}
         </Text>
       </View>
 
@@ -74,11 +48,11 @@ export default function PassengerJoinedPoolScreen({ route }) {
         <Text style={styles.label}>DRIVER</Text>
 
         <Text style={styles.driver}>
-          {ride.driver_name} ⭐ {ride.driver_rating}
+          {ride.driver_name || "Driver"} ⭐ {ride.driver_rating || "4.5"}
         </Text>
 
         <Text style={styles.sub}>
-          {ride.make} {ride.model}
+          {ride.make || "Car"} {ride.model || ""}
         </Text>
 
         <Text style={styles.sub}>
@@ -88,17 +62,14 @@ export default function PassengerJoinedPoolScreen({ route }) {
 
       {/* ACTIONS */}
       {status === "confirmed" && (
-              <Button
-            title="I'm On My Way"
-            onPress={async () => {
-              await axios.post(
-                `${API_URL}/api/bookings/${bookingId}/on-my-way`
-              );
-
-              navigation.navigate("LiveTracking");
-            }}
-          />
-          )}
+        <Button
+          title="I'm On My Way"
+          onPress={() => {
+            setStatus("enroute"); // optional: update UI state
+            navigation.navigate("LiveTrackingScreen", { ride });
+          }}
+        />
+      )}
 
       {status === "enroute" && (
         <TouchableOpacity

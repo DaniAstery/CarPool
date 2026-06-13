@@ -1,39 +1,50 @@
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-  ScrollView
-} from "react-native";
-
-import MapView, { Marker, Polyline } from "react-native-maps";
+import { View, Text, StyleSheet } from "react-native";
+import MapView, { Marker } from "react-native-maps";
 
 export default function LiveTrackingScreen() {
+  // 📍 CORE PICKUP HUB (center of system)
+  const pickupLocation = {
+    latitude: 9.020,
+    longitude: 38.770,
+  };
+
+  // 🚗 DRIVER approaching (smooth movement)
   const [driverLocation, setDriverLocation] = useState({
     latitude: 9.010,
     longitude: 38.760,
   });
 
-  const [pickupLocation] = useState({
-    latitude: 9.020,
-    longitude: 38.770,
-  });
+  // 👤 PASSENGERS (clustered within ~100–300m)
+  const passengers = [
+    {
+      id: 1,
+      latitude: 9.021,
+      longitude: 38.771,
+      walk: 120, // meters
+    },
+    {
+      id: 2,
+      latitude: 9.019,
+      longitude: 38.768,
+      walk: 210,
+    },
+    {
+      id: 3,
+      latitude: 9.022,
+      longitude: 38.769,
+      walk: 280,
+    },
+  ];
 
-  const [passengerLocation] = useState({
-    latitude: 9.000,
-    longitude: 38.750,
-  });
-
+  // 🚗 driver movement toward pickup (ETA simulation)
   useEffect(() => {
     const interval = setInterval(() => {
       setDriverLocation((prev) => ({
-        ...prev,
-        latitude: prev.latitude + 0.0001,
-        longitude: prev.longitude + 0.0001,
+        latitude: prev.latitude + (pickupLocation.latitude - prev.latitude) * 0.08,
+        longitude: prev.longitude + (pickupLocation.longitude - prev.longitude) * 0.08,
       }));
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, []);
@@ -43,172 +54,123 @@ export default function LiveTrackingScreen() {
       <MapView
         style={styles.map}
         initialRegion={{
-          latitude: 9.010,
-          longitude: 38.760,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
+          latitude: pickupLocation.latitude,
+          longitude: pickupLocation.longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
         }}
       >
-        <Marker
-          coordinate={driverLocation}
-          title="Driver"
-        />
+        {/* 📍 PICKUP HUB (MAIN FOCUS) */}
+        <Marker coordinate={pickupLocation} title="Pickup Hub">
+          <View style={styles.pickupHub} />
+        </Marker>
 
-        <Marker
-          coordinate={pickupLocation}
-          title="Pickup Point"
-        />
+        {/* 🚗 DRIVER */}
+        <Marker coordinate={driverLocation} title="Driver">
+          <View style={styles.driverPin}>
+            <Text style={{ color: "white" }}>🚗</Text>
+          </View>
+        </Marker>
 
-        <Marker
-          coordinate={passengerLocation}
-          title="You"
-        />
-
-        <Polyline
-          coordinates={[
-            passengerLocation,
-            pickupLocation,
-          ]}
-          strokeWidth={4}
-        />
+        {/* 👥 PASSENGERS (cluster view) */}
+        {passengers.map((p) => (
+          <Marker key={p.id} coordinate={{ latitude: p.latitude, longitude: p.longitude }}>
+            <View style={styles.passengerPin}>
+              <Text style={{ color: "white", fontSize: 10 }}>{p.id}</Text>
+            </View>
+          </Marker>
+        ))}
       </MapView>
 
-      <ScrollView style={styles.bottomCard}>
-        <Text style={styles.title}>
-          I'M ON MY WAY
+      {/* 📊 SMART PICKUP ANALYTICS PANEL */}
+      <View style={styles.panel}>
+        <Text style={styles.title}>🚖 Corridor Pool Optimized</Text>
+
+        <Text style={styles.text}>
+          📍 Pickup is centrally chosen for minimum total walking
         </Text>
 
-        <Text style={styles.subtitle}>
-          Walk to your pickup point
+        <Text style={styles.text}>
+          👥 3 passengers clustered within 100–300m radius
         </Text>
 
-        <View style={styles.driverCard}>
-          <Image
-            source={{
-              uri: "https://randomuser.me/api/portraits/men/32.jpg",
-            }}
-            style={styles.avatar}
-          />
+        <Text style={styles.text}>
+          🚶 Avg walking distance: ~200m (comfortable zone)
+        </Text>
 
-          <View>
-            <Text style={styles.driverName}>
-              Abebe T.
-            </Text>
+        <Text style={styles.text}>
+          🚗 Driver ETA: ~3–5 minutes
+        </Text>
 
-            <Text>
-              Toyota Prius
-            </Text>
-
-            <Text>
-              ⭐ 4.8
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.poolCard}>
-          <Text style={styles.poolTitle}>
-            Pool Details
-          </Text>
-
-          <Text>
-            Pickup 1 - Bole Airport
-          </Text>
-
-          <Text>
-            Pickup 2 - Thunder Place
-          </Text>
-
-          <Text>
-            Dropoff - Kazanchis Hilton
-          </Text>
-
-          <Text>
-            Seats Filled: 2/3
-          </Text>
-        </View>
-
-        <TouchableOpacity style={styles.cancelButton}>
-          <Text style={styles.cancelText}>
-            CANCEL RIDE
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
+        <Text style={styles.highlight}>
+          ✔ Balanced comfort + efficiency achieved
+        </Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1 },
+  map: { flex: 1 },
+
+  // 📍 pickup hub (important visual anchor)
+  pickupHub: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "#1DB954",
+    borderWidth: 3,
+    borderColor: "white",
   },
 
-  map: {
-    flex: 1,
+  // 🚗 driver
+  driverPin: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "red",
+    justifyContent: "center",
+    alignItems: "center",
   },
 
-  bottomCard: {
+  // 👥 passengers
+  passengerPin: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#007AFF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // 📊 panel
+  panel: {
     position: "absolute",
-    bottom: 0,
-    width: "100%",
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: "50%",
-    padding: 20,
+    bottom: 10,
+    left: 10,
+    right: 10,
+    backgroundColor: "white",
+    padding: 12,
+    borderRadius: 12,
+    elevation: 6,
   },
 
   title: {
-    fontSize: 22,
-    fontWeight: "700",
-    textAlign: "center",
-    color: "green",
+    fontWeight: "bold",
+    fontSize: 16,
+    marginBottom: 6,
   },
 
-  subtitle: {
-    textAlign: "center",
-    marginBottom: 20,
+  text: {
+    fontSize: 13,
+    marginBottom: 3,
+    color: "#333",
   },
 
-  driverCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 15,
-  },
-
-  avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    marginRight: 15,
-  },
-
-  driverName: {
-    fontWeight: "700",
-    fontSize: 18,
-  },
-
-  poolCard: {
-    padding: 15,
-    backgroundColor: "#f7f7f7",
-    borderRadius: 10,
-    marginBottom: 20,
-  },
-
-  poolTitle: {
-    fontWeight: "700",
-    marginBottom: 10,
-  },
-
-  cancelButton: {
-    borderWidth: 1,
-    borderColor: "red",
-    borderRadius: 10,
-    padding: 15,
-  },
-
-  cancelText: {
-    color: "red",
-    textAlign: "center",
-    fontWeight: "700",
+  highlight: {
+    marginTop: 6,
+    fontWeight: "bold",
+    color: "#1DB954",
   },
 });
