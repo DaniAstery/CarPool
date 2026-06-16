@@ -7,7 +7,7 @@ import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
 import MatchingScreen from "./src/screens/MatchingScreen";
 import PickupProposalScreen from "./src/screens/PickupProposalScreen";
 import TripDepartureScreen from "./src/screens/TripDepartureScreen";
-
+import TripCompletionScreen from "./src/screens/TripCompletionScreen";
 const Stack = createNativeStackNavigator();
 
 export default function App() {
@@ -43,6 +43,11 @@ export default function App() {
         <Stack.Screen
           name="TripDepartureScreen"
           component={TripDepartureScreen}
+        />
+
+         <Stack.Screen
+          name="TripCompletionScreen"
+          component={TripCompletionScreen}
         />
 
       </Stack.Navigator>
