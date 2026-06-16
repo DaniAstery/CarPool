@@ -28,24 +28,6 @@ export default function PassengerScreen({ navigation }) {
   /* ---------------- HUB SEARCH ---------------- */
 
   {/* Temporary Developer Portal Bypass Button */}
-<TouchableOpacity 
-  style={{
-    position: 'absolute',
-    top: 50,
-    right: 16,
-    backgroundColor: '#111827',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    zIndex: 999, // Ensures it sits perfectly on top of maps/components
-    flexDirection: 'row',
-    alignItems: 'center'
-  }}
-  onPress={() => navigation.navigate("DriverHome")}
->
-  <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 6 }} />
-  <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>SWITCH TO DRIVER</Text>
-</TouchableOpacity>
 
   const searchHubs = async (text) => {
     setSearchText(text);
@@ -153,6 +135,8 @@ const joinPool = async (routeId) => {
     console.log("join error:", err);
   }
 };
+
+
   /* ---------------- UI ---------------- */
   return (
     <ScrollView style={styles.container}>
@@ -180,6 +164,31 @@ const joinPool = async (routeId) => {
 
       {/* ROUTES */}
       <Text style={styles.label}>Available Corridors</Text>
+      {/* FLOATING SWITCH BUTTON - FORCE RENDER ON TOP */}
+      <TouchableOpacity 
+        style={{
+          position: 'absolute',
+          top: 70,            // Pushes it down past any phone notches
+          right: 20,           // Places it on the right side
+          backgroundColor: '#111827', 
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          borderRadius: 25,
+          zIndex: 9999,        // FORCES it to float ABOVE the MapView component
+          elevation: 10,       // FORCES visibility on Android shadows layer
+          flexDirection: 'row',
+          alignItems: 'center',
+          borderWidth: 1,
+          borderColor: '#374151',
+        }}
+        activeOpacity={0.8}
+        onPress={() => navigation.navigate("DriverHome")}
+      >
+        <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
+        <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>
+          SWITCH TO DRIVER
+        </Text>
+      </TouchableOpacity>
 
       {loadingRoutes ? (
         <ActivityIndicator />

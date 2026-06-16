@@ -51,10 +51,9 @@ export default function App() {
           component={TripCompletionScreen}
         />
 
-        <Stack.Screen 
-          name="DriverHome" 
-          component={DriverHomeScreen} 
-          options={{ headerShown: false }} // Hides the default white native header
+       <Stack.Screen
+          name="DriverHome"
+          component={DriverHomeScreen}
         />
 
       </Stack.Navigator>

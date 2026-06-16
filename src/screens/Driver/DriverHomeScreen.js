@@ -4,270 +4,399 @@ import {
   Text,
   StyleSheet,
   SafeAreaView,
+  ScrollView,
   Dimensions,
   TouchableOpacity,
   Switch,
-  Animated,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
-// FIX: Added FontAwesome5 directly into the brackets below
-import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
+import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
-export default function TripDepartureScreen({ navigation, route }) {
-  
-  // 1. SAFE PARAMETERS EXTRACTION (Fixes the property doesn't exist error)
-  const routeId = route?.params?.routeId || "1";
-  const ride = route?.params?.ride || { corridor: "Megenagna → Bole" };
+export default function DriverHomeScreen({ navigation }) {
+  const [isOnline, setIsOnline] = useState(true);
+  const [activeTab, setActiveTab] = useState("Feed");
 
-  // Coordinates Architecture (Megenagna Hub to Bole Terminal)
-  const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
-  const destinationLocation = { latitude: 8.9985, longitude: 38.7855 };
+  // Simulated live feed payload directly matching the reference architecture
+  const [requests, setRequests] = useState([
+    {
+      id: "1",
+      title: "Bole Hub",
+      price: "450 ETB",
+      distance: "3 m",
+      timeLeft: 14,
+      icon: "map-marker-distance",
+      iconType: "MCI",
+    },
+    {
+      id: "2",
+      title: "Gerji Hub",
+      price: "350 ETB",
+      distance: "3 m",
+      timeLeft: 18,
+      icon: "routes",
+      iconType: "FA5",
+    },
+    {
+      id: "3",
+      title: "Thunder (Place)",
+      price: "500 ETB",
+      distance: "17 m",
+      timeLeft: 22,
+      icon: "office-building",
+      iconType: "MCI",
+    },
+  ]);
 
-  const [pulseAnim] = useState(new Animated.Value(0));
-  const [currentDistanceLeft, setCurrentDistanceLeft] = useState("3.4 km");
-  const [currentETA, setCurrentETA] = useState("12 min");
-
-  // Dynamic state positioning track for the vehicle
-  const [carLocation, setCarLocation] = useState(pickupLocation);
-
-  // Infinite Pulse Animation loop for the green success banner marker
+  // Real-time countdown timer tick effect loop for request urgency simulation
   useEffect(() => {
-    Animated.loop(
-      Animated.timing(pulseAnim, {
-        toValue: 1,
-        duration: 2200,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      })
-    ).start();
-  }, []);
+    if (!isOnline) return;
 
-  // Simulate active vehicle movement progress along the transit polyline
-  useEffect(() => {
-    const movementInterval = setInterval(() => {
-      setCarLocation((prev) => {
-        const latDelta = (destinationLocation.latitude - prev.latitude) * 0.05;
-        const lngDelta = (destinationLocation.longitude - prev.longitude) * 0.05;
+    const interval = setInterval(() => {
+      setRequests((prevRequests) =>
+        prevRequests.map((req) => {
+          if (req.timeLeft > 0) {
+            return { ...req, timeLeft: req.timeLeft - 1 };
+          }
+          return { ...req, timeLeft: 20 }; // Auto reset loop for persistent prototype testing
+        })
+      );
+    }, 1000);
 
-        // Stop updates once the vehicle approaches destination bounds
-        if (Math.abs(latDelta) < 0.0001 && Math.abs(lngDelta) < 0.0001) {
-          clearInterval(movementInterval);
-          setCurrentDistanceLeft("0 km");
-          setCurrentETA("Arrived");
-          return destinationLocation;
-        }
-
-        return {
-          latitude: prev.latitude + latDelta,
-          longitude: prev.longitude + lngDelta,
-        };
-      });
-    }, 4000);
-
-    return () => clearInterval(movementInterval);
-  }, []);
-
-  const pulseScale = pulseAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 2.0],
-  });
-  const pulseOpacity = pulseAnim.interpolate({
-    inputRange: [0, 0.6, 1],
-    outputRange: [0.5, 0.2, 0],
-  });
+    return () => clearInterval(interval);
+  }, [isOnline]);
 
   return (
     <SafeAreaView style={styles.container}>
       
-      {/* Dynamic Top Banner: Switched to Active Green En-Route theme */}
-      <View style={styles.statusBarBanner}>
-        <View style={styles.statusIndicatorWrapper}>
-          <Animated.View 
-            style={[
-              styles.statusPulseWave, 
-              { transform: [{ scale: pulseScale }], opacity: pulseOpacity }
-            ]} 
+      {/* 1. Header Profile & Mode Toggler Panel */}
+      <View style={styles.headerBlock}>
+        <TouchableOpacity style={styles.menuIconButton} activeOpacity={0.7}>
+          <Ionicons name="menu" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+
+        <View style={styles.statusToggleContainer}>
+          <Text style={[styles.statusLabelText, isOnline ? styles.textOnline : styles.textOffline]}>
+            Status: {isOnline ? "ONLINE" : "OFFLINE"}
+          </Text>
+          <Switch
+            trackColor={{ false: "#374151", true: "#059669" }}
+            thumbColor="#FFFFFF"
+            ios_backgroundColor="#374151"
+            value={isOnline}
+            onValueChange={(val) => setIsOnline(val)}
+            style={styles.switchScale}
           />
-          <View style={styles.statusCenterCoreDot}>
-            <FontAwesome5 name="car-side" size={11} color="#FFFFFF" />
-          </View>
-        </View>
-        <View style={styles.statusTextContainer}>
-          <Text style={styles.statusPrimaryText}>All Passengers Boarded</Text>
-          <Text style={styles.statusSecondaryText}>En-route along optimized corridor transit path</Text>
         </View>
       </View>
 
-      {/* Interactive Transit Map Layer */}
-      <View style={styles.mapContainer}>
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: 9.0050,
-            longitude: 38.7900,
-            latitudeDelta: 0.022,
-            longitudeDelta: 0.022,
-          }}
-          customMapStyle={cleanMinimalMapStyle}
+      {/* 2. Main Live Requests Feed Body */}
+      <ScrollView 
+        style={styles.feedScrollArea} 
+        contentContainerStyle={styles.scrollContent} 
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.feedTitleLabel}>Available Requests <Text style={styles.timerSubText}>(20s Timer)</Text></Text>
+
+        {isOnline ? (
+          requests.map((item, index) => (
+            <View key={item.id} style={styles.requestItemCard}>
+              
+              {/* Left Column Layout: Counter/Urgency Flag & Node Visualizer */}
+              <View style={styles.leftUrgencyColumn}>
+                <View style={styles.nodeIconFrame}>
+                  {item.iconType === "MCI" ? (
+                    <MaterialCommunityIcons name={item.icon} size={22} color="#111827" />
+                  ) : (
+                    <FontAwesome5 name={item.icon} size={18} color="#111827" />
+                  )}
+                  <View style={styles.nodeCounterBadge}>
+                    <Text style={styles.nodeCounterText}>{index + 1}</Text>
+                  </View>
+                </View>
+                <Text style={styles.timeLeftLabel}>{item.timeLeft}s left</Text>
+              </View>
+
+              {/* Right Column Layout: Destination Details Metadata Frame */}
+              <View style={styles.detailsDataColumn}>
+                <View style={styles.metaHeaderRow}>
+                  <Text style={styles.requestNumberLabel}>REQUEST #{index + 1}:</Text>
+                  <View style={styles.distanceCluster}>
+                    <Ionicons name="location-sharp" size={11} color="#9CA3AF" />
+                    <Text style={styles.distanceText}>{item.distance}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.hubTitleText}>{item.title}</Text>
+                <Text style={styles.priceTagText}>➔ {item.price}</Text>
+
+                {/* Primary Accept System Trigger */}
+                <TouchableOpacity 
+                  style={styles.claimJobButton}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    console.log(`Job approved for dispatch segment identifier: ${item.id}`);
+                    // Linked flow state forward segment example:
+                    // navigation.navigate("DriverMatchRequestScreen", { hubDetails: item });
+                  }}
+                >
+                  <Text style={styles.claimJobButtonText}>CLAIM JOB</Text>
+                </TouchableOpacity>
+              </View>
+
+            </View>
+          ))
+        ) : (
+          <View style={styles.offlineFallbackContainer}>
+            <MaterialCommunityIcons name="cloud-off-outline" size={48} color="#4B5563" />
+            <Text style={styles.offlineFallbackText}>You are currently offline</Text>
+            <Text style={styles.offlineFallbackSubText}>Switch your status portal to online mode above to populate regional matching manifests.</Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* 3. Global Platform Bottom Navigation App Bar */}
+      <View style={styles.bottomTabBar}>
+        <TouchableOpacity 
+          style={styles.tabItemButton} 
+          onPress={() => setActiveTab("Feed")}
         >
-          {/* Main Solid Transit Polyline Routing Track */}
-          <Polyline
-            coordinates={[pickupLocation, destinationLocation]}
-            strokeColor="#10B981"
-            strokeWidth={5}
+          <MaterialCommunityIcons 
+            name="rss" 
+            size={20} 
+            color={activeTab === "Feed" ? "#FFFFFF" : "#9CA3AF"} 
           />
+          <Text style={[styles.tabItemLabel, activeTab === "Feed" && styles.tabItemActiveLabel]}>Feed</Text>
+        </TouchableOpacity>
 
-          {/* Historical Starting Node Point (Origin Marker) */}
-          <Marker coordinate={pickupLocation}>
-            <View style={styles.originMarkerPoint} />
-          </Marker>
+        <TouchableOpacity 
+          style={styles.tabItemButton} 
+          onPress={() => setActiveTab("Map")}
+        >
+          <Ionicons 
+            name="map-outline" 
+            size={20} 
+            color={activeTab === "Map" ? "#FFFFFF" : "#9CA3AF"} 
+          />
+          <Text style={[styles.tabItemLabel, activeTab === "Map" && styles.tabItemActiveLabel]}>Map</Text>
+        </TouchableOpacity>
 
-          {/* Targeted Drop-off Station Node */}
-          <Marker coordinate={destinationLocation}>
-            <View style={styles.destinationMarkerWrapper}>
-              <View style={styles.destinationMarkerPin}>
-                <Ionicons name="location-sharp" size={14} color="#FFFFFF" />
-              </View>
-            </View>
-          </Marker>
-
-          {/* Active Moving Vehicle Marker */}
-          <Marker coordinate={carLocation}>
-            <View style={styles.activeCarWrapper}>
-              <FontAwesome5 name="car" size={14} color="#FFFFFF" />
-            </View>
-          </Marker>
-        </MapView>
+        <TouchableOpacity 
+          style={styles.tabItemButton} 
+          onPress={() => setActiveTab("History")}
+        >
+          <MaterialCommunityIcons 
+            name="history" 
+            size={20} 
+            color={activeTab === "History" ? "#FFFFFF" : "#9CA3AF"} 
+          />
+          <Text style={[styles.tabItemLabel, activeTab === "History" && styles.tabItemActiveLabel]}>History</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Sliding Active Trip Details Drawer */}
-      <View style={styles.slidingPanelDrawer}>
-        <ScrollView showsVerticalScrollIndicator={false}>
-          
-          {/* Main Transit Summary Analytics Block */}
-          <View style={styles.transitSummaryHeader}>
-            <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>ETA DESTINATION</Text>
-              <Text style={styles.metricValueHighlight}>{currentETA}</Text>
-            </View>
-            <View style={styles.verticalSplitter} />
-            <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>DISTANCE LEFT</Text>
-              <Text style={styles.metricValueHighlight}>{currentDistanceLeft}</Text>
-            </View>
-          </View>
-
-          <Text style={styles.sectionHeaderLabel}>Active Pool Information</Text>
-
-          {/* Driver Meta Identity Profile */}
-          <View style={styles.driverProfileCard}>
-            <View style={styles.avatarHolder}>
-              <FontAwesome5 name="user-check" size={16} color="#059669" />
-            </View>
-            <View style={styles.driverIdentityMeta}>
-              <Text style={styles.driverName}>Dawit Mengistu</Text>
-              <Text style={styles.vehicleDetails}>Toyota Probox • Code 3 - A02319</Text>
-            </View>
-            <View style={styles.ratingBadge}>
-              <Ionicons name="star" size={12} color="#F59E0B" />
-              <Text style={styles.ratingText}>4.9</Text>
-            </View>
-          </View>
-
-          {/* Shared Corridor Manifest Breakdown List */}
-          <View style={styles.manifestContainerCard}>
-            <View style={styles.manifestRow}>
-              <View style={styles.leftLabelCluster}>
-                <Ionicons name="git-commit-outline" size={18} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Corridor Axis</Text>
-              </View>
-              <Text style={styles.manifestValueText}>{ride.corridor}</Text>
-            </View>
-            
-            <View style={styles.horizontalLineDivider} />
-
-            <View style={styles.manifestRow}>
-              <View style={styles.leftLabelCluster}>
-                <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Active Co-Riders</Text>
-              </View>
-              <Text style={styles.manifestValueText}>3 Passengers Boarded</Text>
-            </View>
-
-            <View style={styles.horizontalLineDivider} />
-
-            <View style={styles.manifestRow}>
-              <View style={styles.leftLabelCluster}>
-                <Ionicons name="wallet-sharp" size={16} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Split Cost Savings</Text>
-              </View>
-              <Text style={[styles.manifestValueText, { color: "#10B981", fontWeight: "700" }]}>ETB 80 Fixed</Text>
-            </View>
-          </View>
-
-          {/* 🛠️ SIMULATION TRIGGER BUTTON: Safely passes routeId and ride to completion screen */}
-          <TouchableOpacity 
-            style={styles.safetyActionButton}
-            activeOpacity={0.8}
-            onPress={() => navigation.replace("TripCompletionScreen", { routeId, ride })}
-          >
-            <View style={styles.safetyButtonInternalGroup}>
-              <MaterialCommunityIcons name="shield-check" size={18} color="#FFFFFF" />
-              <Text style={styles.safetyButtonText}>COMPLETE TRIP (SIMULATION)</Text>
-            </View>
-          </TouchableOpacity>
-
-        </ScrollView>
-      </View>
     </SafeAreaView>
   );
 }
 
-const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "road", elementType: "geometry", stylers: [{ color: "#FFFFFF" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#D2E4F9" }] },
-];
-
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#FFFFFF" },
-  statusBarBanner: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, zIndex: 20 },
-  statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
-  statusPulseWave: { position: "absolute", width: 24, height: 24, borderRadius: 12, backgroundColor: "#FFFFFF" },
-  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", zIndex: 2 },
-  statusTextContainer: { flex: 1 },
-  statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
-  statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
-  mapContainer: { flex: 1 },
-  originMarkerPoint: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#9CA3AF", borderWidth: 2, borderColor: "#FFFFFF" },
-  destinationMarkerWrapper: { justifyContent: "center", alignItems: "center" },
-  destinationMarkerPin: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
-  activeCarWrapper: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#111827", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
-  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "50%", backgroundColor: "#F9FAFB", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 20, borderWidth: 1, borderColor: "#E5E7EB", shadowColor: "#000", shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 8 },
-  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 14, marginBottom: 16 },
-  metricColumn: { flex: 1, alignItems: "center", justifyContent: "center" },
-  verticalSplitter: { width: 1, backgroundColor: "#E5E7EB" },
-  metricLabel: { fontSize: 10, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
-  metricValueHighlight: { fontSize: 20, fontWeight: "800", color: "#111111", marginTop: 4 },
-  sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10, marginLeft: 2 },
-  driverProfileCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 10 },
-  avatarHolder: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#ECFDF5", alignItems: "center", justifyContent: "center" },
-  driverIdentityMeta: { flex: 1, marginLeft: 12 },
-  driverName: { fontSize: 14, fontWeight: "700", color: "#111111" },
-  vehicleDetails: { fontSize: 12, color: "#6B7280", marginTop: 1 },
-  ratingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFBEB", borderWidth: 1, borderColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  ratingText: { fontSize: 12, fontWeight: "700", color: "#D97706", marginLeft: 4 },
-  manifestContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 18 },
-  manifestRow: { flexDirection: "row", justifyValue: "space-between", alignItems: "center", paddingVertical: 12 },
-  leftLabelCluster: { flexDirection: "row", alignItems: "center" },
-  manifestRouteLabel: { fontSize: 13, color: "#4B5563", marginLeft: 10 },
-  manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111" },
-  horizontalLineDivider: { height: 1, backgroundColor: "#F3F4F6" },
-  safetyActionButton: { backgroundColor: "#111827", borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center" },
-  safetyButtonInternalGroup: { flexDirection: "row", alignItems: "center" },
-  safetyButtonText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700", marginLeft: 8, letterSpacing: 0.3 },
+  container: {
+    flex: 1,
+    backgroundColor: "#1F2937", // Matches image background framework
+  },
+  headerBlock: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: "#111827",
+    borderBottomWidth: 1,
+    borderColor: "#374151",
+  },
+  menuIconButton: {
+    width: 38,
+    height: 38,
+    backgroundColor: "#374151",
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusToggleContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1F2937",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#374151",
+  },
+  statusLabelText: {
+    fontSize: 11,
+    fontWeight: "700",
+    marginRight: 8,
+    letterSpacing: 0.3,
+  },
+  textOnline: { color: "#10B981" },
+  textOffline: { color: "#9CA3AF" },
+  switchScale: {
+    transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }],
+  },
+  feedScrollArea: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  scrollContent: {
+    paddingTop: 16,
+    paddingBottom: 24,
+  },
+  feedTitleLabel: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginBottom: 16,
+  },
+  timerSubText: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    fontWeight: "400",
+  },
+  requestItemCard: {
+    flexDirection: "row",
+    backgroundColor: "#111827",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#374151",
+    padding: 14,
+    marginBottom: 12,
+  },
+  leftUrgencyColumn: {
+    alignItems: "center",
+    justifyContent: "center",
+    width: 70,
+    borderRightWidth: 1,
+    borderColor: "#374151",
+    paddingRight: 12,
+  },
+  nodeIconFrame: {
+    width: 44,
+    height: 44,
+    backgroundColor: "#E5E7EB",
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  nodeCounterBadge: {
+    position: "absolute",
+    top: -4,
+    left: -4,
+    backgroundColor: "#4B5563",
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  nodeCounterText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  timeLeftLabel: {
+    fontSize: 11,
+    color: "#EF4444",
+    fontWeight: "600",
+  },
+  detailsDataColumn: {
+    flex: 1,
+    paddingLeft: 14,
+  },
+  metaHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  requestNumberLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#9CA3AF",
+    letterSpacing: 0.4,
+  },
+  distanceCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  distanceText: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    marginLeft: 3,
+  },
+  hubTitleText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginTop: 2,
+  },
+  priceTagText: {
+    fontSize: 13,
+    color: "#9CA3AF",
+    fontWeight: "600",
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  claimJobButton: {
+    backgroundColor: "#10B981",
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  claimJobButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  offlineFallbackContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 80,
+  },
+  offlineFallbackText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+    marginTop: 12,
+  },
+  offlineFallbackSubText: {
+    color: "#9CA3AF",
+    fontSize: 12,
+    textAlign: "center",
+    paddingHorizontal: 30,
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  bottomTabBar: {
+    flexDirection: "row",
+    backgroundColor: "#111827",
+    borderTopWidth: 1,
+    borderColor: "#374151",
+    paddingVertical: 10,
+  },
+  tabItemButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabItemLabel: {
+    fontSize: 10,
+    color: "#9CA3AF",
+    marginTop: 4,
+    fontWeight: "500",
+  },
+  tabItemActiveLabel: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+  },
 });
