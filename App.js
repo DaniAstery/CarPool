@@ -8,6 +8,7 @@ import MatchingScreen from "./src/screens/MatchingScreen";
 import PickupProposalScreen from "./src/screens/PickupProposalScreen";
 import TripDepartureScreen from "./src/screens/TripDepartureScreen";
 import TripCompletionScreen from "./src/screens/TripCompletionScreen";
+import DriverHomeScreen from "./src/screens/DriverScreen";
 const Stack = createNativeStackNavigator();
 
 export default function App() {
@@ -48,6 +49,12 @@ export default function App() {
          <Stack.Screen
           name="TripCompletionScreen"
           component={TripCompletionScreen}
+        />
+
+        <Stack.Screen 
+          name="DriverHome" 
+          component={DriverHomeScreen} 
+          options={{ headerShown: false }} // Hides the default white native header
         />
 
       </Stack.Navigator>

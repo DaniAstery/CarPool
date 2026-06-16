@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 import PoolOfferCard from "../components/PoolOfferCard";
+import { FontAwesome5 } from "@expo/vector-icons";
 
 
 export default function PassengerScreen({ navigation }) {
@@ -24,6 +25,27 @@ export default function PassengerScreen({ navigation }) {
   const [loadingRides, setLoadingRides] = useState(false);
 
   /* ---------------- HUB SEARCH ---------------- */
+
+  {/* Temporary Developer Portal Bypass Button */}
+<TouchableOpacity 
+  style={{
+    position: 'absolute',
+    top: 50,
+    right: 16,
+    backgroundColor: '#111827',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 999, // Ensures it sits perfectly on top of maps/components
+    flexDirection: 'row',
+    alignItems: 'center'
+  }}
+  onPress={() => navigation.navigate("DriverHome")}
+>
+  <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 6 }} />
+  <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>SWITCH TO DRIVER</Text>
+</TouchableOpacity>
+
   const searchHubs = async (text) => {
     setSearchText(text);
 
