@@ -10,7 +10,8 @@ import {
 } from "react-native";
 
 import PoolOfferCard from "../components/PoolOfferCard";
-import { FontAwesome5 } from "@expo/vector-icons";
+// FIX: Ensure FontAwesome5 is explicitly declared here
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
 
 export default function PassengerScreen({ navigation }) {

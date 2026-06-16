@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,12 +6,12 @@ import {
   SafeAreaView,
   Dimensions,
   TouchableOpacity,
-  ScrollView,
+  Switch,
   Animated,
-  Easing,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
-import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+// FIX: Added FontAwesome5 directly into the brackets below
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
