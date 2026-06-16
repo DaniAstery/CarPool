@@ -36,7 +36,7 @@ export default function PassengerScreen({ navigation }) {
 
     try {
       const res = await fetch(
-        `http://192.168.2.52:5000/api/hubs/search/${text}`
+        `http:/192.168.176.52:5000/api/hubs/search/${text}`
       );
 
       const data = await res.json();
@@ -60,7 +60,7 @@ export default function PassengerScreen({ navigation }) {
 
     try {
       const res = await fetch(
-        `http://192.168.2.52:5000/api/routes/from/${hubName}`
+        `http://192.168.176.52:5000/api/routes/from/${hubName}`
       );
 
       const data = await res.json();
@@ -81,7 +81,7 @@ export default function PassengerScreen({ navigation }) {
 
     try {
       const res = await fetch(
-        `http://192.168.2.52:5000/api/rides?start=${start}`
+        `http://192.168.176.52:5000/api/rides?start=${start}`
       );
 
       const data = await res.json();
@@ -98,36 +98,38 @@ export default function PassengerScreen({ navigation }) {
   };
 
   /* ---------------- JOIN POOL ---------------- */
-  const joinPool = async (routeId) => {
-    try {
-      const res = await fetch(
-        "http://192.168.2.52:5000/api/routes/join",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            route_id: routeId,
-            user_id: 1,
-          }),
-        }
-      );
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        alert(data.error || "Join failed");
-        return;
+ /* ---------------- JOIN POOL ---------------- */
+const joinPool = async (routeId) => {
+  try {
+    const res = await fetch(
+      "http://192.168.176.52:5000/api/routes/join",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          route_id: routeId,
+          user_id: 1,
+        }),
       }
+    );
 
-      navigation.navigate("JoinedPool", {
-        ride: data.ride,
-      });
+    const data = await res.json();
 
-    } catch (err) {
-      console.log("join error:", err);
+    if (!res.ok) {
+      alert(data.error || "Join failed");
+      return;
     }
-  };
 
+    // IMPORTANT: we now pass routeId forward
+    navigation.navigate("MatchingScreen", {
+      routeId: routeId,
+      ride: data.ride,
+    });
+
+  } catch (err) {
+    console.log("join error:", err);
+  }
+};
   /* ---------------- UI ---------------- */
   return (
     <ScrollView style={styles.container}>
