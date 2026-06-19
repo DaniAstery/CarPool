@@ -10,6 +10,7 @@ import TripDepartureScreen from "./src/screens/TripDepartureScreen";
 import TripCompletionScreen from "./src/screens/TripCompletionScreen";
 import CreateCorridorScreen from "./src/screens/Driver/CreateCorridorScreen";
 import WaitingForRidersScreen from "./src/screens/Driver/WaitingForRidersScreen";
+import PickupProposalScreen from "./src/screens/driver/PickupProposalScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -58,6 +59,7 @@ export default function App() {
         />
 
         <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
+        <Stack.Screen name="PickupProposalScreen" component={PickupProposalScreen} />
 
     </Stack.Navigator>
     </NavigationContainer>
