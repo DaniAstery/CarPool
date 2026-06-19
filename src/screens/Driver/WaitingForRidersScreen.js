@@ -40,7 +40,7 @@ export default function WaitingForRidersScreen({ navigation }) {
     // Stage 3: Auto-Advance to next blueprint step once capacity limits near
     const timer3 = setTimeout(() => {
       console.log("Simulation Log: Forwarding to pickup optimization segment.");
-      navigation.navigate("PickupProposalScreen");
+      navigation.navigate("ProposalDriver");
     }, 10000);
 
     // Cleanup memory allocations on unmount

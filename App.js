@@ -59,7 +59,7 @@ export default function App() {
         />
 
         <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
-        <Stack.Screen name="PickupProposalDriver" component={ProposalDriver} />
+        <Stack.Screen name="ProposalDriver" component={ProposalDriver} />
 
     </Stack.Navigator>
     </NavigationContainer>
