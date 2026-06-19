@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
-export default function PickupProposalScreen({ navigation }) {
+export default function PickupProposalDriver({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       
