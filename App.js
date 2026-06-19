@@ -53,7 +53,7 @@ export default function App() {
         />
 
         <Stack.Screen
-          name="CreateCorridor"
+          name="CreateCorridorScreen"
           component={CreateCorridorScreen}/>
 
 
