@@ -130,10 +130,7 @@ export default function CreateCorridorScreen({ navigation }) {
         <TouchableOpacity 
           style={styles.goOnlineActionButton}
           activeOpacity={0.8}
-          onPress={() => {
-            console.log("Corridor configuration initialized live.");
-            // Linking next step segment: navigation.navigate("CorridorOnlineWaitingScreen");
-          }}
+          onPress={() => navigation.navigate("WaitingForRiders")}
         >
           <Text style={styles.goOnlineActionText}>GO ONLINE</Text>
         </TouchableOpacity>
