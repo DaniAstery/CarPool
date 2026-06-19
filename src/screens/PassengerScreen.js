@@ -182,7 +182,7 @@ const joinPool = async (routeId) => {
           borderColor: '#374151',
         }}
         activeOpacity={0.8}
-        onPress={() => navigation.navigate("DriverHome")}
+        onPress={() => navigation.navigate("CreateCorridorScreen")}
       >
         <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
         <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>

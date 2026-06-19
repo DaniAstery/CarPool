@@ -52,9 +52,9 @@ export default function App() {
           component={TripCompletionScreen}
         />
 
-        <Stack.Navigator initialRouteName="CreateCorridor">
+       
         <Stack.Screen name="CreateCorridor" component={CreateCorridorScreen} />
-        </Stack.Navigator>
+   
             
 
       </Stack.Navigator>
