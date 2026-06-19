@@ -52,6 +52,10 @@ export default function App() {
           name="TripCompletionScreen"
           component={TripCompletionScreen}
         />
+          <Stack.Screen
+          name="CreateCorridorScreen"
+          component={CreateCorridorScreen}
+        />
 
         <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
 
