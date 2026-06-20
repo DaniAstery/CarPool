@@ -68,18 +68,18 @@ export default function TripInProgressScreen({ navigation }) {
 
       </ScrollView>
 
-      {/* Bottom Control Action Footer */}
+    {/* Bottom Control Action Footer */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
           style={styles.arriveCheckpointButton}
           activeOpacity={0.8}
           onPress={() => {
-            // Placeholder link forward to dropoff clearing workflows later
-            alert("Trip completed.");
+            console.log("Corridor instance concluded. Dispatching data vectors to summary dashboard...");
+            navigation.navigate("TripEarningsSummary"); // Routes straight to Screen 11
           }}
         >
-          <MaterialCommunityIcons name="map-marker-check" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-          <Text style={styles.arriveCheckpointButtonText}>FINISH</Text>
+          <MaterialCommunityIcons name="flag-checkered" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+          <Text style={styles.arriveCheckpointButtonText}>FINISH TRIP</Text>
         </TouchableOpacity>
       </View>
 
