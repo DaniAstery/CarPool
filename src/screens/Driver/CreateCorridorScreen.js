@@ -32,7 +32,7 @@ export default function CreateCorridorScreen({ navigation }) {
           <Ionicons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitleText}>Create Corridor</Text>
-        <View style={{ width: 32 }} /> {/* Layout balancer */}
+        <View style={{ width: 32 }} />
       </View>
 
       <ScrollView 

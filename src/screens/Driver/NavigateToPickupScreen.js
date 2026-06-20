@@ -62,14 +62,15 @@ export default function NavigateToPickupScreen({ navigation }) {
       </View>
 
       {/* Dynamic Optimization Toast Notification */}
-      {thirdPassengerJoined && (
+ 
+      {thirdPassengerJoined ? (
         <View style={styles.toastNotification}>
           <Ionicons name="sparkles" size={16} color="#15803D" style={{ marginRight: 8 }} />
           <Text style={styles.toastText}>
-            Passenger 3 joined! Cost per seat dropped to <Text style={{fontWeight: '700'}}>ETB 80</Text> for all riders.
+            Passenger 3 joined! Cost per seat dropped to ETB 80 for all riders.
           </Text>
         </View>
-      )}
+      ) : null}
 
       <ScrollView style={styles.contentBody} showsVerticalScrollIndicator={false}>
         
