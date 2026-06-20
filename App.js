@@ -6,12 +6,12 @@ import PassengerScreen from "./src/screens/PassengerScreen";
 import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
 import MatchingScreen from "./src/screens/MatchingScreen";
 import PickupProposalScreen from "./src/screens/PickupProposalScreen";
-import TripDepartureScreen from "./src/screens/Driver/TripDepartureScreen";
+import TripDepartureScreen from "./src/screens/TripDepartureScreen";
 import TripCompletionScreen from "./src/screens/TripCompletionScreen";
 import CreateCorridorScreen from "./src/screens/Driver/CreateCorridorScreen";
 import WaitingForRidersScreen from "./src/screens/Driver/WaitingForRidersScreen";
 import ProposalDriver from "./src/screens/Driver/ProposalDriver";
-
+import DriverDepartureScreen from "./src/screens/Driver/DriverDepartureScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -61,7 +61,7 @@ export default function App() {
 
         <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
         <Stack.Screen name="ProposalDriver" component={ProposalDriver} />
-        <Stack.Screen name="TripDepartureScreen" component={TripDepartureScreen} />
+        <Stack.Screen name="DriverDepartureScreen" component={DriverDepartureScreen} />
 
     </Stack.Navigator>
     </NavigationContainer>
