@@ -11,9 +11,11 @@ import TripCompletionScreen from "./src/screens/TripCompletionScreen";
 import CreateCorridorScreen from "./src/screens/Driver/CreateCorridorScreen";
 import WaitingForRidersScreen from "./src/screens/Driver/WaitingForRidersScreen";
 import ProposalDriver from "./src/screens/Driver/ProposalDriver";
-import DriverDepartureScreen from "./src/screens/Driver/DriverDepartureScreen";
+import DriverDepartureScreen from "./src/screens/Driver/TripInProgressScreen";
 import WaitingForAcceptanceScreen from "./src/screens/Driver/WaitingForAcceptanceScreen";
 import NavigateToPickupScreen from "./src/screens/Driver/NavigateToPickupScreen";
+import WaitingForPassengersScreen from "./src/screens/Driver/WaitingForPassengersScreen";
+import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -66,6 +68,8 @@ export default function App() {
         <Stack.Screen name="DriverDepartureScreen" component={DriverDepartureScreen} />
         <Stack.Screen name="WaitingForAcceptance" component={WaitingForAcceptanceScreen} />
         <Stack.Screen name="NavigateToPickup" component={NavigateToPickupScreen} />
+        <Stack.Screen name="WaitingForPassengers" component={WaitingForPassengersScreen} />
+        <Stack.Screen name="TripInProgress" component={TripInProgressScreen} options={{ headerShown: false }}/>
 
     </Stack.Navigator>
     </NavigationContainer>

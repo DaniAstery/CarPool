@@ -133,16 +133,17 @@ export default function NavigateToPickupScreen({ navigation }) {
       </ScrollView>
 
       {/* Persistent Button Actions */}
-      <View style={styles.footerContainer}>
+     // Change this target inside src/screens/driver/NavigateToPickupScreen.js:
+        <View style={styles.footerContainer}>
         <TouchableOpacity 
-          style={styles.actionButton}
-          activeOpacity={0.8}
-          onPress={() => navigation.navigate("DriverDeparture")}
+            style={styles.actionButton}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate("WaitingForPassengers")} // Direct skip straight to Screen 8 tracking list
         >
-          <Ionicons name="people" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-          <Text style={styles.actionButtonText}>ARRIVED AT PICKUP POINT</Text>
+            <Ionicons name="people" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+            <Text style={styles.actionButtonText}>ARRIVED AT PICKUP POINT</Text>
         </TouchableOpacity>
-      </View>
+        </View>
 
     </SafeAreaView>
   );
