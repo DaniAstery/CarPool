@@ -12,6 +12,7 @@ import CreateCorridorScreen from "./src/screens/Driver/CreateCorridorScreen";
 import WaitingForRidersScreen from "./src/screens/Driver/WaitingForRidersScreen";
 import ProposalDriver from "./src/screens/Driver/ProposalDriver";
 import DriverDepartureScreen from "./src/screens/Driver/DriverDepartureScreen";
+import WaitingForAcceptanceScreen from "./src/screens/Driver/WaitingForAcceptanceScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -62,6 +63,7 @@ export default function App() {
         <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
         <Stack.Screen name="ProposalDriver" component={ProposalDriver} />
         <Stack.Screen name="DriverDepartureScreen" component={DriverDepartureScreen} />
+        <Stack.Screen name="WaitingForAcceptance" component={WaitingForAcceptanceScreen} />
 
     </Stack.Navigator>
     </NavigationContainer>
