@@ -68,7 +68,7 @@ export default function TripInProgressScreen({ navigation }) {
 
       </ScrollView>
 
-    {/* Bottom Control Action Footer */}
+          {/* Bottom Control Action Footer */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
           style={styles.arriveCheckpointButton}
