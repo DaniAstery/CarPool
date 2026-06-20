@@ -94,12 +94,14 @@ export default function PickupProposalDriver({ navigation }) {
           <Text style={styles.rejectButtonText}>REJECT</Text>
         </TouchableOpacity>
 
+    {/* Inside PickupProposalScreen.js */}
         <TouchableOpacity 
           style={styles.acceptButton}
           activeOpacity={0.8}
           onPress={() => {
             console.log("Proposal accepted. Forwarding driver to pick up location corridor...");
-            navigation.navigate("TripDepartureScreen");
+            // FIX: Point this to your newly renamed stack target string
+            navigation.navigate("DriverDepartureScreen");
           }}
         >
           <Text style={styles.acceptButtonText}>ACCEPT</Text>
