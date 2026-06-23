@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,14 +6,78 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ScrollView,
+  Animated,
 } from "react-native";
-import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 export default function CreateCorridorScreen({ navigation }) {
-  // Input parameters configured matching the blueprint layout state
   const [capacity, setCapacity] = useState(3);
   const pricePerSeat = "80";
   const vehicleType = "Minivan";
+
+  // --- 📡 LIVE DEMAND SIMULATION STATES ---
+  const [incomingRequest, setIncomingRequest] = useState(null);
+  const slideAnim = React.useRef(new Animated.Value(-150)).current;
+
+  // Simulate on-demand network pings based on passenger actions
+  useEffect(() => {
+    // 1. Simulating a pre-matched bundle notification (2/3 riders ready) after 2 seconds
+    const timer1 = setTimeout(() => {
+      triggerIncomingNotification({
+        id: "req-101",
+        type: "BUNDLE", // Matches two riders already aggregated
+        route: "Megenagna → Bole",
+        detail: "via Bole Road Corridor",
+        statusText: "2/3 Riders Pre-Matched",
+        payout: "160 ETB",
+        icon: "account-group"
+      });
+    }, 2000);
+
+    // 2. Simulating a single passenger broadcast waiting for a driver to initiate after 9 seconds
+    const timer2 = setTimeout(() => {
+      triggerIncomingNotification({
+        id: "req-102",
+        type: "SINGLE",
+        route: "Sarbet → Kazanchis",
+        detail: "via Ring Road Corridor",
+        statusText: "1 Single Rider Waiting",
+        payout: "80 ETB",
+        icon: "account"
+      });
+    }, 9000);
+
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, []);
+
+  const triggerIncomingNotification = (requestData) => {
+    setIncomingRequest(requestData);
+    Animated.spring(slideAnim, {
+      toValue: 0,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 8
+    }).start();
+  };
+
+  const dismissNotification = () => {
+    Animated.timing(slideAnim, {
+      toValue: -180,
+      duration: 250,
+      useNativeDriver: true
+    }).start(() => setIncomingRequest(null));
+  };
+
+  const handleAcceptDemand = (request) => {
+    dismissNotification();
+    // Transition straight into your matching or navigation flow setup
+    if (navigation) {
+      navigation.navigate("WaitingForRiders", { liveRequest: request });
+    }
+  };
 
   const adjustCapacity = (amount) => {
     setCapacity((prev) => Math.max(1, prev + amount));
@@ -22,11 +86,51 @@ export default function CreateCorridorScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       
+      {/* 🔔 TOP SIMULATED HUD PUSH NOTIFICATION */}
+      {incomingRequest && (
+        <Animated.View style={[styles.notificationAlertFrame, { transform: [{ translateY: slideAnim }] }]}>
+          <View style={styles.notificationHeader}>
+            <View style={styles.badgeRow}>
+              <View style={[styles.pulseDot, incomingRequest.type === "BUNDLE" ? styles.bgGreen : styles.bgBlue]} />
+              <Text style={styles.notificationMetaText}>
+                {incomingRequest.type === "BUNDLE" ? "⚡ HIGH DEMAND BUNDLE AVAILABLE" : "👤 PASSENGER BROADCAST NEARBY"}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={dismissNotification}>
+              <Ionicons name="close" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.notificationBody}>
+            <MaterialCommunityIcons name={incomingRequest.icon} size={24} color="#111827" style={styles.paxIcon} />
+            <View style={styles.routeMetaInfo}>
+              <Text style={styles.notificationRouteText}>{incomingRequest.route}</Text>
+              <Text style={styles.notificationSubText}>{incomingRequest.detail} • <Text style={styles.boldStatus}>{incomingRequest.statusText}</Text></Text>
+            </View>
+            <Text style={styles.notificationPayoutText}>{incomingRequest.payout}</Text>
+          </View>
+
+          <View style={styles.notificationActionRow}>
+            <TouchableOpacity style={styles.declineMiniBtn} onPress={dismissNotification}>
+              <Text style={styles.declineMiniText}>Ignore</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.acceptMiniBtn, incomingRequest.type === "BUNDLE" ? styles.accentGreenBtn : styles.accentBlueBtn]} 
+              onPress={() => handleAcceptDemand(incomingRequest)}
+            >
+              <Text style={styles.acceptMiniText}>
+                {incomingRequest.type === "BUNDLE" ? "ACCEPT & FETCH PAIR" : "LAUNCH CORRIDOR"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
+
       {/* 1. Precise Clean Top Navigation Header */}
       <View style={styles.headerBlock}>
         <TouchableOpacity 
           style={styles.backButton} 
-          onPress={() => navigation.goBack()}
+          onPress={() => navigation && navigation.goBack()}
           activeOpacity={0.7}
         >
           <Ionicons name="arrow-back" size={22} color="#111827" />
@@ -41,6 +145,12 @@ export default function CreateCorridorScreen({ navigation }) {
         contentContainerStyle={{ paddingBottom: 24 }}
       >
         
+        {/* 🗺️ ACTIVE RADAR CONTEXT */}
+        <View style={styles.radarStatusCard}>
+          <MaterialCommunityIcons name="radar" size={18} color="#059669" style={styles.spinningRadarIcon} />
+          <Text style={styles.radarStatusText}>Demand radar active. Matching corridors will pop up as passengers request your area.</Text>
+        </View>
+
         {/* 2. Select Corridor Mapping Cluster */}
         <Text style={styles.sectionHeading}>Select Corridor</Text>
         
@@ -77,7 +187,7 @@ export default function CreateCorridorScreen({ navigation }) {
         <Text style={styles.routeFooterNote}>via Bole Road Corridor</Text>
 
         {/* 3. Operational Ride Details Container Block */}
-        <Text style={[styles.sectionHeading, { marginTop: 28 }]}>Ride Details</Text>
+        <Text style={[styles.sectionHeading, { marginTop: 24 }]}>Ride Details</Text>
         
         <View style={styles.detailsContainerCard}>
           
@@ -130,7 +240,7 @@ export default function CreateCorridorScreen({ navigation }) {
         <TouchableOpacity 
           style={styles.goOnlineActionButton}
           activeOpacity={0.8}
-          onPress={() => navigation.navigate("WaitingForRiders")}
+          onPress={() => navigation && navigation.navigate("WaitingForRiders")}
         >
           <Text style={styles.goOnlineActionText}>GO ONLINE</Text>
         </TouchableOpacity>
@@ -145,6 +255,131 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F9FAFB",
   },
+  /* --- 🔔 SIMULATED NOTIFICATION OVERLAY STYLING --- */
+  notificationAlertFrame: {
+    position: "absolute",
+    top: 50,
+    left: 12,
+    right: 12,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 14,
+    zIndex: 999,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  notificationHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  badgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  pulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  bgGreen: { backgroundColor: "#10B981" },
+  bgBlue: { backgroundColor: "#3B82F6" },
+  notificationMetaText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#6B7280",
+    letterSpacing: 0.5,
+  },
+  notificationBody: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  paxIcon: {
+    marginRight: 10,
+  },
+  routeMetaInfo: {
+    flex: 1,
+  },
+  notificationRouteText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  notificationSubText: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 1,
+  },
+  boldStatus: {
+    fontWeight: "600",
+    color: "#111827",
+  },
+  notificationPayoutText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#059669",
+    marginLeft: 8,
+  },
+  notificationActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  declineMiniBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: "#F3F4F6",
+  },
+  declineMiniText: {
+    color: "#4B5563",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  acceptMiniBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  accentGreenBtn: { backgroundColor: "#059669" },
+  accentBlueBtn: { backgroundColor: "#3B82F6" },
+  acceptMiniText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  /* --- 🗺️ ACTIVE RADAR HEADER FRAME --- */
+  radarStatusCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  spinningRadarIcon: {
+    marginRight: 8,
+  },
+  radarStatusText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#065F46",
+    lineHeight: 16,
+    fontWeight: "500",
+  },
+
+  /* --- ORIGINAL SYSTEM SPEC STYLING PRESERVED --- */
   headerBlock: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -169,7 +404,7 @@ const styles = StyleSheet.create({
   contentBody: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingTop: 20,
+    paddingTop: 16,
   },
   sectionHeading: {
     fontSize: 12,
@@ -307,7 +542,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F3F4F6",
   },
   goOnlineActionButton: {
-    backgroundColor: "#059669", // Vibrant exact green configuration accent
+    backgroundColor: "#059669",
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
