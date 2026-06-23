@@ -1,218 +1,328 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ScrollView, Switch, Alert, ActivityIndicator } from 'react-native';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  TouchableOpacity,
+  ScrollView,
+} from "react-native";
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
-// Mock Data Arrays matching the Ethiopian Corridor Market (Summit - Megenagna - Mexico, etc.)
-const MOCK_ON_DEMAND_PASSENGERS = [
-  { id: 'pax-01', pickup: 'Semit (Total Station)', dropoff: 'Megenagna / Mexico', passengers: 1, reward: '500 ETB', surge: true, time: '2m ago' },
-  { id: 'pax-02', pickup: 'Summit (CBE Hub)', dropoff: 'Goro / Bole Atlas', passengers: 1, reward: '450 ETB', surge: false, time: '5m ago' }
-];
+export default function CreateCorridorScreen({ navigation }) {
+  // Input parameters configured matching the blueprint layout state
+  const [capacity, setCapacity] = useState(3);
+  const pricePerSeat = "80";
+  const vehicleType = "Minivan";
 
-const MOCK_AGGREGATED_POOLS = [
-  { id: 'pool-101', corridor: 'Summit → Megenagna → Mexico', seatsFilled: '2/3', status: 'MATCHED BUNDLE', estPayout: '1,000 ETB', distance: '1.2 km away' }
-];
-
-export default function CreateCorridorScreen() {
-  // 'DEMAND' = Single passenger triggers, 'AGGREGATED' = 2+ passenger pairs ready
-  const [activeTab, setActiveTab] = useState('DEMAND');
-  
-  // Simulation states for active driver jobs
-  const [activeJob, setActiveJob] = useState(null);
-  const [jobState, setJobState] = useState('NONE'); // 'NONE', 'INITIALIZED', 'FULFILLED'
-
-  // Action Handler 1: Initializing an On-Demand Single Request
-  const handleInitializeDemand = (paxRequest) => {
-    setActiveJob({
-      title: `${paxRequest.pickup} Corridor`,
-      payout: paxRequest.reward,
-      seats: '1/3',
-      type: 'DEMAND_DRIVEN'
-    });
-    setJobState('INITIALIZED');
-    Alert.alert(
-      "Corridor Launched! ⚡",
-      `You initialized the line from ${paxRequest.pickup}. Passenger has been claimed.\n\nLine status is now open on the network for secondary pool matches.`
-    );
-  };
-
-  // Action Handler 2: Accepting an Aggregated Multi-Passenger Bundle
-  const handleAcceptAggregatedPool = (pool) => {
-    setActiveJob({
-      title: pool.corridor,
-      payout: pool.estPayout,
-      seats: pool.seatsFilled,
-      type: 'PRE_MATCHED'
-    });
-    setJobState('FULFILLED');
-    Alert.alert(
-      "Bundle Claimed! 🚗",
-      `Multi-passenger bundle accepted for corridor:\n${pool.corridor}.\n\nProceed directly to the corridor hub pickup point.`
-    );
-  };
-
-  // Action Handler 3: Simulating the 3rd Passenger jumping into an Initialized Route
-  const handleSimulateThirdPassengerJoin = () => {
-    if (!activeJob) return;
-    setActiveJob(prev => ({
-      ...prev,
-      seats: '3/3',
-      payout: '1,200 ETB (🔓 +200 ETB Bonus Locked)'
-    }));
-    setJobState('FULFILLED');
-    Alert.alert("Bonus Active! 🎉", "A 3rd pooling passenger has joined your route pipeline. Your max payout bonus is secured!");
-  };
-
-  const handleResetSimulator = () => {
-    setActiveJob(null);
-    setJobState('NONE');
+  const adjustCapacity = (amount) => {
+    setCapacity((prev) => Math.max(1, prev + amount));
   };
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       
-      {/* 💳 ACTIVE WORKFLOW TRACKER DISPLAY */}
-      {jobState !== 'NONE' && (
-        <View style={[styles.statusBanner, jobState === 'FULFILLED' ? styles.bannerGreen : styles.bannerBlue]}>
-          <View style={styles.bannerHeaderRow}>
-            <Text style={styles.bannerTitle}>LIVE MANIFEST: {activeJob?.title}</Text>
-            <Text style={styles.bannerSeatsBadge}>{activeJob?.seats} FILLED</Text>
+      {/* 1. Precise Clean Top Navigation Header */}
+      <View style={styles.headerBlock}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitleText}>Create Corridor</Text>
+        <View style={{ width: 32 }} />
+      </View>
+
+      <ScrollView 
+        style={styles.contentBody} 
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 24 }}
+      >
+        
+        {/* 2. Select Corridor Mapping Cluster */}
+        <Text style={styles.sectionHeading}>Select Corridor</Text>
+        
+        <View style={styles.corridorRouteContainer}>
+          {/* Start Location Node Row */}
+          <TouchableOpacity style={styles.locationInputRow} activeOpacity={0.9}>
+            <View style={styles.iconIndicatorWrapper}>
+              <View style={styles.startCoreDot} />
+            </View>
+            <View style={styles.locationMetaFrame}>
+              <Text style={styles.locationLabelText}>Start Location</Text>
+              <Text style={styles.locationValueText}>Megenagna</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+          </TouchableOpacity>
+
+          {/* Linking Internal Divider Guideline */}
+          <View style={styles.verticalConnectorLine} />
+
+          {/* End Location Node Row */}
+          <TouchableOpacity style={styles.locationInputRow} activeOpacity={0.9}>
+            <View style={styles.iconIndicatorWrapper}>
+              <Ionicons name="location" size={18} color="#EF4444" />
+            </View>
+            <View style={styles.locationMetaFrame}>
+              <Text style={styles.locationLabelText}>End Location</Text>
+              <Text style={styles.locationValueText}>Bole</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Dynamic Static Path Label Footer */}
+        <Text style={styles.routeFooterNote}>via Bole Road Corridor</Text>
+
+        {/* 3. Operational Ride Details Container Block */}
+        <Text style={[styles.sectionHeading, { marginTop: 28 }]}>Ride Details</Text>
+        
+        <View style={styles.detailsContainerCard}>
+          
+          {/* Capacity Control Matrix Row */}
+          <View style={styles.detailRowItem}>
+            <Text style={styles.detailRowLabel}>Capacity (seats)</Text>
+            <View style={styles.counterControlWrapper}>
+              <TouchableOpacity 
+                style={styles.counterButton} 
+                onPress={() => adjustCapacity(-1)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="remove" size={16} color="#111827" />
+              </TouchableOpacity>
+              <Text style={styles.counterValueText}>{capacity}</Text>
+              <TouchableOpacity 
+                style={styles.counterButton} 
+                onPress={() => adjustCapacity(1)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add" size={16} color="#111827" />
+              </TouchableOpacity>
+            </View>
           </View>
-          <Text style={styles.bannerPayout}>Payout Pipeline: {activeJob?.payout}</Text>
-          
-          {jobState === 'INITIALIZED' && (
-            <TouchableOpacity style={styles.simulationTriggerBtn} onPress={handleSimulateThirdPassengerJoin}>
-              <Text style={styles.simBtnText}>🧪 SIMULATE 3rd PASSENGER JOINING VIA APP</Text>
+
+          <View style={styles.horizontalRowDivider} />
+
+          {/* Static Pricing Matrix Information Frame */}
+          <View style={styles.detailRowItem}>
+            <Text style={styles.detailRowLabel}>Price per seat (ETB)</Text>
+            <View style={styles.valueDisplayFrame}>
+              <Text style={styles.valueDisplayHighlightText}>{pricePerSeat}</Text>
+            </View>
+          </View>
+
+          <View style={styles.horizontalRowDivider} />
+
+          {/* Asset Classification Frame Row */}
+          <View style={styles.detailRowItem}>
+            <Text style={styles.detailRowLabel}>Vehicle Type</Text>
+            <TouchableOpacity style={styles.dropdownDisplaySelector} activeOpacity={0.8}>
+              <Text style={styles.dropdownValueText}>{vehicleType}</Text>
+              <Ionicons name="chevron-forward" size={14} color="#9CA3AF" style={{ marginLeft: 6 }} />
             </TouchableOpacity>
-          )}
+          </View>
 
-          <TouchableOpacity style={styles.resetBtn} onPress={handleResetSimulator}>
-            <Text style={styles.resetBtnText}>Cancel / Reset Route State</Text>
-          </TouchableOpacity>
         </View>
-      )}
 
-      {/* 🧭 SEGMENTED TAB CONTROLLER */}
-      {jobState === 'NONE' && (
-        <View style={styles.tabContainer}>
-          <TouchableOpacity 
-            style={[styles.tabButton, activeTab === 'DEMAND' && styles.tabButtonActive]} 
-            onPress={() => setActiveTab('DEMAND')}
-          >
-            <Text style={[styles.tabButtonText, activeTab === 'DEMAND' && styles.tabButtonTextActive]}>
-              On-Demand Broadcasts ({MOCK_ON_DEMAND_PASSENGERS.length})
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.tabButton, activeTab === 'AGGREGATED' && styles.tabButtonActive]} 
-            onPress={() => setActiveTab('AGGREGATED')}
-          >
-            <Text style={[styles.tabButtonText, activeTab === 'AGGREGATED' && styles.tabButtonTextActive]}>
-              Pre-Matched Pools ({MOCK_AGGREGATED_POOLS.length})
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
+        {/* 4. Main Deployment Action Button Framework */}
+        <TouchableOpacity 
+          style={styles.goOnlineActionButton}
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate("WaitingForRiders")}
+        >
+          <Text style={styles.goOnlineActionText}>GO ONLINE</Text>
+        </TouchableOpacity>
 
-      {/* 📱 DASHBOARD DATA CARDS CANVAS */}
-      {jobState === 'NONE' && (
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          
-          {/* TAB CONTENT: ON-DEMAND SINGLE PASSENGER TRIGGERS */}
-          {activeTab === 'DEMAND' && (
-            <View>
-              <Text style={styles.sectionContextInfo}>
-                Single demand markers broadcasting live. Initialize the corridor to bundle them with other incoming riders along the route strategy.
-              </Text>
-              {MOCK_ON_DEMAND_PASSENGERS.map((item) => (
-                <View key={item.id} style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.routeHeader}>📍 {item.pickup}</Text>
-                    <Text style={styles.timestampText}>{item.time}</Text>
-                  </View>
-                  <Text style={styles.routeSubheader}>🏢 heading to: {item.dropoff}</Text>
-                  
-                  <View style={styles.metricsRow}>
-                    <Text style={styles.paxMetric}>👤 {item.passengers} Passenger Waiting</Text>
-                    {item.surge && <Text style={styles.surgeBadge}>🔥 HIGH SURGE DEMAND</Text>}
-                  </View>
-                  
-                  <TouchableOpacity style={styles.actionBtnPrimary} onPress={() => handleInitializeDemand(item)}>
-                    <Text style={styles.actionBtnText}>⚡ INITIALIZE CORRIDOR ROUTE ({item.reward})</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* TAB CONTENT: AGGREGATED MULTI-PASSENGER POOLS */}
-          {activeTab === 'AGGREGATED' && (
-            <View>
-              <Text style={styles.sectionContextInfo}>
-                Pre-matched pairs meeting the minimum capacity requirements. Claim immediately to skip the matching phase and head to the corridor hub.
-              </Text>
-              {MOCK_AGGREGATED_POOLS.map((item) => (
-                <View key={item.id} style={[styles.card, styles.aggregatedCardBorder]}>
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.routeHeader}>{item.corridor}</Text>
-                    <View style={styles.capacityBadge}><Text style={styles.capacityBadgeText}>{item.seatsFilled} MATCHED</Text></View>
-                  </View>
-                  <Text style={styles.routeSubheader}>📍 Base Range: {item.distance}</Text>
-                  <Text style={styles.payoutHighlightText}>Estimated Earnings Value: {item.estPayout}</Text>
-                  
-                  <TouchableOpacity style={[styles.actionBtnPrimary, { backgroundColor: '#16A34A' }]} onPress={() => handleAcceptAggregatedPool(item)}>
-                    <Text style={styles.actionBtnText}>🚗 CLAIM PRE-MATCHED BUNDLE</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-        </ScrollView>
-      )}
-    </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#12161A' },
-  scrollContent: { padding: 16 },
-  
-  // Tab Navigation Design System
-  tabContainer: { flexDirection: 'row', backgroundColor: '#1E293B', padding: 6, margin: 16, borderRadius: 12 },
-  tabButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 8 },
-  tabButtonActive: { backgroundColor: '#38BDF8' },
-  tabButtonText: { color: '#94A3B8', fontWeight: 'bold', fontSize: 13 },
-  tabButtonTextActive: { color: '#12161A' },
-  
-  sectionContextInfo: { color: '#94A3B8', fontSize: 13, lineHeight: 18, marginBottom: 16, paddingHorizontal: 4 },
-  
-  // Premium Card Layout Block Styles
-  card: { backgroundColor: '#1E252D', borderRadius: 16, padding: 18, marginBottom: 16, borderWidth: 1, borderColor: '#2C353F' },
-  aggregatedCardBorder: { borderColor: '#38BDF8', borderWidth: 1.5 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  routeHeader: { color: '#FFF', fontSize: 16, fontWeight: 'bold', flex: 1, paddingRight: 8 },
-  routeSubheader: { color: '#94A3B8', fontSize: 14, marginVertical: 4 },
-  timestampText: { color: '#64748B', fontSize: 12 },
-  metricsRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 10 },
-  paxMetric: { color: '#38BDF8', fontWeight: '600', fontSize: 13 },
-  surgeBadge: { backgroundColor: '#7C2D12', color: '#FFEDD5', fontSize: 11, fontWeight: 'bold', paddingVertical: 2, paddingHorizontal: 8, borderRadius: 6, overflow: 'hidden' },
-  capacityBadge: { backgroundColor: '#1E3A8A', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12 },
-  capacityBadgeText: { color: '#60A5FA', fontWeight: 'bold', fontSize: 11 },
-  payoutHighlightText: { color: '#34D399', fontSize: 15, fontWeight: '700', marginTop: 10 },
-  
-  actionBtnPrimary: { backgroundColor: '#3B82F6', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 16 },
-  actionBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
-
-  // Live Manifest Workflow Banner Styles
-  statusBanner: { padding: 20, margin: 16, borderRadius: 20, borderWidth: 1 },
-  bannerBlue: { backgroundColor: '#1E3A8A', borderColor: '#3B82F6' },
-  bannerGreen: { backgroundColor: '#064E3B', borderColor: '#22C55E' },
-  bannerHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  bannerTitle: { color: '#FFF', fontWeight: 'bold', fontSize: 16, flex: 1 },
-  bannerSeatsBadge: { color: '#FFF', backgroundColor: 'rgba(0,0,0,0.3)', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, fontSize: 11, fontWeight: 'bold' },
-  bannerPayout: { color: '#38BDF8', fontSize: 18, fontWeight: '800', marginTop: 10 },
-  simulationTriggerBtn: { backgroundColor: '#22C55E', padding: 14, borderRadius: 10, alignItems: 'center', marginVertical: 14 },
-  simBtnText: { color: '#FFF', fontWeight: 'bold', fontSize: 12 },
-  resetBtn: { marginTop: 10, alignItems: 'center' },
-  resetBtnText: { color: '#FCA5A5', fontSize: 13, textDecorationLine: 'underline' }
+  container: {
+    flex: 1,
+    backgroundColor: "#F9FAFB",
+  },
+  headerBlock: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  backButton: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTitleText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  contentBody: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 20,
+  },
+  sectionHeading: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#111827",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    marginLeft: 2,
+  },
+  corridorRouteContainer: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingVertical: 4,
+  },
+  locationInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  iconIndicatorWrapper: {
+    width: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  startCoreDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#10B981",
+  },
+  locationMetaFrame: {
+    flex: 1,
+  },
+  locationLabelText: {
+    fontSize: 11,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  locationValueText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+    marginTop: 2,
+  },
+  verticalConnectorLine: {
+    position: "absolute",
+    left: 25,
+    top: 36,
+    width: 1,
+    height: 28,
+    backgroundColor: "#E5E7EB",
+    zIndex: 2,
+  },
+  routeFooterNote: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 8,
+    marginLeft: 4,
+    fontStyle: "italic",
+  },
+  detailsContainerCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingHorizontal: 14,
+  },
+  detailRowItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+  detailRowLabel: {
+    fontSize: 13,
+    color: "#4B5563",
+    fontWeight: "500",
+  },
+  counterControlWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    borderRadius: 8,
+    padding: 3,
+  },
+  counterButton: {
+    width: 28,
+    height: 28,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  counterValueText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+    paddingHorizontal: 14,
+  },
+  valueDisplayFrame: {
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 8,
+    minWidth: 50,
+    alignItems: "center",
+  },
+  valueDisplayHighlightText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  dropdownDisplaySelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  dropdownValueText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#4B5563",
+  },
+  horizontalRowDivider: {
+    height: 1,
+    backgroundColor: "#F3F4F6",
+  },
+  goOnlineActionButton: {
+    backgroundColor: "#059669", // Vibrant exact green configuration accent
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 32,
+    shadowColor: "#059669",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  goOnlineActionText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+  },
 });
