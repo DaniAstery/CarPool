@@ -75,26 +75,33 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
+
   /* ---------------- SELECT CORRIDOR → GET RIDES ---------------- */
-const handleRouteSelect = async (routeId) => {
-  setLoadingRides(true);
+  const handleRouteSelect = async (routeId) => {
+    // Convert to an integer and check if it's a valid number
+    const parsedRouteId = parseInt(routeId, 10);
+    
+    if (!parsedRouteId || isNaN(parsedRouteId)) {
+      console.log("⚠️ Aborting fetch: routeId is invalid or NaN:", routeId);
+      setSelectedRoutes([]);
+      return;
+    }
 
-  try {
-    // Queries cleanly by integer ID instead of unstructured location text strings
-    const res = await fetch(
-      `http://192.168.238.52:5000/api/rides?route_id=${routeId}`
-    );
-
-    const data = await res.json();
-    console.log("FILTERED RIDES BY ROUTE_ID:", data);
-    setSelectedRoutes(Array.isArray(data) ? data : []);
-  } catch (err) {
-    console.log("ride fetch error:", err);
-    setSelectedRoutes([]);
-  } finally {
-    setLoadingRides(false);
-  }
-};
+    setLoadingRides(true);
+    try {
+      const res = await fetch(
+        `http://192.168.238.52:5000/api/rides?route_id=${parsedRouteId}`
+      );
+      const data = await res.json();
+      console.log("FILTERED RIDES BY ROUTE_ID:", data);
+      setSelectedRoutes(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.log("ride fetch error:", err);
+      setSelectedRoutes([]);
+    } finally {
+      setLoadingRides(false);
+    }
+  };
 
   /* ---------------- JOIN POOL ---------------- */
   const joinPool = async (routeId) => {
@@ -106,7 +113,6 @@ const handleRouteSelect = async (routeId) => {
       const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
       
       // For now, assume destination is the last hub in the sequence array chain
-      // If you implement an explicit destination dropdown later, plug its selected ID directly here.
       const dropoffHubId = null; 
 
       const res = await fetch(
@@ -117,8 +123,8 @@ const handleRouteSelect = async (routeId) => {
           body: JSON.stringify({
             route_id: routeId,
             user_id: 1, 
-            pickup_hub_id: pickupHubId,   // 🚀 PASSING TO NEW BACKEND LAYER
-            dropoff_hub_id: dropoffHubId, // 🚀 PASSING TO NEW BACKEND LAYER
+            pickup_hub_id: pickupHubId,   
+            dropoff_hub_id: dropoffHubId, 
           }),
         }
       );
@@ -132,7 +138,7 @@ const handleRouteSelect = async (routeId) => {
 
       navigation.navigate("MatchingScreen", {
         routeId: routeId,
-        ride: data.pool, // Updated parameter to point to data.pool returned by our new controller setup
+        ride: data.pool, 
       });
 
     } catch (err) {
@@ -159,7 +165,6 @@ const handleRouteSelect = async (routeId) => {
         <TouchableOpacity
           key={hub.id || hub.name}
           style={styles.suggestion}
-          // Pass the complete hub object structure down instead of just string literals
           onPress={() => selectHub(hub)}
         >
           <Text>{hub.name}</Text>
@@ -186,7 +191,8 @@ const handleRouteSelect = async (routeId) => {
           <TouchableOpacity
             key={route.route_id || route.id}
             style={styles.routeCard}
-            onPress={() => handleRouteSelect(route.stops || [])}
+            // 🚀 FIXED: Pass route.route_id down to engine instead of stops array string
+            onPress={() => handleRouteSelect(route.route_id || route.id)}
           >
             <Text style={styles.routeText}>
               {Array.isArray(route.stops)
@@ -210,7 +216,6 @@ const handleRouteSelect = async (routeId) => {
           <PoolOfferCard
             key={route.id}
             route={route}
-            // Pass routeId to initialize match bundles securely
             onPress={() => joinPool(route.route_id || route.id)}
           />
         ))
