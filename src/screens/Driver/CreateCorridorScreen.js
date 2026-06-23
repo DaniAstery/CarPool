@@ -6,558 +6,264 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ScrollView,
-  Animated,
+  TextInput,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 export default function CreateCorridorScreen({ navigation }) {
-  const [capacity, setCapacity] = useState(3);
-  const pricePerSeat = "80";
-  const vehicleType = "Minivan";
+  const [capacity, setCapacity] = useState(4);
+  const [pricePerSeat, setPricePerSeat] = useState("100");
 
-  // --- 📡 LIVE DEMAND SIMULATION STATES ---
-  const [incomingRequest, setIncomingRequest] = useState(null);
-  const slideAnim = React.useRef(new Animated.Value(-150)).current;
+  // Selection & Operational States
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+  const [routeDisplay, setRouteDisplay] = useState({ start: "Select a starting hub...", end: "..." });
+  
+  // Hub Search States
+  const [hubSearchTerm, setHubSearchTerm] = useState("");
+  const [foundHubs, setFoundHubs] = useState([]);
+  const [selectedHubName, setSelectedHubName] = useState(null);
+  const [isSearchingHubs, setIsSearchingHubs] = useState(false);
+  
+  // Lists fetched from your backend endpoints
+  const [passengerRequests, setPassengerRequests] = useState([]);
+  const [predefinedCorridors, setPredefinedCorridors] = useState([]);
+  const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
 
-  // Simulate on-demand network pings based on passenger actions
+  // Trigger hub search when driver types
   useEffect(() => {
-    // 1. Simulating a pre-matched bundle notification (2/3 riders ready) after 2 seconds
-    const timer1 = setTimeout(() => {
-      triggerIncomingNotification({
-        id: "req-101",
-        type: "BUNDLE", // Matches two riders already aggregated
-        route: "Megenagna → Bole",
-        detail: "via Bole Road Corridor",
-        statusText: "2/3 Riders Pre-Matched",
-        payout: "160 ETB",
-        icon: "account-group"
-      });
-    }, 2000);
+    if (hubSearchTerm.trim().length > 1) {
+      searchStartingHubs();
+    } else {
+      setFoundHubs([]);
+    }
+  }, [hubSearchTerm]);
 
-    // 2. Simulating a single passenger broadcast waiting for a driver to initiate after 9 seconds
-    const timer2 = setTimeout(() => {
-      triggerIncomingNotification({
-        id: "req-102",
-        type: "SINGLE",
-        route: "Sarbet → Kazanchis",
-        detail: "via Ring Road Corridor",
-        statusText: "1 Single Rider Waiting",
-        payout: "80 ETB",
-        icon: "account"
-      });
-    }, 9000);
-
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-    };
-  }, []);
-
-  const triggerIncomingNotification = (requestData) => {
-    setIncomingRequest(requestData);
-    Animated.spring(slideAnim, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 50,
-      friction: 8
-    }).start();
-  };
-
-  const dismissNotification = () => {
-    Animated.timing(slideAnim, {
-      toValue: -180,
-      duration: 250,
-      useNativeDriver: true
-    }).start(() => setIncomingRequest(null));
-  };
-
-  const handleAcceptDemand = (request) => {
-    dismissNotification();
-    // Transition straight into your matching or navigation flow setup
-    if (navigation) {
-      navigation.navigate("WaitingForRiders", { liveRequest: request });
+  // 1. Core Hub Search using your /api/hubs/search/:term endpoint
+  const searchStartingHubs = async () => {
+    setIsSearchingHubs(true);
+    try {
+      const res = await fetch(`http://192.168.238.52:5000/api/hubs/search/${hubSearchTerm}`);
+      const data = await res.json();
+      setFoundHubs(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.log("Hub search error:", err);
+    } finally {
+      setIsSearchingHubs(false);
     }
   };
 
-  const adjustCapacity = (amount) => {
-    setCapacity((prev) => Math.max(1, prev + amount));
+  // 2. Hub Selection -> Fetches valid corridors using your /api/routes/from/:pickupHub endpoint
+  const handleSelectHub = async (hubName) => {
+    setSelectedHubName(hubName);
+    setHubSearchTerm(""); // Clear search bar
+    setFoundHubs([]);
+    setLoadingRoutes(true);
+    
+    try {
+      // Fetch matching fixed corridors
+      const routeRes = await fetch(`http://192.168.238.52:5000/api/routes/from/${encodeURIComponent(hubName)}`);
+      const routeData = await routeRes.json();
+      setPredefinedCorridors(Array.isArray(routeData) ? routeData : []);
+
+      // OPTIONAL: Pull open passenger custom requests originating from this hub if table allows
+      const reqRes = await fetch("http://192.168.238.52:5000/api/corridors/passenger-requests");
+      const reqData = await reqRes.json();
+      const localizedRequests = Array.isArray(reqData) 
+        ? reqData.filter(req => req.start_location.toLowerCase() === hubName.toLowerCase())
+        : [];
+      setPassengerRequests(localizedRequests);
+
+    } catch (err) {
+      console.log("Error pulling routes for hub:", err);
+      Alert.alert("Error", "Could not fetch corridors for this hub.");
+    } finally {
+      setLoadingRoutes(false);
+    }
+  };
+
+  const handleSelectPredefined = (route) => {
+    setSelectedRouteId(route.route_id);
+    setPricePerSeat(route.base_price ? route.base_price.toString() : "100");
+    setRouteDisplay({
+      start: route.stops[0],
+      end: route.stops[route.stops.length - 1]
+    });
+  };
+
+  const handleGoOnline = async () => {
+    if (!selectedRouteId) {
+      Alert.alert("Selection Required", "Please select a corridor route before going online.");
+      return;
+    }
+
+    setIsPublishing(true);
+    try {
+      const response = await fetch("http://192.168.238.52:5000/api/rides/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driver_id: 1, 
+          vehicle_id: 101, 
+          route_id: selectedRouteId,
+          total_seats: capacity,
+          price_per_seat: parseFloat(pricePerSeat)
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to publish");
+
+      Alert.alert("Live! 🚀", "Your route offer is active. Live passengers can now see and book seats!");
+      if (navigation) navigation.navigate("WaitingForRiders", { rideId: data.ride_id });
+    } catch (err) {
+      Alert.alert("Launch Failed", err.message);
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* 🔔 TOP SIMULATED HUD PUSH NOTIFICATION */}
-      {incomingRequest && (
-        <Animated.View style={[styles.notificationAlertFrame, { transform: [{ translateY: slideAnim }] }]}>
-          <View style={styles.notificationHeader}>
-            <View style={styles.badgeRow}>
-              <View style={[styles.pulseDot, incomingRequest.type === "BUNDLE" ? styles.bgGreen : styles.bgBlue]} />
-              <Text style={styles.notificationMetaText}>
-                {incomingRequest.type === "BUNDLE" ? "⚡ HIGH DEMAND BUNDLE AVAILABLE" : "👤 PASSENGER BROADCAST NEARBY"}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={dismissNotification}>
-              <Ionicons name="close" size={18} color="#9CA3AF" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.notificationBody}>
-            <MaterialCommunityIcons name={incomingRequest.icon} size={24} color="#111827" style={styles.paxIcon} />
-            <View style={styles.routeMetaInfo}>
-              <Text style={styles.notificationRouteText}>{incomingRequest.route}</Text>
-              <Text style={styles.notificationSubText}>{incomingRequest.detail} • <Text style={styles.boldStatus}>{incomingRequest.statusText}</Text></Text>
-            </View>
-            <Text style={styles.notificationPayoutText}>{incomingRequest.payout}</Text>
-          </View>
-
-          <View style={styles.notificationActionRow}>
-            <TouchableOpacity style={styles.declineMiniBtn} onPress={dismissNotification}>
-              <Text style={styles.declineMiniText}>Ignore</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={[styles.acceptMiniBtn, incomingRequest.type === "BUNDLE" ? styles.accentGreenBtn : styles.accentBlueBtn]} 
-              onPress={() => handleAcceptDemand(incomingRequest)}
-            >
-              <Text style={styles.acceptMiniText}>
-                {incomingRequest.type === "BUNDLE" ? "ACCEPT & FETCH PAIR" : "LAUNCH CORRIDOR"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* 1. Precise Clean Top Navigation Header */}
       <View style={styles.headerBlock}>
-        <TouchableOpacity 
-          style={styles.backButton} 
-          onPress={() => navigation && navigation.goBack()}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={22} color="#111827" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitleText}>Create Corridor</Text>
-        <View style={{ width: 32 }} />
+        <Text style={styles.headerTitleText}>Set Up Corridor Route</Text>
       </View>
 
-      <ScrollView 
-        style={styles.contentBody} 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 24 }}
-      >
+      <ScrollView style={styles.contentBody} keyboardShouldPersistTaps="handled">
         
-        {/* 🗺️ ACTIVE RADAR CONTEXT */}
-        <View style={styles.radarStatusCard}>
-          <MaterialCommunityIcons name="radar" size={18} color="#059669" style={styles.spinningRadarIcon} />
-          <Text style={styles.radarStatusText}>Demand radar active. Matching corridors will pop up as passengers request your area.</Text>
+        {/* 🔍 STEP 1: SELECT STARTING HUB */}
+        <Text style={styles.sectionHeading}>📍 Where are you starting from?</Text>
+        <View style={styles.searchSection}>
+          <Ionicons name="search" size={18} color="#6B7280" style={styles.searchIcon} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Type your current Hub (e.g. Megenagna, Bole...)"
+            placeholderTextColor="#9CA3AF"
+            value={hubSearchTerm}
+            onChangeText={setHubSearchTerm}
+          />
         </View>
 
-        {/* 2. Select Corridor Mapping Cluster */}
-        <Text style={styles.sectionHeading}>Select Corridor</Text>
-        
-        <View style={styles.corridorRouteContainer}>
-          {/* Start Location Node Row */}
-          <TouchableOpacity style={styles.locationInputRow} activeOpacity={0.9}>
-            <View style={styles.iconIndicatorWrapper}>
-              <View style={styles.startCoreDot} />
-            </View>
-            <View style={styles.locationMetaFrame}>
-              <Text style={styles.locationLabelText}>Start Location</Text>
-              <Text style={styles.locationValueText}>Megenagna</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-          </TouchableOpacity>
-
-          {/* Linking Internal Divider Guideline */}
-          <View style={styles.verticalConnectorLine} />
-
-          {/* End Location Node Row */}
-          <TouchableOpacity style={styles.locationInputRow} activeOpacity={0.9}>
-            <View style={styles.iconIndicatorWrapper}>
-              <Ionicons name="location" size={18} color="#EF4444" />
-            </View>
-            <View style={styles.locationMetaFrame}>
-              <Text style={styles.locationLabelText}>End Location</Text>
-              <Text style={styles.locationValueText}>Bole</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Dynamic Static Path Label Footer */}
-        <Text style={styles.routeFooterNote}>via Bole Road Corridor</Text>
-
-        {/* 3. Operational Ride Details Container Block */}
-        <Text style={[styles.sectionHeading, { marginTop: 24 }]}>Ride Details</Text>
-        
-        <View style={styles.detailsContainerCard}>
-          
-          {/* Capacity Control Matrix Row */}
-          <View style={styles.detailRowItem}>
-            <Text style={styles.detailRowLabel}>Capacity (seats)</Text>
-            <View style={styles.counterControlWrapper}>
+        {/* Hub Search Results Dropdown */}
+        {foundHubs.length > 0 && (
+          <View style={styles.searchResultsDropdown}>
+            {foundHubs.map((hub) => (
               <TouchableOpacity 
-                style={styles.counterButton} 
-                onPress={() => adjustCapacity(-1)}
-                activeOpacity={0.7}
+                key={hub.id} 
+                style={styles.dropdownItem}
+                onPress={() => handleSelectHub(hub.name)}
               >
+                <Ionicons name="location-sharp" size={16} color="#059669" />
+                <Text style={styles.dropdownItemText}>{hub.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {selectedHubName && (
+          <View style={styles.activeHubBadge}>
+            <Text style={styles.activeHubBadgeText}>Origin Hub: {selectedHubName}</Text>
+          </View>
+        )}
+
+        {/* 🔏 SELECTED TARGET PREVIEW */}
+        <Text style={[styles.sectionHeading, { marginTop: 15 }]}>Active Ride Target</Text>
+        <View style={styles.corridorRouteContainer}>
+          <Text style={styles.locationValueText}>From: {routeDisplay.start}</Text>
+          <View style={styles.verticalConnectorLine} />
+          <Text style={styles.locationValueText}>To: {routeDisplay.end}</Text>
+        </View>
+
+        {/* 🗺️ STEP 2: AVAILABLE VALID CORRIDORS LIST */}
+        <Text style={styles.sectionHeading}>🗺️ Available Corridors from {selectedHubName || "Selected Hub"}</Text>
+        
+        {loadingRoutes ? (
+          <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 20 }} />
+        ) : predefinedCorridors.length === 0 ? (
+          <Text style={styles.fallbackText}>
+            {selectedHubName ? "No corridors mapped out from this hub yet." : "Search and select a hub above to load routes."}
+          </Text>
+        ) : (
+          predefinedCorridors.map((route) => (
+            <TouchableOpacity 
+              key={route.route_id} 
+              style={[styles.routeCard, selectedRouteId === route.route_id && styles.selectedItemBorder]}
+              onPress={() => handleSelectPredefined(route)}
+            >
+              <MaterialCommunityIcons name="routes" size={20} color="#4B5563" style={{ marginRight: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.routeText}>{route.stops.join(" ➔ ")}</Text>
+                <Text style={styles.routeSubPrice}>Fare: {route.base_price || 100} ETB</Text>
+              </View>
+            </TouchableOpacity>
+          ))
+        )}
+
+        {/* 🛠️ STEP 3: CONSTRAINTS & GO LIVE */}
+        <Text style={[styles.sectionHeading, { marginTop: 15 }]}>Capacity Settings</Text>
+        <View style={styles.detailsContainerCard}>
+          <View style={styles.detailRowItem}>
+            <Text style={styles.detailRowLabel}>Seats Available</Text>
+            <View style={styles.counterControlWrapper}>
+              <TouchableOpacity style={styles.counterButton} onPress={() => setCapacity(p => Math.max(1, p-1))}>
                 <Ionicons name="remove" size={16} color="#111827" />
               </TouchableOpacity>
               <Text style={styles.counterValueText}>{capacity}</Text>
-              <TouchableOpacity 
-                style={styles.counterButton} 
-                onPress={() => adjustCapacity(1)}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity style={styles.counterButton} onPress={() => setCapacity(p => p+1)}>
                 <Ionicons name="add" size={16} color="#111827" />
               </TouchableOpacity>
             </View>
           </View>
-
-          <View style={styles.horizontalRowDivider} />
-
-          {/* Static Pricing Matrix Information Frame */}
-          <View style={styles.detailRowItem}>
-            <Text style={styles.detailRowLabel}>Price per seat (ETB)</Text>
-            <View style={styles.valueDisplayFrame}>
-              <Text style={styles.valueDisplayHighlightText}>{pricePerSeat}</Text>
-            </View>
-          </View>
-
-          <View style={styles.horizontalRowDivider} />
-
-          {/* Asset Classification Frame Row */}
-          <View style={styles.detailRowItem}>
-            <Text style={styles.detailRowLabel}>Vehicle Type</Text>
-            <TouchableOpacity style={styles.dropdownDisplaySelector} activeOpacity={0.8}>
-              <Text style={styles.dropdownValueText}>{vehicleType}</Text>
-              <Ionicons name="chevron-forward" size={14} color="#9CA3AF" style={{ marginLeft: 6 }} />
-            </TouchableOpacity>
-          </View>
-
         </View>
 
-        {/* 4. Main Deployment Action Button Framework */}
         <TouchableOpacity 
-          style={styles.goOnlineActionButton}
-          activeOpacity={0.8}
-          onPress={() => navigation && navigation.navigate("WaitingForRiders")}
+          style={[styles.goOnlineActionButton, isPublishing && { backgroundColor: "#047857" }]}
+          onPress={handleGoOnline}
+          disabled={isPublishing}
         >
-          <Text style={styles.goOnlineActionText}>GO ONLINE</Text>
+          {isPublishing ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.goOnlineActionText}>GO ONLINE & PUBLISH ROUTE</Text>
+          )}
         </TouchableOpacity>
-
+        
+        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F9FAFB",
-  },
-  /* --- 🔔 SIMULATED NOTIFICATION OVERLAY STYLING --- */
-  notificationAlertFrame: {
-    position: "absolute",
-    top: 50,
-    left: 12,
-    right: 12,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    padding: 14,
-    zIndex: 999,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  notificationHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  badgeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  pulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  bgGreen: { backgroundColor: "#10B981" },
-  bgBlue: { backgroundColor: "#3B82F6" },
-  notificationMetaText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#6B7280",
-    letterSpacing: 0.5,
-  },
-  notificationBody: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  paxIcon: {
-    marginRight: 10,
-  },
-  routeMetaInfo: {
-    flex: 1,
-  },
-  notificationRouteText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  notificationSubText: {
-    fontSize: 12,
-    color: "#6B7280",
-    marginTop: 1,
-  },
-  boldStatus: {
-    fontWeight: "600",
-    color: "#111827",
-  },
-  notificationPayoutText: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#059669",
-    marginLeft: 8,
-  },
-  notificationActionRow: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 8,
-  },
-  declineMiniBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    backgroundColor: "#F3F4F6",
-  },
-  declineMiniText: {
-    color: "#4B5563",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  acceptMiniBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  accentGreenBtn: { backgroundColor: "#059669" },
-  accentBlueBtn: { backgroundColor: "#3B82F6" },
-  acceptMiniText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  /* --- 🗺️ ACTIVE RADAR HEADER FRAME --- */
-  radarStatusCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#ECFDF5",
-    borderWidth: 1,
-    borderColor: "#A7F3D0",
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  spinningRadarIcon: {
-    marginRight: 8,
-  },
-  radarStatusText: {
-    flex: 1,
-    fontSize: 12,
-    color: "#065F46",
-    lineHeight: 16,
-    fontWeight: "500",
-  },
-
-  /* --- ORIGINAL SYSTEM SPEC STYLING PRESERVED --- */
-  headerBlock: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1,
-    borderColor: "#E5E7EB",
-  },
-  backButton: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitleText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  contentBody: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  sectionHeading: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#111827",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 10,
-    marginLeft: 2,
-  },
-  corridorRouteContainer: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    paddingVertical: 4,
-  },
-  locationInputRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  iconIndicatorWrapper: {
-    width: 24,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  startCoreDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#10B981",
-  },
-  locationMetaFrame: {
-    flex: 1,
-  },
-  locationLabelText: {
-    fontSize: 11,
-    color: "#6B7280",
-    fontWeight: "500",
-  },
-  locationValueText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#111827",
-    marginTop: 2,
-  },
-  verticalConnectorLine: {
-    position: "absolute",
-    left: 25,
-    top: 36,
-    width: 1,
-    height: 28,
-    backgroundColor: "#E5E7EB",
-    zIndex: 2,
-  },
-  routeFooterNote: {
-    fontSize: 12,
-    color: "#6B7280",
-    marginTop: 8,
-    marginLeft: 4,
-    fontStyle: "italic",
-  },
-  detailsContainerCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    paddingHorizontal: 14,
-  },
-  detailRowItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 14,
-  },
-  detailRowLabel: {
-    fontSize: 13,
-    color: "#4B5563",
-    fontWeight: "500",
-  },
-  counterControlWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F3F4F6",
-    borderRadius: 8,
-    padding: 3,
-  },
-  counterButton: {
-    width: 28,
-    height: 28,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 6,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-  },
-  counterValueText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#111827",
-    paddingHorizontal: 14,
-  },
-  valueDisplayFrame: {
-    backgroundColor: "#F3F4F6",
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 8,
-    minWidth: 50,
-    alignItems: "center",
-  },
-  valueDisplayHighlightText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  dropdownDisplaySelector: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F3F4F6",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  dropdownValueText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#4B5563",
-  },
-  horizontalRowDivider: {
-    height: 1,
-    backgroundColor: "#F3F4F6",
-  },
-  goOnlineActionButton: {
-    backgroundColor: "#059669",
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 32,
-    shadowColor: "#059669",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  goOnlineActionText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-    letterSpacing: 0.4,
-  },
+  container: { flex: 1, backgroundColor: "#F9FAFB" },
+  headerBlock: { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB", alignItems: "center" },
+  headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
+  contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  sectionHeading: { fontSize: 11, fontWeight: "800", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 },
+  searchSection: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFF", borderRadius: 10, borderWidth: 1, borderColor: "#D1D5DB", paddingHorizontal: 12, marginBottom: 8 },
+  searchIcon: { marginRight: 8 },
+  searchInput: { flex: 1, height: 44, fontSize: 14, color: "#111827" },
+  searchResultsDropdown: { backgroundColor: "#FFFFFF", borderRadius: 10, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 15, elevation: 3, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  dropdownItem: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: "#F3F4F6", gap: 10 },
+  dropdownItemText: { fontSize: 14, color: "#1F2937", fontWeight: "500" },
+  activeHubBadge: { backgroundColor: "#ECFDF5", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, alignSelf: "flex-start", marginBottom: 15, borderWidth: 1, borderColor: "#A7F3D0" },
+  activeHubBadgeText: { color: "#065F46", fontWeight: "700", fontSize: 12 },
+  corridorRouteContainer: { backgroundColor: "#111827", borderRadius: 12, padding: 14, marginBottom: 15 },
+  locationValueText: { fontSize: 14, fontWeight: "600", color: "#FFFFFF" },
+  verticalConnectorLine: { width: 1, height: 10, backgroundColor: "#374151", marginLeft: 8, marginVertical: 4 },
+  fallbackText: { color: "#9CA3AF", fontSize: 13, fontStyle: 'italic', marginVertical: 10, marginLeft: 2 },
+  routeCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFF", padding: 14, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: "#E5E7EB" },
+  routeText: { fontSize: 14, fontWeight: "600", color: "#1F2937" },
+  routeSubPrice: { fontSize: 12, color: "#6B7280", marginTop: 2 },
+  selectedItemBorder: { borderColor: "#059669", borderWidth: 2, backgroundColor: "#F0FDF4" },
+  detailsContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 15 },
+  detailRowItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
+  detailRowLabel: { fontSize: 13, color: "#4B5563", fontWeight: "600" },
+  counterControlWrapper: { flexDirection: "row", alignItems: "center", backgroundColor: "#F3F4F6", padding: 3, borderRadius: 8 },
+  counterButton: { width: 28, height: 28, backgroundColor: "#FFF", borderRadius: 6, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E5E7EB" },
+  counterValueText: { fontSize: 14, fontWeight: "700", paddingHorizontal: 12 },
+  goOnlineActionButton: { backgroundColor: "#059669", borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center", marginTop: 10 },
+  goOnlineActionText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" }
 });
