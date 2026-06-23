@@ -10,9 +10,7 @@ import {
 } from "react-native";
 
 import PoolOfferCard from "../components/PoolOfferCard";
-// FIX: Ensure FontAwesome5 is explicitly declared here
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
-
 
 export default function PassengerScreen({ navigation }) {
   const [searchText, setSearchText] = useState("");
@@ -20,15 +18,15 @@ export default function PassengerScreen({ navigation }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRoutes, setSelectedRoutes] = useState([]);
 
-  // ✅ SEPARATE LOADING STATES (IMPORTANT FIX)
+  // Track the actual active hub object selected by the user to extract its precise DB ID
+  const [selectedPickupHub, setSelectedPickupHub] = useState(null);
+
+  // SEPARATE LOADING STATES
   const [loadingHubs, setLoadingHubs] = useState(false);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [loadingRides, setLoadingRides] = useState(false);
 
   /* ---------------- HUB SEARCH ---------------- */
-
-  {/* Temporary Developer Portal Bypass Button */}
-
   const searchHubs = async (text) => {
     setSearchText(text);
 
@@ -43,7 +41,6 @@ export default function PassengerScreen({ navigation }) {
       const res = await fetch(
         `http://192.168.238.52:5000/api/hubs/search/${text}`
       );
-
       const data = await res.json();
       setHubs(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -55,8 +52,10 @@ export default function PassengerScreen({ navigation }) {
   };
 
   /* ---------------- SELECT HUB → GET ROUTES ---------------- */
-  const selectHub = async (hubName) => {
-    setSearchText(hubName);
+  const selectHub = async (hub) => {
+    // Save the entire selected hub object so we can read hub.id later
+    setSelectedPickupHub(hub);
+    setSearchText(hub.name);
     setHubs([]);
     setRoutes([]);
     setSelectedRoutes([]);
@@ -64,9 +63,8 @@ export default function PassengerScreen({ navigation }) {
 
     try {
       const res = await fetch(
-        `http://192.168.238.52:5000/api/routes/from/${hubName}`
+        `http://192.168.238.52:5000/api/routes/from/${hub.name}`
       );
-
       const data = await res.json();
       setRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -80,18 +78,14 @@ export default function PassengerScreen({ navigation }) {
   /* ---------------- SELECT CORRIDOR → GET RIDES ---------------- */
   const handleRouteSelect = async (routeStops) => {
     setLoadingRides(true);
-
     const start = routeStops?.[0];
 
     try {
       const res = await fetch(
         `http://192.168.238.52:5000/api/rides?start=${start}`
       );
-
       const data = await res.json();
-
       console.log("RIDES:", data);
-
       setSelectedRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
       console.log("ride fetch error:", err);
@@ -101,41 +95,49 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
+  /* ---------------- JOIN POOL ---------------- */
+  const joinPool = async (routeId) => {
+    try {
+      // Find the specific route configuration array from state to derive terminal drop-off points
+      const targetRoute = routes.find(r => r.route_id === routeId);
+      
+      // Fallback strategies to ensure parameters are never null or undefined
+      const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
+      
+      // For now, assume destination is the last hub in the sequence array chain
+      // If you implement an explicit destination dropdown later, plug its selected ID directly here.
+      const dropoffHubId = null; 
 
-/* ---------------- JOIN POOL (UPDATED) ---------------- */
-const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
-  try {
-    const res = await fetch(
-      "http://192.168.238.52:5000/api/routes/join",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          route_id: routeId,
-          user_id: 1, // Replace with your active logged-in user context ID later
-          pickup_hub_id: pickupHubId,   // 🚀 NEW: Explicitly track where they stand
-          dropoff_hub_id: dropoffHubId, // 🚀 NEW: Explicitly track where they leave
-        }),
+      const res = await fetch(
+        "http://192.168.238.52:5000/api/routes/join",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            route_id: routeId,
+            user_id: 1, 
+            pickup_hub_id: pickupHubId,   // 🚀 PASSING TO NEW BACKEND LAYER
+            dropoff_hub_id: dropoffHubId, // 🚀 PASSING TO NEW BACKEND LAYER
+          }),
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error || "Join failed");
+        return;
       }
-    );
 
-    const data = await res.json();
+      navigation.navigate("MatchingScreen", {
+        routeId: routeId,
+        ride: data.pool, // Updated parameter to point to data.pool returned by our new controller setup
+      });
 
-    if (!res.ok) {
-      alert(data.error || "Join failed");
-      return;
+    } catch (err) {
+      console.log("join error:", err);
     }
-
-    navigation.navigate("MatchingScreen", {
-      routeId: routeId,
-      ride: data.ride,
-    });
-
-  } catch (err) {
-    console.log("join error:", err);
-  }
-};
-
+  };
 
   /* ---------------- UI ---------------- */
   return (
@@ -156,7 +158,8 @@ const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
         <TouchableOpacity
           key={hub.id || hub.name}
           style={styles.suggestion}
-          onPress={() => selectHub(hub.name)}
+          // Pass the complete hub object structure down instead of just string literals
+          onPress={() => selectHub(hub)}
         >
           <Text>{hub.name}</Text>
         </TouchableOpacity>
@@ -164,30 +167,15 @@ const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
 
       {/* ROUTES */}
       <Text style={styles.label}>Available Corridors</Text>
-      {/* FLOATING SWITCH BUTTON - FORCE RENDER ON TOP */}
+      
+      {/* FLOATING SWITCH BUTTON */}
       <TouchableOpacity 
-        style={{
-          position: 'absolute',
-          top: 70,            // Pushes it down past any phone notches
-          right: 20,           // Places it on the right side
-          backgroundColor: '#111827', 
-          paddingHorizontal: 16,
-          paddingVertical: 12,
-          borderRadius: 25,
-          zIndex: 9999,        // FORCES it to float ABOVE the MapView component
-          elevation: 10,       // FORCES visibility on Android shadows layer
-          flexDirection: 'row',
-          alignItems: 'center',
-          borderWidth: 1,
-          borderColor: '#374151',
-        }}
+        style={styles.floatingDriverBtn}
         activeOpacity={0.8}
         onPress={() => navigation.navigate("CreateCorridorScreen")}
       >
         <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
-        <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>
-          SWITCH TO DRIVER
-        </Text>
+        <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
       </TouchableOpacity>
 
       {loadingRoutes ? (
@@ -204,6 +192,9 @@ const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
                 ? route.stops.join(" → ")
                 : "Invalid route"}
             </Text>
+            {route.base_price && (
+              <Text style={styles.subText}>Base Price: {route.base_price} ETB</Text>
+            )}
           </TouchableOpacity>
         ))
       )}
@@ -218,7 +209,8 @@ const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
           <PoolOfferCard
             key={route.id}
             route={route}
-            onPress={() => joinPool(route.id)}
+            // Pass routeId to initialize match bundles securely
+            onPress={() => joinPool(route.route_id || route.id)}
           />
         ))
       )}
@@ -232,13 +224,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     padding: 20,
   },
-
   title: {
     fontSize: 32,
     fontWeight: "bold",
     marginBottom: 20,
   },
-
   inputBox: {
     borderWidth: 1,
     borderColor: "#ddd",
@@ -246,35 +236,52 @@ const styles = StyleSheet.create({
     padding: 18,
     marginBottom: 10,
   },
-
   suggestion: {
     padding: 15,
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
-
   label: {
     fontSize: 16,
     fontWeight: "700",
     marginTop: 15,
     marginBottom: 10,
   },
-
   routeCard: {
     backgroundColor: "#f5f5f5",
     padding: 18,
     borderRadius: 12,
     marginBottom: 12,
   },
-
   routeText: {
     fontSize: 16,
     fontWeight: "600",
   },
-
   subText: {
     fontSize: 12,
-    color: "#666",
+    color: "#10B981",
+    fontWeight: "700",
     marginTop: 5,
   },
+  floatingDriverBtn: {
+    position: 'absolute',
+    top: 70,            
+    right: 20,           
+    backgroundColor: '#111827', 
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 25,
+    zIndex: 9999,        
+    elevation: 10,       
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  floatingDriverText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  }
 });
