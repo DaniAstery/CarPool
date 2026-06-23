@@ -12,7 +12,10 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
-export default function CreateCorridorScreen({ navigation }) {
+export default function CreateCorridorScreen({ route, navigation }) {
+  // Safe authentication fallback (Replace with your actual Global Context Hooks)
+  const currentAuthenticatedUser = route?.params?.user || { id: 1, activeVehicleId: null };
+
   const [capacity, setCapacity] = useState(4);
   const [pricePerSeat, setPricePerSeat] = useState("100");
 
@@ -68,11 +71,12 @@ export default function CreateCorridorScreen({ navigation }) {
       const routeData = await routeRes.json();
       setPredefinedCorridors(Array.isArray(routeData) ? routeData : []);
 
-      // OPTIONAL: Pull open passenger custom requests originating from this hub if table allows
+      // 🎯 FIXED: Pulling live unserved demand straight from route_pool mappings
       const reqRes = await fetch("http://192.168.238.52:5000/api/corridors/passenger-requests");
       const reqData = await reqRes.json();
+      
       const localizedRequests = Array.isArray(reqData) 
-        ? reqData.filter(req => req.start_location.toLowerCase() === hubName.toLowerCase())
+        ? reqData.filter(req => req.start_location && req.start_location.toLowerCase() === hubName.toLowerCase())
         : [];
       setPassengerRequests(localizedRequests);
 
@@ -94,62 +98,56 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   const handleGoOnline = async () => {
-  // 1. Validation check before hitting the database
-  if (!selectedRouteId) {
-    Alert.alert(
-      "Selection Required", 
-      "Please search for a starting hub and tap a corridor route blueprint before going online."
-    );
-    return;
-  }
-
-  setIsPublishing(true);
-  try {
-    // 2. Make the POST request to your newly optimized matching endpoint
-    const response = await fetch("http://192.168.238.52:5000/api/rides/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        driver_id: 1,       // Hardcoded for now; replace with authenticated driver profile context later
-        route_id: selectedRouteId, // The id matching routes.id chosen from the list
-        total_seats: capacity,     // The seat configuration setup via the UI counter
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      Alert.alert("Launch Failed", data.error || "Could not publish corridor pool.");
+    if (!selectedRouteId) {
+      Alert.alert("Selection Required", "Please select an active corridor route blueprint.");
       return;
     }
 
-    // 3. Success state: Inform the driver and pass the payload down the track
-    Alert.alert(
-      "Live! 🚀", 
-      `You are now online executing this corridor! Matched with ${data.filled} waiting passenger(s).`
-    );
-    
-    // 4. Navigate forward passing the exact ride properties your passenger tracking flow expects
-    if (navigation) {
-      navigation.navigate("WaitingForRiders", { 
-        ride: {
-          id: data.ride_id,               // This is the offer_id from route_offers
-          start_location: data.start_location, // E.g., 'Megenagna'
-          end_location: data.end_location,     // E.g., 'Piassa'
-          total_seats: data.total_seats,
-          filled: data.filled,                 // Count of passengers shifted to 'matched'
-          driver_name: "Dawit K." 
-        }
+    setIsPublishing(true);
+    try {
+      const response = await fetch("http://192.168.238.52:5000/api/rides/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driver_id: currentAuthenticatedUser.id,
+          vehicle_id: currentAuthenticatedUser.activeVehicleId, 
+          route_id: selectedRouteId,
+          total_seats: capacity,
+        })
       });
-    }
 
-  } catch (err) {
-    console.log("Publish error:", err);
-    Alert.alert("Network Error", "Could not connect to the Corridor dispatch server engine.");
-  } finally {
-    setIsPublishing(false);
-  }
-};
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert("Launch Failed", data.error || "Could not publish corridor pool.");
+        return;
+      }
+
+      Alert.alert("Live! 🚀", `Corridor Published! Matched with ${data.filled} passenger(s).`);
+      
+      if (navigation) {
+        navigation.navigate("WaitingForRiders", { 
+          ride: {
+            id: data.ride_id,
+            start_location: data.start_location,
+            end_location: data.end_location,
+            total_seats: data.total_seats,
+            filled: data.filled,
+            price_per_seat: data.price_per_seat,
+            driver_name: data.driver_name,
+            make: data.make,
+            model: data.model
+          }
+        });
+      }
+
+    } catch (err) {
+      console.log("Publish error:", err);
+      Alert.alert("Network Error", "Could not connect to dispatch server.");
+    } finally {
+      setIsPublishing(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -227,6 +225,16 @@ export default function CreateCorridorScreen({ navigation }) {
           ))
         )}
 
+        {/* Dynamic Passenger Waiting List Manifest Indicator */}
+        {passengerRequests.length > 0 && (
+          <View style={styles.demandIndicatorBadge}>
+            <Ionicons name="people" size={14} color="#0369a1" />
+            <Text style={styles.demandIndicatorText}>
+              {passengerRequests.length} passenger(s) waiting on segments near this hub!
+            </Text>
+          </View>
+        )}
+
         {/* 🛠️ STEP 3: CONSTRAINTS & GO LIVE */}
         <Text style={[styles.sectionHeading, { marginTop: 15 }]}>Capacity Settings</Text>
         <View style={styles.detailsContainerCard}>
@@ -290,6 +298,8 @@ const styles = StyleSheet.create({
   counterControlWrapper: { flexDirection: "row", alignItems: "center", backgroundColor: "#F3F4F6", padding: 3, borderRadius: 8 },
   counterButton: { width: 28, height: 28, backgroundColor: "#FFF", borderRadius: 6, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E5E7EB" },
   counterValueText: { fontSize: 14, fontWeight: "700", paddingHorizontal: 12 },
+  demandIndicatorBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#f0f9ff", padding: 10, borderRadius: 8, gap: 8, marginBottom: 12, borderWidth: 1, borderColor: "#bae6fd" },
+  demandIndicatorText: { color: "#0369a1", fontSize: 12, fontWeight: "600" },
   goOnlineActionButton: { backgroundColor: "#059669", borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center", marginTop: 10 },
   goOnlineActionText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" }
 });
