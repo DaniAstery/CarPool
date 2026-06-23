@@ -76,24 +76,25 @@ export default function PassengerScreen({ navigation }) {
   };
 
   /* ---------------- SELECT CORRIDOR → GET RIDES ---------------- */
-  const handleRouteSelect = async (routeStops) => {
-    setLoadingRides(true);
-    const start = routeStops?.[0];
+const handleRouteSelect = async (routeId) => {
+  setLoadingRides(true);
 
-    try {
-      const res = await fetch(
-        `http://192.168.238.52:5000/api/rides?start=${start}`
-      );
-      const data = await res.json();
-      console.log("RIDES:", data);
-      setSelectedRoutes(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.log("ride fetch error:", err);
-      setSelectedRoutes([]);
-    } finally {
-      setLoadingRides(false);
-    }
-  };
+  try {
+    // Queries cleanly by integer ID instead of unstructured location text strings
+    const res = await fetch(
+      `http://192.168.238.52:5000/api/rides?route_id=${routeId}`
+    );
+
+    const data = await res.json();
+    console.log("FILTERED RIDES BY ROUTE_ID:", data);
+    setSelectedRoutes(Array.isArray(data) ? data : []);
+  } catch (err) {
+    console.log("ride fetch error:", err);
+    setSelectedRoutes([]);
+  } finally {
+    setLoadingRides(false);
+  }
+};
 
   /* ---------------- JOIN POOL ---------------- */
   const joinPool = async (routeId) => {
