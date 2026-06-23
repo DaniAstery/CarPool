@@ -94,36 +94,62 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   const handleGoOnline = async () => {
-    if (!selectedRouteId) {
-      Alert.alert("Selection Required", "Please select a corridor route before going online.");
+  // 1. Validation check before hitting the database
+  if (!selectedRouteId) {
+    Alert.alert(
+      "Selection Required", 
+      "Please search for a starting hub and tap a corridor route blueprint before going online."
+    );
+    return;
+  }
+
+  setIsPublishing(true);
+  try {
+    // 2. Make the POST request to your newly optimized matching endpoint
+    const response = await fetch("http://192.168.238.52:5000/api/rides/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        driver_id: 1,       // Hardcoded for now; replace with authenticated driver profile context later
+        route_id: selectedRouteId, // The id matching routes.id chosen from the list
+        total_seats: capacity,     // The seat configuration setup via the UI counter
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      Alert.alert("Launch Failed", data.error || "Could not publish corridor pool.");
       return;
     }
 
-    setIsPublishing(true);
-    try {
-      const response = await fetch("http://192.168.238.52:5000/api/rides/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          driver_id: 1, 
-          vehicle_id: 101, 
-          route_id: selectedRouteId,
-          total_seats: capacity,
-          price_per_seat: parseFloat(pricePerSeat)
-        })
+    // 3. Success state: Inform the driver and pass the payload down the track
+    Alert.alert(
+      "Live! 🚀", 
+      `You are now online executing this corridor! Matched with ${data.filled} waiting passenger(s).`
+    );
+    
+    // 4. Navigate forward passing the exact ride properties your passenger tracking flow expects
+    if (navigation) {
+      navigation.navigate("WaitingForRiders", { 
+        ride: {
+          id: data.ride_id,               // This is the offer_id from route_offers
+          start_location: data.start_location, // E.g., 'Megenagna'
+          end_location: data.end_location,     // E.g., 'Piassa'
+          total_seats: data.total_seats,
+          filled: data.filled,                 // Count of passengers shifted to 'matched'
+          driver_name: "Dawit K." 
+        }
       });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to publish");
-
-      Alert.alert("Live! 🚀", "Your route offer is active. Live passengers can now see and book seats!");
-      if (navigation) navigation.navigate("WaitingForRiders", { rideId: data.ride_id });
-    } catch (err) {
-      Alert.alert("Launch Failed", err.message);
-    } finally {
-      setIsPublishing(false);
     }
-  };
+
+  } catch (err) {
+    console.log("Publish error:", err);
+    Alert.alert("Network Error", "Could not connect to the Corridor dispatch server engine.");
+  } finally {
+    setIsPublishing(false);
+  }
+};
 
   return (
     <SafeAreaView style={styles.container}>
@@ -229,7 +255,7 @@ export default function CreateCorridorScreen({ navigation }) {
             <Text style={styles.goOnlineActionText}>GO ONLINE & PUBLISH ROUTE</Text>
           )}
         </TouchableOpacity>
-        
+                
         <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
