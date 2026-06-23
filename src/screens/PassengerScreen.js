@@ -60,7 +60,6 @@ export default function PassengerScreen({ navigation }) {
     setHubs([]);
     setRoutes([]);
     setSelectedRoutes([]);
-
     setLoadingRoutes(true);
 
     try {
@@ -102,9 +101,9 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
-  /* ---------------- JOIN POOL ---------------- */
- /* ---------------- JOIN POOL ---------------- */
-const joinPool = async (routeId) => {
+
+/* ---------------- JOIN POOL (UPDATED) ---------------- */
+const joinPool = async (routeId, pickupHubId, dropoffHubId) => {
   try {
     const res = await fetch(
       "http://192.168.238.52:5000/api/routes/join",
@@ -113,7 +112,9 @@ const joinPool = async (routeId) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           route_id: routeId,
-          user_id: 1,
+          user_id: 1, // Replace with your active logged-in user context ID later
+          pickup_hub_id: pickupHubId,   // 🚀 NEW: Explicitly track where they stand
+          dropoff_hub_id: dropoffHubId, // 🚀 NEW: Explicitly track where they leave
         }),
       }
     );
@@ -125,7 +126,6 @@ const joinPool = async (routeId) => {
       return;
     }
 
-    // IMPORTANT: we now pass routeId forward
     navigation.navigate("MatchingScreen", {
       routeId: routeId,
       ride: data.ride,
