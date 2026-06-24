@@ -91,7 +91,7 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
-  /* ---------------- 🚀 NEW FEATURE: REQUEST NEW CORRIDOR ---------------- */
+  /* ---------------- 🚀 REQUEST NEW CORRIDOR ---------------- */
   const handleRequestCorridor = async () => {
     if (!selectedPickupHub) {
       Alert.alert("Error", "Please select a starting hub first.");
@@ -132,18 +132,23 @@ export default function PassengerScreen({ navigation }) {
   /* ---------------- JOIN POOL / SOLO RIDE ---------------- */
   const joinPool = async (routeId) => {
     try {
-      const targetRoute = routes.find((r) => r.route_id === routeId);
       const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
+      
+      // Look up target route details from local state array to extract visual corridor tags
+      const targetRoute = routes.find((r) => parseInt(r.route_id, 10) === parseInt(routeId, 10));
+      const corridorLabel = Array.isArray(targetRoute?.stops) 
+        ? targetRoute.stops.join(" → ") 
+        : "Selected Corridor";
 
       const res = await fetch("http://192.168.238.52:5000/api/routes/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           route_id: routeId,
-          user_id: 1,
+          user_id: 1, // Static placeholder fallback context matching your backend tracking setup
           pickup_hub_id: pickupHubId,
           dropoff_hub_id: null,
-          booking_type: isSoloRide ? "solo" : "shared", // 🚀 Flags the backend to clear all remaining seats
+          booking_type: isSoloRide ? "solo" : "shared",
         }),
       });
 
@@ -153,12 +158,24 @@ export default function PassengerScreen({ navigation }) {
         return;
       }
 
+      /* ⚡ ALIGNMENT FIX: Passing comprehensive routing objects directly into 
+        the matching view payload so our real-time status trackers work flawlessly.
+      */
       navigation.navigate("MatchingScreen", {
         routeId: routeId,
-        ride: data.pool,
+        hubId: pickupHubId,
+        userId: "1", 
+        ride: {
+          corridor: corridorLabel,
+          time: "Evaluating Hub Options...",
+          price: isSoloRide 
+            ? `ETB ${(parseFloat(targetRoute?.base_price || 150) * 4).toFixed(0)}`
+            : `ETB ${targetRoute?.base_price || 150}`,
+        }
       });
     } catch (err) {
       console.log("booking error:", err);
+      Alert.alert("Connection Failure", "Could not handshake with the matchmaking pipeline engine.");
     }
   };
 
@@ -174,15 +191,15 @@ export default function PassengerScreen({ navigation }) {
         style={styles.inputBox}
       />
 
-      {loadingHubs && <ActivityIndicator />}
+      {loadingHubs && <ActivityIndicator style={{ marginBottom: 10 }} />}
 
       {hubs.map((hub) => (
         <TouchableOpacity key={hub.id || hub.name} style={styles.suggestion} onPress={() => selectHub(hub)}>
-          <Text>{hub.name}</Text>
+          <Text style={styles.suggestionText}>{hub.name}</Text>
         </TouchableOpacity>
       ))}
 
-      {/* 🚀 NEW FEATURE: RIDE TYPE SELECTION PANEL */}
+      {/* RIDE TYPE SELECTION PANEL */}
       <Text style={styles.label}>Select Service Tier</Text>
       <View style={styles.toggleRow}>
         <TouchableOpacity
@@ -197,8 +214,8 @@ export default function PassengerScreen({ navigation }) {
           style={[styles.tierButton, isSoloRide && styles.activeSoloButton]}
           onPress={() => setIsSoloRide(true)}
         >
-          <FontAwesome5 name="user-alt" size={16} color={isSoloRide ? "#FFF" : "#374151"} />
-          <Text style={[styles.tierText, isSoloRide && styles.activeTierText]}>Solo (Buyout Car)</Text>
+          <FontAwesome5 name="user-alt" size={14} color={isSoloRide ? "#FFF" : "#374151"} />
+          <Text style={[styles.tierText, isSoloRide && styles.activeTierText]}>Solo Buyout</Text>
         </TouchableOpacity>
       </View>
 
@@ -222,7 +239,7 @@ export default function PassengerScreen({ navigation }) {
       </TouchableOpacity>
 
       {loadingRoutes ? (
-        <ActivityIndicator />
+        <ActivityIndicator style={{ marginVertical: 20 }} />
       ) : routes.length === 0 && selectedPickupHub ? (
         <View style={styles.emptyRoutesBlock}>
           <Text style={styles.emptyText}>No corridors registered from this hub yet.</Text>
@@ -250,21 +267,22 @@ export default function PassengerScreen({ navigation }) {
         ))
       )}
 
-      {/* RIDES */}
+      {/* RIDES OPTIONS LIST */}
       <Text style={styles.label}>Available Options</Text>
 
       {loadingRides ? (
-        <ActivityIndicator />
+        <ActivityIndicator style={{ marginVertical: 20 }} />
       ) : (
         selectedRoutes.map((route) => (
           <PoolOfferCard
             key={route.id}
             route={route}
-            isSoloIntent={isSoloRide} // Pass state down to change button labels inside the card
+            isSoloIntent={isSoloRide}
             onPress={() => joinPool(route.route_id || route.id)}
           />
         ))
       )}
+      <View style={{ height: 40 }} />
     </ScrollView>
   );
 }
@@ -274,11 +292,12 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, fontWeight: "bold", marginBottom: 20 },
   inputBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 15, padding: 18, marginBottom: 15 },
   suggestion: { padding: 15, borderBottomWidth: 1, borderBottomColor: "#eee" },
+  suggestionText: { fontSize: 15, color: "#1F2937" },
   label: { fontSize: 16, fontWeight: "700", marginTop: 15, marginBottom: 10 },
   sectionHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 15, marginBottom: 10 },
   requestLink: { color: "#10B981", fontWeight: "700", fontSize: 14 },
   toggleRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 15 },
-  tierButton: { flex: 1, flexDirection: "row", backgroundColor: "#F3F4F6", padding: 15, borderRadius: 12, justifyContent: "center", alignItems: "center", mx: 5, marginHorizontal: 5, borderWidth: 1, borderColor: "#E5E7EB" },
+  tierButton: { flex: 1, flexDirection: "row", backgroundColor: "#F3F4F6", padding: 15, borderRadius: 12, justifyContent: "center", alignItems: "center", marginHorizontal: 5, borderWidth: 1, borderColor: "#E5E7EB" },
   activeTierButton: { backgroundColor: "#111827", borderColor: "#111827" },
   activeSoloButton: { backgroundColor: "#10B981", borderColor: "#10B981" },
   tierText: { marginLeft: 8, fontWeight: "700", color: "#374151" },

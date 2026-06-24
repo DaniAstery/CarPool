@@ -22,10 +22,14 @@ export default function MatchingScreen({ navigation, route }) {
   });
 
   const radarAnim = useRef(new Animated.Value(0)).current;
+  
+  // Destructure routing parameter sets safely
   const routeId = route?.params?.routeId || "3";
   const hubId = route?.params?.hubId || "1";
+  const userId = route?.params?.userId || "1"; 
   const ride = route?.params?.ride || { corridor: "Megenagna → Bole", time: "25 min" };
 
+  // Track user hardware location
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -38,6 +42,7 @@ export default function MatchingScreen({ navigation, route }) {
     })();
   }, []);
 
+  // Radar structural loop trigger
   useEffect(() => {
     Animated.loop(
       Animated.timing(radarAnim, {
@@ -46,52 +51,61 @@ export default function MatchingScreen({ navigation, route }) {
     ).start();
   }, [radarAnim]);
 
-  // Handle Poll Status & Core Power-of-2 Conditions
+  // 🔄 Real-Time Matching Status Polling Loop
   useEffect(() => {
     let pollingInterval;
 
-    const checkMatchPipeline = async () => {
+    const checkMyPoolStatus = async () => {
       try {
-        const response = await fetch("http://192.168.238.52:5000/api/rides/auto-match", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ route_id: routeId, hub_id: hubId })
-        });
+        // Query the dedicated, isolated GET endpoint by userId
+        const response = await fetch(`http://192.168.238.52:5000/api/routes/status/${userId}`);
+        
+        if (!response.ok) {
+          const errorHtml = await response.text();
+          console.log("⚠️ Diagnostic Router Error Response:", errorHtml.slice(0, 100));
+          return;
+        }
+
         const data = await response.json();
 
-        if (response.ok) {
-          const currentMatches = data.matchedCount || 1;
-          setMatchedCount(currentMatches);
-
-          // Update real-time price context if bonus passengers unlock discounts
+        // Evaluate matching pipeline status
+        if (data.status === "matched") {
+          setMatchedCount(2); // Instantly update counter to core fulfillment threshold
+          
           if (data.finalPrice) {
-            setDisplayedPrice(`ETB ${parseInt(data.finalPrice)}`);
+            setDisplayedPrice(`ETB ${parseInt(data.finalPrice, 10)}`);
           }
 
-          // 🏁 Minimum of 2 accepted! Ready to move to layout screen proposal
-          if (currentMatches >= 2) {
-            clearInterval(pollingInterval);
-            setTimeout(() => {
-              if (navigation) {
-                navigation.replace("PickupProposalScreen", { 
-                  routeId, 
-                  rideId: data.ride_id,
-                  ride: { ...ride, price: `ETB ${parseInt(data.finalPrice)}`, finalCount: currentMatches } 
-                });
-              }
-            }, 2000);
-          }
+          clearInterval(pollingInterval);
+
+          // Route navigation sequence trigger
+          setTimeout(() => {
+            if (navigation) {
+              navigation.replace("PickupProposalScreen", { 
+                routeId, 
+                rideId: data.matched_ride_offer_id,
+                ride: { 
+                  ...ride, 
+                  price: `ETB ${parseInt(data.finalPrice || 80, 10)}`, 
+                  finalCount: 2 
+                } 
+              });
+            }
+          }, 1500);
+        } else {
+          // Fallback to active searching count layout
+          setMatchedCount(data.currentPoolCount || 1);
         }
       } catch (err) {
-        console.log("Pipeline polling error:", err);
+        console.log("Status lookup connection failure:", err);
       }
     };
 
-    checkMatchPipeline();
-    pollingInterval = setInterval(checkMatchPipeline, 2500);
+    checkMyPoolStatus();
+    pollingInterval = setInterval(checkMyPoolStatus, 2500);
 
     return () => clearInterval(pollingInterval);
-  }, [routeId, hubId]);
+  }, [routeId, hubId, userId]);
 
   const ringScaleOut = radarAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.4] });
   const ringOpacityIn = radarAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 0.4, 0] });
@@ -103,32 +117,32 @@ export default function MatchingScreen({ navigation, route }) {
         <Text style={styles.headerTitle}>Corridor Smart Matching</Text>
         <View style={{ width: 24 }} />
       </View>
-        <View style={styles.mapContainer}>
-          <MapView
-            provider={PROVIDER_GOOGLE}
-            style={StyleSheet.absoluteFillObject}
-            region={currentLocation}
-            showsUserLocation={true}
-            customMapStyle={cleanMinimalMapStyle}
-          />
+      
+      <View style={styles.mapContainer}>
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFillObject}
+          region={currentLocation}
+          showsUserLocation={true}
+          customMapStyle={cleanMinimalMapStyle}
+        />
 
-          <View style={styles.radarWrapper}>
-            {/* Cleaned up style configuration below */}
-            <Animated.View 
-              style={[
-                styles.radarPulseRing, 
-                { 
-                  transform: [{ scale: ringScaleOut }], 
-                  opacity: ringOpacityIn 
-                }
-              ]} 
-            />
-            <View style={styles.radarInnerRing}>
-              <View style={styles.userBeaconDot} />
-            </View>
-            <Text style={styles.youTextTag}>You</Text>
+        <View style={styles.radarWrapper}>
+          <Animated.View 
+            style={[
+              styles.radarPulseRing, 
+              { 
+                transform: [{ scale: ringScaleOut }], 
+                opacity: ringOpacityIn 
+              }
+            ]} 
+          />
+          <View style={styles.radarInnerRing}>
+            <View style={styles.userBeaconDot} />
           </View>
+          <Text style={styles.youTextTag}>You</Text>
         </View>
+      </View>
 
       <View style={styles.matchCard}>
         <View style={styles.iconCircle}><Text style={styles.avatarIcon}>👥</Text></View>
