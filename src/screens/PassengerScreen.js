@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+// ❌ Remove standard SafeAreaView from react-native
 import {
   View,
   Text,
@@ -9,6 +10,9 @@ import {
   TextInput,
   Alert,
 } from "react-native";
+
+//  Add the correct framework layout context package:
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
@@ -129,56 +133,79 @@ export default function PassengerScreen({ navigation }) {
     );
   };
 
-  /* ---------------- JOIN POOL / SOLO RIDE ---------------- */
-  const joinPool = async (routeId) => {
+ /* ---------------- JOIN POOL / BOOK SEAT DIRECTLY ---------------- */
+  const joinPool = async (item) => {
     try {
       const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
       
-      // Look up target route details from local state array to extract visual corridor tags
-      const targetRoute = routes.find((r) => parseInt(r.route_id, 10) === parseInt(routeId, 10));
-      const corridorLabel = Array.isArray(targetRoute?.stops) 
-        ? targetRoute.stops.join(" → ") 
-        : "Selected Corridor";
+      // Determine if this item is a baseline Route template or a live Driver Ride Offer
+      const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
+      
+      let endpoint = "http://192.168.238.52:5000/api/routes/join";
+      let payload = {};
+      let corridorLabel = "Selected Corridor";
 
-      const res = await fetch("http://192.168.238.52:5000/api/routes/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          route_id: routeId,
-          user_id: 1, // Static placeholder fallback context matching your backend tracking setup
+      if (isLiveDriverOffer) {
+        // Option A: User clicked an active driver's matching card deployment layout
+        endpoint = "http://192.168.238.52:5000/api/rides/join-pool";
+        payload = {
+          ride_id: item.id,
+          passenger_id: 1, // Static Context matching server tracker specs
+          pickup_hub_id: pickupHubId,
+          dropoff_hub_id: item.dropoff_hub_id || null,
+          seats_booked: 1
+        };
+        corridorLabel = `${item.start_location} → ${item.end_location}`;
+      } else {
+        // Option B: User clicked a baseline route blueprint pipeline directly
+        endpoint = "http://192.168.238.52:5000/api/routes/join";
+        payload = {
+          route_id: item.route_id || item.id,
+          user_id: 1,
           pickup_hub_id: pickupHubId,
           dropoff_hub_id: null,
           booking_type: isSoloRide ? "solo" : "shared",
-        }),
+        };
+        corridorLabel = Array.isArray(item.stops) ? item.stops.join(" → ") : "Selected Route";
+      }
+
+      console.log(`📡 Dispatching payload to endpoint: ${endpoint}`);
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
       if (!res.ok) {
-        Alert.alert("Error", data.error || "Booking failed");
+        const errorHtml = await res.text();
+        console.log("⚠️ Raw Server Error Intercept:", errorHtml.slice(0, 200));
+        Alert.alert("Router Disconnect", "Express returned a 404 HTML string. Check your parameter layout mappings.");
         return;
       }
 
-      /* ⚡ ALIGNMENT FIX: Passing comprehensive routing objects directly into 
-        the matching view payload so our real-time status trackers work flawlessly.
-      */
+      const data = await res.json();
+      console.log("✅ Server response received successfully:", data);
+
+      // Transition beautifully onto your real-time tracking dashboard view
       navigation.navigate("MatchingScreen", {
-        routeId: routeId,
+        routeId: isLiveDriverOffer ? item.route_id : (item.route_id || item.id),
         hubId: pickupHubId,
         userId: "1", 
         ride: {
           corridor: corridorLabel,
-          time: "Evaluating Hub Options...",
-          price: isSoloRide 
-            ? `ETB ${(parseFloat(targetRoute?.base_price || 150) * 4).toFixed(0)}`
-            : `ETB ${targetRoute?.base_price || 150}`,
+          time: isLiveDriverOffer ? "Driver waiting" : "Evaluating Hub Options...",
+          price: isLiveDriverOffer 
+            ? `ETB ${parseInt(item.price_per_seat, 10)}`
+            : `ETB ${item.base_price || 150}`,
         }
       });
     } catch (err) {
-      console.log("booking error:", err);
-      Alert.alert("Connection Failure", "Could not handshake with the matchmaking pipeline engine.");
+      console.log("Critical execution block crash:", err);
+      Alert.alert("Connection Failure", "Could not reach matchmaking server pipeline layer.");
     }
   };
-
+  
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Find Shared Ride</Text>
@@ -249,22 +276,19 @@ export default function PassengerScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       ) : (
-        routes.map((route) => (
-          <TouchableOpacity
-            key={route.route_id || route.id}
-            style={styles.routeCard}
-            onPress={() => handleRouteSelect(route.route_id || route.id)}
-          >
-            <Text style={styles.routeText}>
-              {Array.isArray(route.stops) ? route.stops.join(" → ") : "Invalid route"}
-            </Text>
-            <Text style={styles.subText}>
-              {isSoloRide
-                ? `Solo Buyout Est: ${(parseFloat(route.base_price || 150) * 4).toFixed(0)} ETB`
-                : `Base Share Price: ${route.base_price || 150} ETB`}
-            </Text>
-          </TouchableOpacity>
-        ))
+     // Look around line 170 inside your JSX returns:
+            routes.map((route) => (
+              <TouchableOpacity
+                key={route.route_id || route.id}
+                style={styles.routeCard}
+                onPress={() => joinPool(route)} // ✨ Change this line to pass the entire route object
+              >
+                <Text style={styles.routeText}>
+                  {Array.isArray(route.stops) ? route.stops.join(" → ") : "Invalid route"}
+                </Text>
+                {/* ... remaining layout logic */}
+              </TouchableOpacity>
+            ))
       )}
 
       {/* RIDES OPTIONS LIST */}
@@ -273,14 +297,15 @@ export default function PassengerScreen({ navigation }) {
       {loadingRides ? (
         <ActivityIndicator style={{ marginVertical: 20 }} />
       ) : (
-        selectedRoutes.map((route) => (
-          <PoolOfferCard
-            key={route.id}
-            route={route}
-            isSoloIntent={isSoloRide}
-            onPress={() => joinPool(route.route_id || route.id)}
-          />
-        ))
+       // Look around line 190 inside your JSX returns:
+          selectedRoutes.map((route) => (
+            <PoolOfferCard
+              key={route.id}
+              route={route}
+              isSoloIntent={isSoloRide}
+              onPress={() => joinPool(route)} // ✨ Change this line to pass the entire ride offer object
+            />
+          ))
       )}
       <View style={{ height: 40 }} />
     </ScrollView>
