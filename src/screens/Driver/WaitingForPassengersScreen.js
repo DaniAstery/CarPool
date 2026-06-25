@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,71 +10,69 @@ import {
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-export default function WaitingForPassengersScreen({ navigation, route }) {
-  // Use the active offer ID passed down during matching, default to 372 for local testing
-  const rideOfferId = route?.params?.rideOfferId || 372; 
-  
+export default function WaitingForPassengersScreen({ navigation }) {
+  // 🚖 Real-world Driver Profile Context
+  const currentDriverId = 101; 
+  const currentDriverHub = "Megenagna"; // Filter token matched against passenger rows
+
   const [loading, setLoading] = useState(true);
   const [passengers, setPassengers] = useState([]);
-  const [pricePerSeat, setPricePerSeat] = useState(120); 
-  const [totalYield, setTotalYield] = useState(0);    
-  const [rideStatus, setRideStatus] = useState("matching");
+  const [rideStatus, setRideStatus] = useState("pooling");
+  const [activeRideOfferId, setActiveRideOfferId] = useState(null);
 
-  // Dynamic Yield Allocation Matrix based on actual occupancy numbers
-  const calculateFinancialMetrics = (count) => {
-    let seatPrice = 120;
-    if (count === 3) seatPrice = 80;
-    if (count >= 4) seatPrice = 70;
+  // Financial Pricing Logic Engine
+  const pricePerSeat = passengers.length >= 4 ? 70 : passengers.length === 3 ? 80 : 120;
+  const totalGrossYield = passengers.length * pricePerSeat;
 
-    setPricePerSeat(seatPrice);
-    setTotalYield(count * seatPrice);
-  };
-
-  // 📡 Active Database Synchronization Engine
+  // 📡 Real-Time Database Roster Polling Pipeline
   useEffect(() => {
-    console.log(`📡 Driver listening to passenger matching telemetry for Offer ID: [${rideOfferId}]`);
+    console.log(`📡 Querying active matching queues at [${currentDriverHub}] Hub for Driver ID: [${currentDriverId}]`);
 
-    async function fetchManifestData() {
+    async function streamHubRoster() {
       try {
-        const res = await fetch(`http://192.168.238.52:5000/api/rides/pool-manifest/${rideOfferId}`);
-        if (!res.ok) return;
+        const response = await fetch(
+          `http://192.168.238.52:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`
+        );
+        if (!response.ok) return;
 
-        const data = await res.json();
-        // Expecting data: { status: 'matching'|'ready', passengers: [...] }
-        const checkedPassengers = data.passengers || [];
+        const data = await response.json();
         
-        setPassengers(checkedPassengers);
-        setRideStatus(data.status);
-        calculateFinancialMetrics(checkedPassengers.length);
+        setPassengers(data.passengers || []);
+        setRideStatus(data.status); // 'pooling' or 'ready'
+        if (data.rideOfferId) {
+          setActiveRideOfferId(data.rideOfferId);
+        }
+        
         setLoading(false);
       } catch (err) {
-        console.log("Telemetry connection dropout inside passenger gather stream:", err);
+        console.log("Database polling dropped out for hub stream:", err);
       }
     }
 
-    // Execute lookup immediately on screen focus and cycle every 2.5 seconds
-    fetchManifestData();
-    const manifestInterval = setInterval(fetchManifestData, 2500);
+    // Execute tracking thread instantly and sync every 2.5 seconds
+    streamHubRoster();
+    const syncInterval = setInterval(streamHubRoster, 2500);
 
-    return () => clearInterval(manifestInterval);
-  }, [rideOfferId]);
+    return () => clearInterval(syncInterval);
+  }, [currentDriverHub, currentDriverId]);
 
-  // 📥 Start Corridor Run Transaction Handler
+  // 📤 Start Corridor Run Transaction Handler
   const handleStartTrip = async () => {
+    if (!activeRideOfferId) return;
+    
     try {
       const res = await fetch("http://192.168.238.52:5000/api/rides/start-trip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: rideOfferId }),
+        body: JSON.stringify({ ride_offer_id: activeRideOfferId }),
       });
 
       if (res.ok) {
-        navigation.navigate("TripInProgress", { rideOfferId });
+        navigation.navigate("TripInProgress", { rideOfferId: activeRideOfferId });
       }
     } catch (err) {
       console.log("Failed to issue transit start command to backend database:", err);
-      // Fallback navigation capability for frontend flow evaluation
-      navigation.navigate("TripInProgress", { rideOfferId });
+      navigation.navigate("TripInProgress", { rideOfferId: activeRideOfferId });
     }
   };
 
@@ -82,7 +80,7 @@ export default function WaitingForPassengersScreen({ navigation, route }) {
     return (
       <SafeAreaView style={[styles.container, styles.centerElements]}>
         <ActivityIndicator size="large" color="#059669" />
-        <Text style={styles.loadingText}>Connecting to dynamic corridor stream...</Text>
+        <Text style={styles.loadingText}>Scanning {currentDriverHub} corridor for matches...</Text>
       </SafeAreaView>
     );
   }
@@ -109,35 +107,33 @@ export default function WaitingForPassengersScreen({ navigation, route }) {
           <View style={[styles.contextDot, rideStatus === "ready" && { backgroundColor: "#10B981" }]} />
           <Text style={styles.contextBarText}>
             {rideStatus === "ready" 
-              ? "Threshold finalized. You can now start the corridor route." 
-              : `Megenagna Hub • ${passengers.length} passengers matched via database...`}
+              ? "Threshold met! You can now start the corridor route." 
+              : `Hub: ${currentDriverHub} • Awaiting minimum threshold (2+ matched riders)...`}
           </Text>
         </View>
 
-        {/* Live Passenger List directly fed by PostgreSQL */}
-        <Text style={styles.sectionHeadingLabel}>Rider Roster Status</Text>
+        {/* Live Passenger List directly fed by PostgreSQL filters */}
+        <Text style={styles.sectionHeadingLabel}>Rider Roster Status ({passengers.length})</Text>
         <View style={styles.manifestCard}>
           {passengers.length === 0 ? (
-            <Text style={styles.emptyManifestText}>Awaiting passenger convergence mapping triggers...</Text>
+            <Text style={styles.emptyManifestText}>Searching for matched riders at {currentDriverHub}...</Text>
           ) : (
             passengers.map((passenger, index) => (
-              <View key={passenger.userId || passenger.id}>
+              <View key={passenger.userId}>
                 <View style={styles.passengerRow}>
-                  <View style={[styles.avatarCircle, passenger.status === "arrived" && styles.avatarCircleArrived]}>
+                  <View style={[styles.avatarCircle, rideStatus === "ready" && styles.avatarCircleArrived]}>
                     <FontAwesome5 
                       name="user" 
                       size={11} 
-                      color={passenger.status === "arrived" ? "#10B981" : "#4B5563"} 
+                      color={rideStatus === "ready" ? "#10B981" : "#4B5563"} 
                     />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.passengerNameText}>Rider (ID: {passenger.userId})</Text>
-                    <Text style={styles.passengerMetaText}>
-                      {passenger.status === "arrived" ? "At designated pickup station" : "Walking towards corridor node"}
-                    </Text>
+                    <Text style={styles.passengerMetaText}>Status: {passenger.status.toUpperCase()} • Hub verified</Text>
                   </View>
-                  <Text style={[styles.statusBadgeText, passenger.status === "arrived" && styles.statusBadgeTextArrived]}>
-                    {passenger.status === "arrived" ? "Boarded" : "En-Route"}
+                  <Text style={[styles.statusBadgeText, rideStatus === "ready" && styles.statusBadgeTextArrived]}>
+                    {rideStatus === "ready" ? "Matched" : "Pending"}
                   </Text>
                 </View>
                 {index < passengers.length - 1 && <View style={styles.horizontalDivider} />}
@@ -146,7 +142,7 @@ export default function WaitingForPassengersScreen({ navigation, route }) {
           )}
         </View>
 
-        {/* Dynamic Ledger Pricing updates as passengers shift */}
+        {/* Dynamic Ledger Pricing updates as rows insert via Postman */}
         <Text style={styles.sectionHeadingLabel}>Corridor Financial Metrics</Text>
         <View style={styles.financialCardGrid}>
           <View style={styles.financialRow}>
@@ -156,13 +152,13 @@ export default function WaitingForPassengersScreen({ navigation, route }) {
           <View style={styles.horizontalCardDivider} />
           <View style={styles.financialRow}>
             <Text style={styles.financialLabelText}>Guaranteed Gross Route Yield</Text>
-            <Text style={styles.driverTotalYieldText}>ETB {totalYield}</Text>
+            <Text style={styles.driverTotalYieldText}>ETB {totalGrossYield}</Text>
           </View>
         </View>
 
       </ScrollView>
 
-      {/* Button only activates when backend logic confirms threshold is satisfied */}
+      {/* Button activates strictly based on real row count parameters */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
             style={[styles.primaryDispatchButton, passengers.length < 2 && styles.dispatchButtonDisabled]}
@@ -194,7 +190,7 @@ const styles = StyleSheet.create({
   contextBarText: { fontSize: 12, color: "#4B5563", fontWeight: "500" },
   sectionHeadingLabel: { fontSize: 11, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8, marginLeft: 2 },
   manifestCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, marginBottom: 16, overflow: "hidden" },
-  emptyManifestText: { paddingVertical: 20, textAlign: "center", color: "#9CA3AF", fontSize: 13 },
+  emptyManifestText: { paddingVertical: 24, textAlign: "center", color: "#9CA3AF", fontSize: 13 },
   passengerRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
   avatarCircle: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center", marginRight: 12 },
   avatarCircleArrived: { backgroundColor: "#D1FAE5" },
