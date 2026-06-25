@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   Animated,
   Easing,
+  ActivityIndicator,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
@@ -16,59 +17,24 @@ import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-ico
 const { width } = Dimensions.get("window");
 
 export default function LiveTrackingScreen({ navigation, route }) {
+  const currentUserId = 1; // Device user profile identifier (You)
   
-  // 1. EXTRACT INCOMING PASSED PROPS (Resolves the missing property error)
+  // Extract route configs safely passed during the screen transition
   const routeId = route?.params?.routeId || "1";
-  const ride = route?.params?.ride || { corridor: "Megenagna → Bole" };
-
-  // Core Coordinates (Megenagna Hub Area)
-  const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
+  const rideData = route?.params?.ride || { corridor: "Megenagna → Bole" };
   
-  // Animation states
-  const [pulseAnim] = useState(new Animated.Value(0));
+  // State variables synchronized against PostgreSQL
   const [userArrived, setUserArrived] = useState(false);
+  const [passengerStates, setPassengerStates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
+
+  const activeRideOfferIdRef = useRef(null);
+  const [pulseAnim] = useState(new Animated.Value(0));
   
-  // Passenger Tracking Matrix
-  const [passengerStates, setPassengerStates] = useState([
-    {
-      id: "You",
-      name: "You",
-      latitude: 9.0098,
-      longitude: 38.7932,
-      distance: "180m",
-      time: "2 min left",
-      color: "#3A82F6",
-      status: "Walking",
-    },
-    {
-      id: "Rider2",
-      name: "Rider 2",
-      latitude: 9.0115,
-      longitude: 38.7945, 
-      distance: "0m",
-      time: "Arrived",
-      color: "#E28743",
-      status: "Arrived",
-    },
-    {
-      id: "Rider3",
-      name: "Rider 3",
-      latitude: 9.0128,
-      longitude: 38.7931,
-      distance: "90m",
-      time: "1 min left",
-      color: "#764ABC",
-      status: "Walking",
-    },
-  ]);
+  const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // Driver Location State
-  const [driverLocation, setDriverLocation] = useState({
-    latitude: 9.0045,
-    longitude: 38.7865,
-  });
-
-  // Top header animation loop
+  // Top header status pulse animation loop
   useEffect(() => {
     Animated.loop(
       Animated.timing(pulseAnim, {
@@ -80,78 +46,144 @@ export default function LiveTrackingScreen({ navigation, route }) {
     ).start();
   }, []);
 
-  // Simulate progress updates
+  // 🔄 Real-Time Database Tracking Synchronization Polling Engine Loop
   useEffect(() => {
-    const rider3Timer = setTimeout(() => {
-      setPassengerStates((prev) =>
-        prev.map((p) =>
-          p.id === "Rider3"
-            ? { ...p, distance: "0m", time: "Arrived", status: "Arrived" }
-            : p
-        )
-      );
-    }, 4000);
+    console.log(`📡 Initializing live synchronization engine telemetry stream for User ID: [${currentUserId}]`);
 
-    const driverInterval = setInterval(() => {
-      setDriverLocation((prev) => {
-        const latDelta = (pickupLocation.latitude - prev.latitude) * 0.08;
-        const lngDelta = (pickupLocation.longitude - prev.longitude) * 0.08;
+    async function streamLiveTrackingData() {
+      try {
+        const res = await fetch(`http://192.168.238.52:5000/api/rides/track-live/${currentUserId}`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const { rideOfferId, driverLocation: incomingDriverLoc, passengers, rideStatus } = data;
+
+        // Keep the active ride index contextualized across interactions
+        activeRideOfferIdRef.current = rideOfferId;
+
+        // Update real-time driver coordinates on map backdrop
+        if (incomingDriverLoc) {
+          setDriverLocation({
+            latitude: incomingDriverLoc.latitude,
+            longitude: incomingDriverLoc.longitude
+          });
+        }
+
+      // Process all co-rider array tracking parameters received from database state updates
+        const parsedPassengers = (passengers || []).map((p, index) => {
+        // Ensure we compare numbers accurately (casting just in case)
+        const isMe = Number(p.userId) === Number(currentUserId);
+        const mapColor = isMe ? "#3A82F6" : index === 1 ? "#E28743" : "#764ABC";
+        const standsArrived = p.status === "arrived";
+
+        // FIX: Force the frontend state to stay synchronized if the database confirms arrival
+        if (isMe && standsArrived) {
+          setUserArrived(true);
+        }
+
         return {
-          latitude: prev.latitude + latDelta,
-          longitude: prev.longitude + lngDelta,
+          id: p.userId,
+          name: isMe ? "You" : `Rider (ID: ${p.userId})`,
+          latitude: isMe ? 9.0098 : index === 1 ? 9.0115 : 9.0128, 
+          longitude: isMe ? 38.7932 : index === 1 ? 38.7945 : 38.7931,
+          distance: standsArrived ? "0m" : isMe ? "180m" : "90m",
+          time: standsArrived ? "Arrived" : isMe ? "2 min left" : "1 min left",
+          color: mapColor,
+          // FIX: Read directly from the incoming database status row rule
+          status: standsArrived ? "Arrived" : "Walking"
         };
       });
-    }, 3000);
+        setPassengerStates(parsedPassengers);
+        setLoading(false);
 
-    return () => {
-      clearTimeout(rider3Timer);
-      clearInterval(driverInterval);
-    };
-  }, []);
+        // 🚀 LIVE TRIP DEPARTURE TRANSITION WATCHER: Advance when the driver departs or state changes
+        if (rideStatus === "departed") {
+          console.log("🚀 Trip status flagged as departed by driver node. Advancing view layer...");
+          clearInterval(trackingInterval);
+          navigation.replace("TripDepartureScreen", { routeId, rideOfferId, ride: rideData });
+        }
 
-  const handleUserArrival = () => {
-    setUserArrived(true);
-    setPassengerStates((prev) =>
-      prev.map((p) =>
-        p.id === "You"
+      } catch (err) {
+        console.log("Live stream telemetry pipeline lookup dropout:", err);
+      }
+    }
+
+    streamLiveTrackingData();
+    const trackingInterval = setInterval(streamLiveTrackingData, 2500);
+
+    return () => clearInterval(trackingInterval);
+  }, [navigation]);
+
+  // 📤 Dispatch Terminal Arrival Transaction State to Backend
+  // 📤 Dispatch Terminal Arrival Transaction State to Backend
+  const handleUserArrival = async () => {
+    const resolvedRideOfferId = activeRideOfferIdRef.current;
+    if (!resolvedRideOfferId) return;
+
+    // 1. ✨ OPTIMISTIC UI UPDATE: Instantly flip states locally before the network call resolves
+    setUserArrived(true); 
+    setPassengerStates((prevStates) =>
+      prevStates.map((p) =>
+        p.name === "You"
           ? { ...p, distance: "0m", time: "Arrived", status: "Arrived" }
           : p
       )
     );
+
+    try {
+      // 2. Fire backend transaction in the background
+      const res = await fetch("http://192.168.238.52:5000/api/rides/signal-arrival", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ride_offer_id: resolvedRideOfferId,
+          user_id: currentUserId // 1
+        }),
+      });
+
+      if (!res.ok) {
+        // Rollback states if server explicitly rejects handshake execution
+        setUserArrived(false);
+        console.log("Failed to process presence checkpoint sequence update.");
+      }
+    } catch (err) {
+      setUserArrived(false);
+      console.log("Error uploading confirmation checkpoint data maps:", err);
+    }
   };
 
-  const pulseScale = pulseAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 2.2],
-  });
-  const pulseOpacity = pulseAnim.interpolate({
-    inputRange: [0, 0.6, 1],
-    outputRange: [0.6, 0.3, 0],
-  });
+  const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.2] });
+  const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.6, 0.3, 0] });
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* Dynamic Context Header Banner */}
+      {/* Status Bar Banner */}
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
-          <Animated.View 
-            style={[
-              styles.statusPulseWave, 
-              { transform: [{ scale: pulseScale }], opacity: pulseOpacity }
-            ]} 
-          />
+          <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }] || {}} />
           <View style={styles.statusCenterCoreDot}>
             <MaterialCommunityIcons name="walk" size={14} color="#FFFFFF" />
           </View>
         </View>
         <View style={styles.statusTextContainer}>
-          <Text style={styles.statusPrimaryText}>Walking to Pickup Point</Text>
-          <Text style={styles.statusSecondaryText}>Please head over to the highlighted convergence station</Text>
+          <Text style={styles.statusPrimaryText}>
+            {!userArrived ? "Walking to Pickup Point" : "Arrived at Convergence Hub"}
+          </Text>
+          <Text style={styles.statusSecondaryText}>
+            {!userArrived ? "Please head over to the highlighted convergence station" : "Waiting for remaining co-riders to gather"}
+          </Text>
         </View>
       </View>
 
-      {/* Map Layer */}
+      {/* Map Content Layer View */}
       <View style={styles.mapContainer}>
         <MapView
           provider={PROVIDER_GOOGLE}
@@ -176,6 +208,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
             )
           ))}
 
+          {/* Core Target Meeting Hub Destination Station Pin */}
           <Marker coordinate={pickupLocation}>
             <View style={styles.hubStationWrapper}>
               <View style={styles.hubStationPin}>
@@ -185,6 +218,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
             </View>
           </Marker>
 
+          {/* Real-time moving Driver Marker Component Node */}
           <Marker coordinate={driverLocation}>
             <View style={styles.driverCarPin}>
               <FontAwesome5 name="car-side" size={13} color="#FFFFFF" />
@@ -195,7 +229,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
             p.status === "Walking" && (
               <Marker key={`marker-${idx}`} coordinate={{ latitude: p.latitude, longitude: p.longitude }}>
                 <View style={[styles.passengerTrackingPin, { backgroundColor: p.color }]}>
-                  <MaterialCommunityIcons name={p.id === "You" ? "walk" : "account"} size={12} color="#FFFFFF" />
+                  <MaterialCommunityIcons name={p.id === currentUserId ? "walk" : "account"} size={12} color="#FFFFFF" />
                 </View>
               </Marker>
             )
@@ -203,7 +237,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
         </MapView>
       </View>
 
-      {/* Slide-Up Info Drawer */}
+      {/* Slide-Up Interface Sheet Drawer */}
       <View style={styles.slidingPanelDrawer}>
         <ScrollView showsVerticalScrollIndicator={false}>
           
@@ -224,10 +258,10 @@ export default function LiveTrackingScreen({ navigation, route }) {
               <View key={`card-${index}`} style={styles.passengerStateCard}>
                 <View style={styles.cardLeftContent}>
                   <View style={[styles.passengerAvatarFrame, { backgroundColor: `${passenger.color}15` }]}>
-                    <MaterialCommunityIcons name={passenger.id === "You" ? "walk" : "account"} size={20} color={passenger.color} />
+                    <MaterialCommunityIcons name={passenger.id === currentUserId ? "walk" : "account"} size={20} color={passenger.color} />
                   </View>
                   <View style={styles.passengerTextIdentity}>
-                    <Text style={[styles.passengerNameTitle, passenger.id === "You" && { fontWeight: "800" }]}>
+                    <Text style={[styles.passengerNameTitle, passenger.id === currentUserId && { fontWeight: "800" }]}>
                       {passenger.name}
                     </Text>
                     <Text style={styles.passengerWalkRouteLabel}>
@@ -236,33 +270,27 @@ export default function LiveTrackingScreen({ navigation, route }) {
                   </View>
                 </View>
 
-                {passenger.status === "Arrived" ? (
-                  <View style={styles.badgeArrivedDone}>
-                    <Ionicons name="checkmark-circle" size={16} color="#10B981" />
-                    <Text style={styles.badgeTextArrivedDone}>ARRIVED</Text>
-                  </View>
-                ) : (
-                  <View style={styles.badgeWalkingCountdown}>
-                    <Text style={[styles.badgeTextWalkingCountdown, { color: passenger.color }]}>
-                      {passenger.time}
-                    </Text>
-                  </View>
-                )}
+              {passenger.status === "Arrived" ? (
+                    <View style={styles.badgeArrivedDone}>
+                      <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+                      <Text style={styles.badgeTextArrivedDone}>ARRIVED</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.badgeWalkingCountdown}>
+                      <Text style={[styles.badgeTextWalkingCountdown, { color: passenger.color }]}>
+                        {passenger.time}
+                      </Text>
+                    </View>
+                  )}
               </View>
             ))}
           </View>
 
-          {/* Action Trigger System */}
+          {/* Interactive Trigger Elements Bar */}
           {!userArrived ? (
             <TouchableOpacity 
               style={styles.arrivedCallToActionButton}
-              onPress={() => {
-                handleUserArrival();
-                // Safely forward parameters down to screen 5
-                setTimeout(() => {
-                  navigation.replace("TripDepartureScreen", { routeId, ride });
-                }, 2000);
-              }}
+              onPress={handleUserArrival}
               activeOpacity={0.8}
             >
               <Text style={styles.arrivedCallToActionText}>I'VE ARRIVED AT PICKUP POINT</Text>
@@ -309,7 +337,7 @@ const styles = StyleSheet.create({
   etaSecondaryLabel: { fontSize: 11, color: "#6B7280", marginTop: 1 },
   sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10, marginLeft: 2 },
   passengerQueueStack: { marginBottom: 16 },
-  passengerStateCard: { flexDirection: "row", alignItems: "center", justifyValue: "space-between", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 8 },
+  passengerStateCard: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 8 },
   cardLeftContent: { flexDirection: "row", alignItems: "center", flex: 1 },
   passengerAvatarFrame: { width: 38, height: 38, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
   passengerTextIdentity: { flex: 1 },
