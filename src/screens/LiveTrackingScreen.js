@@ -185,38 +185,37 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
       {/* Map Content Layer View */}
       <View style={styles.mapContainer}>
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: 9.0102,
-            longitude: 38.7922,
-            latitudeDelta: 0.012,
-            longitudeDelta: 0.012,
-          }}
-          customMapStyle={cleanMinimalMapStyle}
-        >
-          {passengerStates.map((p, idx) => (
-            p.status === "Walking" && (
-              <Polyline
-                key={`line-${idx}`}
-                coordinates={[{ latitude: p.latitude, longitude: p.longitude }, pickupLocation]}
-                strokeColor={p.color}
-                strokeWidth={3}
-                lineDashPattern={[5, 5]}
-              />
-            )
-          ))}
+              <MapView
+              provider={PROVIDER_GOOGLE}
+              style={StyleSheet.absoluteFillObject}
+              
+              // 🔍 ULTRA-ZOOM CONFIGURATION (Tightened from 0.012 down to 0.0025 for extreme detail)
+              initialRegion={{
+                latitude: 9.0115,       // Centered directly on the Megenagna convergence zone
+                longitude: 38.7945,
+                latitudeDelta: 0.0025,  
+                longitudeDelta: 0.0025,
+              }}
+              
+              // 🏗️ High-Fidelity Infrastructure Visuals
+              showsBuildings={true}     // Forces 3D structural blocks to render for easy physical navigation
+              showsIndoors={true}       // Displays subterranean/terminal walking platforms if mapped
+              showsTraffic={false}      // Hides vehicular congestion lines to keep pedestrian corridors clean
+              customMapStyle={detailedMapStyle} // Binds the high-precision clarity style sheet
+            >
 
           {/* Core Target Meeting Hub Destination Station Pin */}
-          <Marker coordinate={pickupLocation}>
-            <View style={styles.hubStationWrapper}>
-              <View style={styles.hubStationPin}>
-                <Ionicons name="flag" size={14} color="#FFFFFF" />
+         <Marker 
+              coordinate={pickupLocation}
+              anchor={{ x: 0.5, y: 0.5 }} // Sets the absolute center of the layout block right over the coordinates
+            >
+              <View style={styles.hubStationWrapper}>
+                <View style={styles.hubStationPin}>
+                  <Ionicons name="flag" size={14} color="#FFFFFF" />
+                </View>
+                <View style={styles.hubStationPulseRing} />
               </View>
-              <View style={styles.hubStationPulseRing} />
-            </View>
-          </Marker>
+            </Marker>
 
           {/* Real-time moving Driver Marker Component Node */}
           <Marker coordinate={driverLocation}>
@@ -307,11 +306,35 @@ export default function LiveTrackingScreen({ navigation, route }) {
   );
 }
 
-const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "road", elementType: "geometry", stylers: [{ color: "#FFFFFF" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#D2E4F9" }] },
+const detailedMapStyle = [
+  {
+    elementType: "geometry",
+    stylers: [{ color: "#F5F5F5" }]
+  },
+  {
+    featureType: "poi.business",
+    stylers: [{ visibility: "off" }] // Strips out commercial distractions (shops/cafes)
+  },
+  {
+    featureType: "poi.park",
+    elementType: "geometry",
+    stylers: [{ color: "#E5F5E5" }] // Soft green accentuation for open zones
+  },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#FFFFFF" }] // Solid white background for secondary roads
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#EAEAEA" }] // Explicitly bakes local walking corridors onto the map view
+  },
+  {
+    featureType: "transit.station",
+    elementType: "labels.icon",
+    stylers: [{ visibility: "on" }, { color: "#10B981" }] // Bright green tags for local transport hub nodes
+  }
 ];
 
 const styles = StyleSheet.create({
