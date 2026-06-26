@@ -6,50 +6,86 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 export default function WaitingForRidersScreen({ navigation }) {
-  // Real-time state parameters for live UI updates
+  // 🚖 Driver Context matching your schema configuration
+  const currentPickupHubId = 1; // Corresponds to Megenagna Hub ID 
+  const hubNameDisplay = "Megenagna";
+
+  const [loading, setLoading] = useState(true);
   const [seatsFilled, setSeatsFilled] = useState(0);
   const [statusText, setStatusText] = useState("Waiting for riders to join");
   const [activityLogs, setActivityLogs] = useState([]);
 
   useEffect(() => {
-    // Stage 1: First Rider Joins after 3 seconds
-    const timer1 = setTimeout(() => {
-      setSeatsFilled(1);
-      setStatusText("Riders are joining...");
-      setActivityLogs((prev) => [
-        { id: "1", message: "Passenger Alpha joined", time: "Just now" },
-        ...prev,
-      ]);
-      console.log("Simulation Log: Rider 1 connected.");
-    }, 3000);
+    console.log(`📡 Streaming routepool updates for Pickup Hub ID: [${currentPickupHubId}]`);
 
-    // Stage 2: Second Rider Joins after 6 seconds
-    const timer2 = setTimeout(() => {
-      setSeatsFilled(2);
-      setActivityLogs((prev) => [
-        { id: "2", message: "Passenger Beta joined", time: "Just now" },
-        { id: "1", message: "Passenger Alpha joined", time: "3 min ago" },
-      ]);
-      console.log("Simulation Log: Rider 2 connected.");
-    }, 6000);
+    async function checkCorridorStatus() {
+      try {
+        const response = await fetch(
+          `http://192.168.238.52:5000/api/rides/corridor-pool-status?hubId=${currentPickupHubId}`
+        );
+        
+        if (!response.ok) {
+          setLoading(false);
+          return;
+        }
 
-    // Stage 3: Auto-Advance to next blueprint step once capacity limits near
-    const timer3 = setTimeout(() => {
-      console.log("Simulation Log: Forwarding to pickup optimization segment.");
-      navigation.navigate("ProposalDriver");
-    }, 10000);
+        const data = await response.json();
+        const totalSearching = data.totalSearching || 0;
+        const totalMatched = data.totalMatched || 0;
+        const matchedRiders = data.matchedRiders || [];
 
-    // Cleanup memory allocations on unmount
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-    };
-  }, [navigation]);
+        // Combine both statuses to accurately reflect total occupants filling up the progress circle
+        setSeatsFilled(totalSearching + totalMatched);
+        setLoading(false);
+
+        // Populate recent activity logs dynamically from the DB query array rows
+        if (matchedRiders.length > 0) {
+          const formattedLogs = matchedRiders.map((rider) => ({
+            id: String(rider.userId),
+            message: `Passenger ID ${rider.userId} joined`,
+            time: "Just now",
+          }));
+          setActivityLogs(formattedLogs);
+          setStatusText("Riders are joining...");
+        } else if (totalSearching > 0) {
+          setStatusText(`${totalSearching} rider(s) searching nearby...`);
+        } else {
+          setStatusText("Waiting for riders to join");
+        }
+
+        // 🚀 NAVIGATION TRIGGER: Auto-Advance to Proposal Driver Screen when min threshold of 2 is met
+        if (totalMatched >= 2) {
+          console.log("Threshold satisfied! Forwarding to pickup optimization segment.");
+          clearInterval(syncInterval);
+          navigation.navigate("ProposalDriver");
+        }
+
+      } catch (err) {
+        console.log("Database syncing dropped out:", err);
+        setLoading(false);
+      }
+    }
+
+    // Run lookups immediately on frame mount, then cycle every 2.5 seconds
+    checkCorridorStatus();
+    const syncInterval = setInterval(checkCorridorStatus, 2500);
+
+    return () => clearInterval(syncInterval);
+  }, [currentPickupHubId, navigation]);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerElements]}>
+        <ActivityIndicator size="large" color="#10B981" />
+        <Text style={styles.loadingText}>Connecting to corridor matrix...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -81,10 +117,10 @@ export default function WaitingForRidersScreen({ navigation }) {
 
         {/* Core Main Shared Manifest Card */}
         <View style={styles.manifestCard}>
-          <Text style={styles.routeHeaderLabel}>Megenagna ➔ Bole</Text>
+          <Text style={styles.routeHeaderLabel}>{hubNameDisplay} ➔ Bole</Text>
           <Text style={styles.routeSubLabelText}>via Bole Road Corridor</Text>
 
-          {/* Precision Circular Graphical Meter Frame with conditional boundary highlight colors */}
+          {/* Precision Circular Graphical Meter Frame */}
           <View style={styles.progressCircleWrapper}>
             <View style={[
               styles.outerProgressCircle,
@@ -141,132 +177,39 @@ export default function WaitingForRidersScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F9FAFB",
-  },
-  headerBlock: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#FFFFFF",
-    borderBottomWidth: 1,
-    borderColor: "#E5E7EB",
-  },
+  container: { flex: 1, backgroundColor: "#F9FAFB" },
+  centerElements: { justifyContent: "center", alignItems: "center" },
+  loadingText: { marginTop: 12, fontSize: 13, color: "#4B5563", fontWeight: "500" },
+  headerBlock: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB" },
   menuButton: { padding: 4 },
   notificationButton: { padding: 4 },
   headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
-  contentBody: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  statusBannerCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 16,
-  },
-  greenPulseIndicator: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#10B981",
-    marginRight: 12,
-  },
-  orangePulseIndicator: {
-    backgroundColor: "#F59E0B", // Shifts status to warm alert orange color when load mounts
-  },
+  contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  statusBannerCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, paddingVertical: 14, marginBottom: 16 },
+  greenPulseIndicator: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#10B981", marginRight: 12 },
+  orangePulseIndicator: { backgroundColor: "#F59E0B" },
   statusTextFrame: { flex: 1 },
   statusMainText: { fontSize: 13, fontWeight: "700", color: "#111827" },
   statusSubText: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  manifestCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    padding: 20,
-    alignItems: "center",
-    marginBottom: 12,
-  },
+  manifestCard: { backgroundColor: "#FFFFFF", borderRadius: 16, borderWidth: 1, borderColor: "#E5E7EB", padding: 20, alignItems: "center", marginBottom: 12 },
   routeHeaderLabel: { fontSize: 18, fontWeight: "700", color: "#111827" },
   routeSubLabelText: { fontSize: 13, color: "#6B7280", marginTop: 4 },
   progressCircleWrapper: { marginVertical: 28, alignItems: "center", justifyContent: "center" },
-  outerProgressCircle: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 6,
-    borderColor: "#E5E7EB",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-  },
-  outerProgressCircleActive: {
-    borderColor: "#10B981", // Updates dynamically to a vibrant theme green outline
-  },
+  outerProgressCircle: { width: 140, height: 140, borderRadius: 70, borderWidth: 6, borderColor: "#E5E7EB", alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },
+  outerProgressCircleActive: { borderColor: "#10B981" },
   circleCounterMetricsText: { fontSize: 28, fontWeight: "800", color: "#111827" },
   circleSubLabelMetricsText: { fontSize: 12, color: "#6B7280", fontWeight: "500", marginTop: 2 },
-  priceSummaryRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    width: "100%",
-    borderTopWidth: 1,
-    borderColor: "#F3F4F6",
-    paddingTop: 16,
-  },
+  priceSummaryRow: { flexDirection: "row", justifyContent: "space-between", width: "100%", borderTopWidth: 1, borderColor: "#F3F4F6", paddingTop: 16 },
   priceLabelText: { fontSize: 13, color: "#6B7280", fontWeight: "500" },
   priceValueText: { fontSize: 14, fontWeight: "700", color: "#111827" },
-  activityHeadingText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#6B7280",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 8,
-    marginLeft: 2,
-  },
-  activityCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    paddingHorizontal: 16,
-    marginBottom: 20,
-  },
+  activityHeadingText: { fontSize: 11, fontWeight: "700", color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, marginLeft: 2 },
+  activityCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, marginBottom: 20 },
   activityItemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
-  userIconFrame: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#E6F4EA",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
+  userIconFrame: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#E6F4EA", alignItems: "center", justifyContent: "center", marginRight: 12 },
   activityLogText: { fontSize: 14, fontWeight: "500", color: "#111827", flex: 1 },
   activityTimeText: { fontSize: 12, color: "#9CA3AF" },
   horizontalDivider: { height: 1, backgroundColor: "#F3F4F6" },
-  bottomControlContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: "#F9FAFB",
-  },
-  goOfflineOutlinedButton: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    paddingVertical: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  bottomControlContainer: { paddingHorizontal: 16, paddingVertical: 16, backgroundColor: "#F9FAFB" },
+  goOfflineOutlinedButton: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#D1D5DB", paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   goOfflineOutlinedButtonText: { color: "#DC2626", fontSize: 14, fontWeight: "700", letterSpacing: 0.4 },
 });

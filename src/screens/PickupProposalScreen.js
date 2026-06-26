@@ -16,12 +16,17 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
+// 🌐 Configure your central local backend gateway host endpoint
+const API_URL = "http://192.168.238.52:5000"; 
+const CURRENT_USER_ID = 1; // Logged-in profile session framework fallback target
+
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
   const [coRiders, setCoRiders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isRejecting, setIsRejecting] = useState(false); // 🛡️ Prevents parallel interaction loops
 
-  // Use a mutable ref to track the active ride ID across async intervals without re-renders
+  // Persistent mutable pointer frame tracking across execution intervals
   const activeRideOfferIdRef = useRef(null);
 
   const [currentLocation, setCurrentLocation] = useState({
@@ -33,7 +38,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
   const routeId = route?.params?.routeId || "1";
 
-  // 1. Fetch Core Device Geolocation
+  // 1. Fetch Core Device Geolocation Parameters
   useEffect(() => {
     (async () => {
       try {
@@ -48,41 +53,38 @@ export default function PickupProposalScreen({ navigation, route }) {
           });
         }
       } catch (err) {
-        console.log("Location drop out:", err);
+        console.log("Location tracking dropout:", err);
       } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  // 2. 🔄 Dynamic Sync Engine: Polls by User ID to resolve the current active ride offer record
+  // 2. 🔄 Dynamic Sync Engine: Long Polls table row changes
   useEffect(() => {
-    const currentUserId = 1; // Logged-in client profile ID (You)
-    console.log(`📡 Initializing polling sync matrix for User ID: [${currentUserId}]`);
+    console.log(`📡 Initializing matching sync engine for User: [${CURRENT_USER_ID}]`);
 
     async function checkProposalStatus() {
       try {
-        // Query database context based on who is holding the device
-        const res = await fetch(`http://192.168.238.52:5000/api/rides/active-proposal/${currentUserId}`);
+        const res = await fetch(`${API_URL}/api/rides/active-proposal/${CURRENT_USER_ID}`);
         if (!res.ok) return;
         
         const data = await res.json();
         const { rideOfferId, manifestPassengers, acceptedPassengers } = data;
 
-        // Thread the resolved ID into our persistent reference frame
+        // Anchor active ID into reference memory frame
         activeRideOfferIdRef.current = rideOfferId;
 
         const cleanManifest = manifestPassengers || [];
         const cleanAccepted = acceptedPassengers || [];
 
-        // Check if current user is inside the database's accepted array
-        if (cleanAccepted.includes(currentUserId)) {
+        if (cleanAccepted.includes(CURRENT_USER_ID)) {
           setUserAccepted(true);
         }
 
-        // Dynamically calculate co-riders state tracking straight from PostgreSQL state matrices
+        // Parse trailing co-riders parameters directly from state records
         const parsedCoRiders = cleanManifest
-          .filter((id) => id !== currentUserId)
+          .filter((id) => id !== CURRENT_USER_ID)
           .map((id, index) => ({
             id: id,
             name: `Rider (ID: ${id})`,
@@ -92,12 +94,12 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         setCoRiders(parsedCoRiders);
 
-        // 🚀 LIVE ROUTE TRANSITION STATE MACHINE
+        // 🚀 TRIP START TRIGGER STATE MACHINE
         const totalExpected = cleanManifest.length;
         const totalConfirmed = cleanAccepted.length;
 
         if (totalExpected > 0 && totalConfirmed >= totalExpected) {
-          console.log("🎉 All passengers confirmed pickup locations. Routing forward...");
+          console.log("🎉 All batch criteria verified. Syncing map routing view...");
           clearInterval(pollInterval);
           
           setTimeout(() => {
@@ -106,7 +108,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         }
 
       } catch (err) {
-        console.log("Background synchronization interval drop out:", err);
+        console.log("Sync pooling worker cycle exception:", err);
       }
     }
 
@@ -116,36 +118,87 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => clearInterval(pollInterval);
   }, [navigation]);
 
-  // 3. 📤 Dispatch Live Pickup Acceptance Transaction
+  // 3. 📤 Dispatch Live Pickup Acceptance Checkpoint
   const handleAccept = async () => {
-    const currentUserId = 1;
     const resolvedRideOfferId = activeRideOfferIdRef.current;
 
     if (!resolvedRideOfferId) {
-      Alert.alert("System Syncing", "Still retrieving active ride metadata records.");
+      Alert.alert("Syncing Matrix", "Awaiting baseline corridor data packets.");
       return;
     }
 
     try {
-      setUserAccepted(true); // Optimistically set frontend view state
+      setUserAccepted(true); 
       
-      const res = await fetch("http://192.168.238.52:5000/api/rides/accept-proposal", {
+      const res = await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ride_offer_id: resolvedRideOfferId, // 🌟 Fully dynamic resolved ID parameter passed cleanly
-          user_id: currentUserId
+          ride_offer_id: resolvedRideOfferId,
+          user_id: CURRENT_USER_ID
         }),
       });
 
       if (!res.ok) {
         setUserAccepted(false);
-        Alert.alert("Sync Error", "Could not commit pickup acceptance checkpoint.");
+        Alert.alert("Transaction Error", "Could not commit acceptance parameters.");
       }
     } catch (err) {
       setUserAccepted(false);
-      console.log("Error posting transactional acceptance handshake:", err);
+      console.log("Fatal handshake write exception:", err);
     }
+  };
+
+  // 4. ❌ Dispatch Decline & Atomic Swap Request
+  const handleDecline = async () => {
+    const resolvedRideOfferId = activeRideOfferIdRef.current;
+
+    if (!resolvedRideOfferId) {
+      Alert.alert("System Processing", "Awaiting configuration parameters.");
+      return;
+    }
+
+    Alert.alert(
+      "Decline Offer?",
+      "Are you sure you want to reject this offer? You will return to the hub station queue line.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Decline",
+          style: "destructive",
+          onPress: async () => {
+            setIsRejecting(true);
+            try {
+              const res = await fetch(`${API_URL}/api/routes/decline-proposal`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  user_id: CURRENT_USER_ID,
+                  ride_offer_id: resolvedRideOfferId
+                }),
+              });
+
+              if (res.ok) {
+                console.log(`❌ Successfully exited ride offer allocation: [${resolvedRideOfferId}]`);
+                
+                // Clear screen stack memory frame and drop them clean back onto the core station board
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: "HubDashboardScreen", params: { userId: CURRENT_USER_ID } }],
+                });
+              } else {
+                Alert.alert("Rejection Denied", "Could not safely exit active allocation.");
+                setIsRejecting(false);
+              }
+            } catch (err) {
+              console.log("Fatal decline tracking exception:", err);
+              Alert.alert("Network Failure", "Could not connect to matching server.");
+              setIsRejecting(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   if (loading) {
@@ -158,7 +211,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
+      {/* Header View */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation?.goBack()}>
           <Text style={styles.backButton}>←</Text>
@@ -192,7 +245,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         </MapView>
       </View>
 
-      {/* Info Card */}
+      {/* Info Configuration Card */}
       <View style={styles.proposalCard}>
         <ScrollView showsVerticalScrollIndicator={false}>
           
@@ -230,7 +283,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
           <View style={styles.horizontalDivider} />
 
-          {/* Dynamic Table Sync */}
+          {/* Dynamic Verification Table Grid */}
           <Text style={styles.sectionHeading}>Acceptance Status</Text>
           
           <View style={styles.statusTable}>
@@ -261,13 +314,20 @@ export default function PickupProposalScreen({ navigation, route }) {
             ))}
           </View>
 
-          {/* Action Row */}
+          {/* Atomic Transaction Action Group */}
           <View style={styles.actionButtonContainer}>
-            {!userAccepted ? (
+            {isRejecting ? (
+              <View style={styles.waitingBanner}>
+                <ActivityIndicator size="small" color="#EF4444" style={{ marginRight: 8 }} />
+                <Text style={[styles.waitingBannerText, { color: "#EF4444" }]}>Processing swap request...</Text>
+              </View>
+            ) : !userAccepted ? (
               <View style={styles.buttonButtonGroup}>
-                <TouchableOpacity style={styles.declineButton} activeOpacity={0.7}>
+                {/* DECLINE CALLOUT */}
+                <TouchableOpacity style={styles.declineButton} onPress={handleDecline} activeOpacity={0.7}>
                   <Text style={styles.declineButtonText}>DECLINE</Text>
                 </TouchableOpacity>
+                {/* ACCEPT CALLOUT */}
                 <TouchableOpacity style={styles.acceptButton} onPress={handleAccept} activeOpacity={0.8}>
                   <Text style={styles.acceptButtonText}>ACCEPT PICKUP</Text>
                 </TouchableOpacity>
@@ -333,7 +393,7 @@ const styles = StyleSheet.create({
   textAccepted: { color: "#10B981" },
   actionButtonContainer: { marginTop: 10 },
   buttonButtonGroup: { flexDirection: "row", justifyContent: "space-between" },
-  declineButton: { width: "32%", borderWidth: 1, borderColor: "#EF4444", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyCOntent: "center" },
+  declineButton: { width: "32%", borderWidth: 1, borderColor: "#EF4444", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   declineButtonText: { color: "#EF4444", fontWeight: "700", fontSize: 13 },
   acceptButton: { width: "64%", backgroundColor: "#059669", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700", fontSize: 13 },
