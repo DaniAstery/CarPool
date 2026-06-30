@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Dimensions,
   TouchableOpacity,
   ScrollView,
@@ -11,30 +10,34 @@ import {
   Easing,
   ActivityIndicator,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
+import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
 export default function LiveTrackingScreen({ navigation, route }) {
-  const currentUserId = 1; // Device user profile identifier (You)
-  
-  // Extract route configs safely passed during the screen transition
   const routeId = route?.params?.routeId || "1";
-  const rideData = route?.params?.ride || { corridor: "Megenagna → Bole" };
+  const rideData = route?.params?.ride || { corridor: "Megenagna → Bole", price: "ETB 80", time: "25 min" };
   
-  // State variables synchronized against PostgreSQL
-  const [userArrived, setUserArrived] = useState(false);
+  const rideOfferIdFromParam = 
+    route?.params?.rideOfferId || 
+    route?.params?.ride_offer_id || 
+    route?.params?.rideId || 
+    1;
+    
+  const currentUserId = route?.params?.userId ? parseInt(route?.params?.userId, 10) : 1;
+  
+  const [userArrived, setUserArrived] = useState(route?.params?.initialUserArrived || false);
   const [passengerStates, setPassengerStates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
 
-  const activeRideOfferIdRef = useRef(null);
+  const activeRideOfferIdRef = useRef(rideOfferIdFromParam);
   const [pulseAnim] = useState(new Animated.Value(0));
   
   const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // Top header status pulse animation loop
   useEffect(() => {
     Animated.loop(
       Animated.timing(pulseAnim, {
@@ -46,65 +49,100 @@ export default function LiveTrackingScreen({ navigation, route }) {
     ).start();
   }, []);
 
-  // 🔄 Real-Time Database Tracking Synchronization Polling Engine Loop
+  // 🔄 Real-Time Telemetry & Sync Loop
   useEffect(() => {
-    console.log(`📡 Initializing live synchronization engine telemetry stream for User ID: [${currentUserId}]`);
+    console.log(`📡 Synchronization engine streaming convergence states for User ID: [${currentUserId}]`);
 
     async function streamLiveTrackingData() {
       try {
-        const res = await fetch(`http://192.168.238.52:5000/api/rides/track-live/${currentUserId}`);
-        if (!res.ok) return;
+        const res = await fetch(`http://192.168.51.52:5000/api/rides/track-live/${currentUserId}`);
+        
+        if (!res.ok) {
+          console.log(`⚠️ Telemetry lookup endpoint returned status code: [${res.status}]. Forcing UI layout render.`);
+          setLoading(false);
+          return;
+        }
 
         const data = await res.json();
-        const { rideOfferId, driverLocation: incomingDriverLoc, passengers, rideStatus } = data;
+        if (!data || Object.keys(data).length === 0) {
+          setLoading(false);
+          return;
+        }
 
-        // Keep the active ride index contextualized across interactions
-        activeRideOfferIdRef.current = rideOfferId;
+        const { rideOfferId, driverLocation: incomingDriverLoc, rideStatus } = data;
 
-        // Update real-time driver coordinates on map backdrop
+        if (rideOfferId) {
+          activeRideOfferIdRef.current = rideOfferId;
+        }
+
         if (incomingDriverLoc) {
           setDriverLocation({
-            latitude: incomingDriverLoc.latitude,
-            longitude: incomingDriverLoc.longitude
+            latitude: parseFloat(incomingDriverLoc.latitude),
+            longitude: parseFloat(incomingDriverLoc.longitude)
           });
         }
 
-      // Process all co-rider array tracking parameters received from database state updates
-        const parsedPassengers = (passengers || []).map((p, index) => {
-        // Ensure we compare numbers accurately (casting just in case)
-        const isMe = Number(p.userId) === Number(currentUserId);
-        const mapColor = isMe ? "#3A82F6" : index === 1 ? "#E28743" : "#764ABC";
-        const standsArrived = p.status === "arrived";
+        // 🌟 DEEP PROFILE MATRIX EXTRACTOR: Scan nested structures to map active pool partner records
+        const rawPassengersList = 
+          data.passengers || 
+          data.pool?.passengers || 
+          data.match_pipeline?.passengers || 
+          [];
 
-        // FIX: Force the frontend state to stay synchronized if the database confirms arrival
-        if (isMe && standsArrived) {
-          setUserArrived(true);
+        console.log(`📊 Syncing manifest queue. Found [${rawPassengersList.length}] backend passenger records.`);
+
+        const parsedPassengers = rawPassengersList.map((p, index) => {
+          const targetPassengerId = parseInt(p.userId || p.user_id || p.id, 10);
+          const isMe = targetPassengerId === currentUserId;
+          const mapColor = isMe ? "#111111" : index === 1 ? "#4B5563" : "#6B7280";
+          
+          // Read true status dynamically from database snapshot
+          const standsArrived = p.status === "arrived" || p.status === "Arrived";
+
+          if (isMe && standsArrived) {
+            setUserArrived(true);
+          }
+
+          return {
+            id: targetPassengerId,
+            name: isMe ? "You" : `Rider (ID: ${targetPassengerId})`,
+            latitude: standsArrived ? pickupLocation.latitude : (isMe ? 9.0098 : index === 1 ? 9.0115 : 9.0128), 
+            longitude: standsArrived ? pickupLocation.longitude : (isMe ? 38.7932 : index === 1 ? 38.7945 : 38.7931),
+            color: mapColor,
+            status: standsArrived ? "Arrived" : "Walking"
+          };
+        });
+
+        // Fallback generator if network payload is flat
+        if (parsedPassengers.length === 0) {
+          parsedPassengers.push({
+            id: currentUserId,
+            name: "You",
+            latitude: pickupLocation.latitude,
+            longitude: pickupLocation.longitude,
+            color: "#111111",
+            status: userArrived ? "Arrived" : "Walking"
+          });
         }
 
-        return {
-          id: p.userId,
-          name: isMe ? "You" : `Rider (ID: ${p.userId})`,
-          latitude: isMe ? 9.0098 : index === 1 ? 9.0115 : 9.0128, 
-          longitude: isMe ? 38.7932 : index === 1 ? 38.7945 : 38.7931,
-          distance: standsArrived ? "0m" : isMe ? "180m" : "90m",
-          time: standsArrived ? "Arrived" : isMe ? "2 min left" : "1 min left",
-          color: mapColor,
-          // FIX: Read directly from the incoming database status row rule
-          status: standsArrived ? "Arrived" : "Walking"
-        };
-      });
         setPassengerStates(parsedPassengers);
         setLoading(false);
 
-        // 🚀 LIVE TRIP DEPARTURE TRANSITION WATCHER: Advance when the driver departs or state changes
-        if (rideStatus === "departed") {
-          console.log("🚀 Trip status flagged as departed by driver node. Advancing view layer...");
+        // 🚀 TRIP LIFECYCLE DEPARTURE GATE: Progress screen instantly when driver executes route run
+        if (rideStatus === "departed" || rideStatus === "started" || rideStatus === "inprogress") {
+          console.log(`🚀 Trip status flagged as [${rideStatus}]. Moving to TripInProgressScreen.`);
           clearInterval(trackingInterval);
-          navigation.replace("TripDepartureScreen", { routeId, rideOfferId, ride: rideData });
+          navigation.replace("TripInProgressScreen", { 
+            routeId, 
+            rideOfferId: activeRideOfferIdRef.current, 
+            ride: rideData,
+            userId: currentUserId 
+          });
         }
 
       } catch (err) {
-        console.log("Live stream telemetry pipeline lookup dropout:", err);
+        console.log("Telemetry pipeline parsing failure:", err);
+        setLoading(false);
       }
     }
 
@@ -112,43 +150,39 @@ export default function LiveTrackingScreen({ navigation, route }) {
     const trackingInterval = setInterval(streamLiveTrackingData, 2500);
 
     return () => clearInterval(trackingInterval);
-  }, [navigation]);
+  }, [navigation, currentUserId, routeId, userArrived]);
 
-  // 📤 Dispatch Terminal Arrival Transaction State to Backend
-  // 📤 Dispatch Terminal Arrival Transaction State to Backend
+  // 📤 Push Terminal Presence Handshake Sequence to Database
   const handleUserArrival = async () => {
     const resolvedRideOfferId = activeRideOfferIdRef.current;
     if (!resolvedRideOfferId) return;
 
-    // 1. ✨ OPTIMISTIC UI UPDATE: Instantly flip states locally before the network call resolves
     setUserArrived(true); 
     setPassengerStates((prevStates) =>
       prevStates.map((p) =>
-        p.name === "You"
-          ? { ...p, distance: "0m", time: "Arrived", status: "Arrived" }
+        p.id === currentUserId
+          ? { ...p, status: "Arrived", latitude: pickupLocation.latitude, longitude: pickupLocation.longitude }
           : p
       )
     );
 
     try {
-      // 2. Fire backend transaction in the background
-      const res = await fetch("http://192.168.238.52:5000/api/rides/signal-arrival", {
+      const res = await fetch("http://192.168.51.52:5000/api/rides/signal-arrival", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ride_offer_id: resolvedRideOfferId,
-          user_id: currentUserId // 1
+          user_id: currentUserId
         }),
       });
 
       if (!res.ok) {
-        // Rollback states if server explicitly rejects handshake execution
         setUserArrived(false);
-        console.log("Failed to process presence checkpoint sequence update.");
+        console.log("Handshake request rejected by server execution blocks.");
       }
     } catch (err) {
       setUserArrived(false);
-      console.log("Error uploading confirmation checkpoint data maps:", err);
+      console.log("Error running presence execution networks:", err);
     }
   };
 
@@ -157,18 +191,18 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
-        <ActivityIndicator size="large" color="#3B82F6" />
-      </SafeAreaView>
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" }]}>
+        <ActivityIndicator size="large" color="#111111" />
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Status Bar Banner */}
+    <SafeAreaView style={styles.container} edges={["bottom", "left", "right"]}>
+      {/* Top Banner Track Alert */}
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
-          <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }] || {}} />
+          <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }]} />
           <View style={styles.statusCenterCoreDot}>
             <MaterialCommunityIcons name="walk" size={14} color="#FFFFFF" />
           </View>
@@ -185,37 +219,29 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
       {/* Map Content Layer View */}
       <View style={styles.mapContainer}>
-              <MapView
-              provider={PROVIDER_GOOGLE}
-              style={StyleSheet.absoluteFillObject}
-              
-              // 🔍 ULTRA-ZOOM CONFIGURATION (Tightened from 0.012 down to 0.0025 for extreme detail)
-              initialRegion={{
-                latitude: 9.0115,       // Centered directly on the Megenagna convergence zone
-                longitude: 38.7945,
-                latitudeDelta: 0.0025,  
-                longitudeDelta: 0.0025,
-              }}
-              
-              // 🏗️ High-Fidelity Infrastructure Visuals
-              showsBuildings={true}     // Forces 3D structural blocks to render for easy physical navigation
-              showsIndoors={true}       // Displays subterranean/terminal walking platforms if mapped
-              showsTraffic={false}      // Hides vehicular congestion lines to keep pedestrian corridors clean
-              customMapStyle={detailedMapStyle} // Binds the high-precision clarity style sheet
-            >
-
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={{
+            latitude: 9.0115,       
+            longitude: 38.7945,
+            latitudeDelta: 0.0035,  
+            longitudeDelta: 0.0035,
+          }}
+          showsBuildings={true}     
+          showsIndoors={true}       
+          showsTraffic={false}      
+          customMapStyle={detailedMapStyle} 
+        >
           {/* Core Target Meeting Hub Destination Station Pin */}
-         <Marker 
-              coordinate={pickupLocation}
-              anchor={{ x: 0.5, y: 0.5 }} // Sets the absolute center of the layout block right over the coordinates
-            >
-              <View style={styles.hubStationWrapper}>
-                <View style={styles.hubStationPin}>
-                  <Ionicons name="flag" size={14} color="#FFFFFF" />
-                </View>
-                <View style={styles.hubStationPulseRing} />
+          <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.hubStationWrapper}>
+              <View style={styles.hubStationPin}>
+                <Ionicons name="flag" size={14} color="#FFFFFF" />
               </View>
-            </Marker>
+              <View style={styles.hubStationPulseRing} />
+            </View>
+          </Marker>
 
           {/* Real-time moving Driver Marker Component Node */}
           <Marker coordinate={driverLocation}>
@@ -224,6 +250,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
             </View>
           </Marker>
 
+          {/* Pedestrian Pins */}
           {passengerStates.map((p, idx) => (
             p.status === "Walking" && (
               <Marker key={`marker-${idx}`} coordinate={{ latitude: p.latitude, longitude: p.longitude }}>
@@ -236,13 +263,13 @@ export default function LiveTrackingScreen({ navigation, route }) {
         </MapView>
       </View>
 
-      {/* Slide-Up Interface Sheet Drawer */}
+      {/* Slide-Up Interface Drawer Sheet */}
       <View style={styles.slidingPanelDrawer}>
         <ScrollView showsVerticalScrollIndicator={false}>
           
           <View style={styles.etaSummaryCard}>
             <View style={styles.etaIconContainer}>
-              <FontAwesome5 name="clock" size={16} color="#10B981" />
+              <FontAwesome5 name="clock" size={16} color="#111111" />
             </View>
             <View style={styles.etaTextFrame}>
               <Text style={styles.etaPrimaryLabel}>Driver arriving in 4 mins</Text>
@@ -250,42 +277,37 @@ export default function LiveTrackingScreen({ navigation, route }) {
             </View>
           </View>
 
-          <Text style={styles.sectionHeaderLabel}>Passenger Convergence Queue</Text>
+          <Text style={styles.sectionHeaderLabel}>Co-Riders Verification Queue</Text>
 
-          <View style={styles.passengerQueueStack}>
+          {/* 🌟 MATCHES PICKUPPROPOSAL STYLE: Clean List Container Box */}
+          <View style={styles.manifestContainer}>
             {passengerStates.map((passenger, index) => (
-              <View key={`card-${index}`} style={styles.passengerStateCard}>
-                <View style={styles.cardLeftContent}>
-                  <View style={[styles.passengerAvatarFrame, { backgroundColor: `${passenger.color}15` }]}>
-                    <MaterialCommunityIcons name={passenger.id === currentUserId ? "walk" : "account"} size={20} color={passenger.color} />
+              <View key={`rider-${index}`} style={styles.passengerRow}>
+                <View style={styles.passengerIdentity}>
+                  <View style={styles.avatarCircle}>
+                    <Text style={styles.avatarText}>👤</Text>
                   </View>
-                  <View style={styles.passengerTextIdentity}>
-                    <Text style={[styles.passengerNameTitle, passenger.id === currentUserId && { fontWeight: "800" }]}>
-                      {passenger.name}
-                    </Text>
-                    <Text style={styles.passengerWalkRouteLabel}>
-                      {passenger.status === "Arrived" ? "At meeting location" : `Distance: ${passenger.distance}`}
-                    </Text>
-                  </View>
+                  <Text style={[styles.passengerName, passenger.id === currentUserId && styles.boldName]}>
+                    {passenger.name}
+                  </Text>
                 </View>
 
-              {passenger.status === "Arrived" ? (
-                    <View style={styles.badgeArrivedDone}>
-                      <Ionicons name="checkmark-circle" size={16} color="#10B981" />
-                      <Text style={styles.badgeTextArrivedDone}>ARRIVED</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.badgeWalkingCountdown}>
-                      <Text style={[styles.badgeTextWalkingCountdown, { color: passenger.color }]}>
-                        {passenger.time}
-                      </Text>
-                    </View>
-                  )}
+                {passenger.status === "Arrived" ? (
+                  <View style={styles.statusArrivedBadge}>
+                    <Ionicons name="checkmark-circle" size={16} color="#065F46" />
+                    <Text style={styles.statusArrivedText}>ARRIVED</Text>
+                  </View>
+                ) : (
+                  <View style={styles.statusWalkingBadge}>
+                    <MaterialCommunityIcons name="walk" size={14} color="#374151" />
+                    <Text style={styles.statusWalkingText}>WALKING</Text>
+                  </View>
+                )}
               </View>
             ))}
           </View>
 
-          {/* Interactive Trigger Elements Bar */}
+          {/* Interactive Action Control Elements Bar */}
           {!userArrived ? (
             <TouchableOpacity 
               style={styles.arrivedCallToActionButton}
@@ -295,8 +317,9 @@ export default function LiveTrackingScreen({ navigation, route }) {
               <Text style={styles.arrivedCallToActionText}>I'VE ARRIVED AT PICKUP POINT</Text>
             </TouchableOpacity>
           ) : (
-            <View style={styles.globalSuccessBanner}>
-              <Text style={styles.globalSuccessBannerText}>✓ Waiting for trip departure window to open</Text>
+            <View style={styles.successStateBanner}>
+              <ActivityIndicator size="small" color="#065F46" style={{ marginRight: 10 }} />
+              <Text style={styles.successBannerText}>Waiting for remaining co-riders to arrive...</Text>
             </View>
           )}
 
@@ -307,34 +330,12 @@ export default function LiveTrackingScreen({ navigation, route }) {
 }
 
 const detailedMapStyle = [
-  {
-    elementType: "geometry",
-    stylers: [{ color: "#F5F5F5" }]
-  },
-  {
-    featureType: "poi.business",
-    stylers: [{ visibility: "off" }] // Strips out commercial distractions (shops/cafes)
-  },
-  {
-    featureType: "poi.park",
-    elementType: "geometry",
-    stylers: [{ color: "#E5F5E5" }] // Soft green accentuation for open zones
-  },
-  {
-    featureType: "road",
-    elementType: "geometry",
-    stylers: [{ color: "#FFFFFF" }] // Solid white background for secondary roads
-  },
-  {
-    featureType: "road.local",
-    elementType: "geometry",
-    stylers: [{ color: "#EAEAEA" }] // Explicitly bakes local walking corridors onto the map view
-  },
-  {
-    featureType: "transit.station",
-    elementType: "labels.icon",
-    stylers: [{ visibility: "on" }, { color: "#10B981" }] // Bright green tags for local transport hub nodes
-  }
+  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { featureType: "poi.business", stylers: [{ visibility: "off" }] },
+  { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#E5F5E5" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#FFFFFF" }] },
+  { featureType: "road.local", elementType: "geometry", stylers: [{ color: "#EAEAEA" }] },
+  { featureType: "transit.station", elementType: "labels.icon", stylers: [{ visibility: "on" }, { color: "#10B981" }] }
 ];
 
 const styles = StyleSheet.create({
@@ -352,26 +353,32 @@ const styles = StyleSheet.create({
   hubStationPulseRing: { position: "absolute", width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(16, 185, 129, 0.2)" },
   driverCarPin: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 4 },
   passengerTrackingPin: { width: 22, height: 22, borderRadius: 11, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#FFFFFF" },
-  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "50%", backgroundColor: "#F9FAFB", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 20, borderWidth: 1, borderColor: "#E5E7EB", shadowColor: "#000", shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 8 },
-  etaSummaryCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 16 },
-  etaIconContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#E6F4EA", justifyContent: "center", alignItems: "center", marginRight: 12 },
+  
+  // Slide-up UI Sheet
+  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "50%", backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 20, paddingHorizontal: 20, paddingBottom: 24, borderWidth: 1, borderColor: "#E5E7EB", shadowColor: "#000", shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.08, shadowRadius: 10, elevation: 8 },
+  etaSummaryCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F9FAFB", paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 18 },
+  etaIconContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#E5E7EB", justifyContent: "center", alignItems: "center", marginRight: 12 },
   etaTextFrame: { flex: 1 },
   etaPrimaryLabel: { fontSize: 14, fontWeight: "700", color: "#111111" },
   etaSecondaryLabel: { fontSize: 11, color: "#6B7280", marginTop: 1 },
-  sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10, marginLeft: 2 },
-  passengerQueueStack: { marginBottom: 16 },
-  passengerStateCard: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 8 },
-  cardLeftContent: { flexDirection: "row", alignItems: "center", flex: 1 },
-  passengerAvatarFrame: { width: 38, height: 38, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12 },
-  passengerTextIdentity: { flex: 1 },
-  passengerNameTitle: { fontSize: 14, fontWeight: "600", color: "#111111" },
-  passengerWalkRouteLabel: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  badgeArrivedDone: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  badgeTextArrivedDone: { fontSize: 11, fontWeight: "700", color: "#10B981", marginLeft: 4 },
-  badgeWalkingCountdown: { backgroundColor: "#F3F4F6", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  badgeTextWalkingCountdown: { fontSize: 11, fontWeight: "700" },
+  sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12, marginLeft: 2 },
+
+  // Clean Proposal Style Stack Rendering
+  manifestContainer: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 16, paddingVertical: 4, paddingHorizontal: 16, marginBottom: 20 },
+  passengerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, borderColor: "#F3F4F6" },
+  passengerIdentity: { flexDirection: "row", alignItems: "center" },
+  avatarCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center", marginRight: 12 },
+  avatarText: { fontSize: 14 },
+  passengerName: { fontSize: 14, color: "#374151", fontWeight: "500" },
+  boldName: { fontWeight: "800", color: "#111111" },
+  statusArrivedBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#D1FAE5", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  statusArrivedText: { color: "#065F46", fontSize: 11, fontWeight: "700", marginLeft: 4 },
+  statusWalkingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#F3F4F6", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  statusWalkingText: { color: "#374151", fontSize: 11, fontWeight: "700", marginLeft: 4 },
+
+  // Actions
   arrivedCallToActionButton: { backgroundColor: "#111111", paddingVertical: 14, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   arrivedCallToActionText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700", letterSpacing: 0.3 },
-  globalSuccessBanner: { backgroundColor: "#ECFDF5", paddingVertical: 14, borderRadius: 14, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#A7F3D0" },
-  globalSuccessBannerText: { color: "#065F46", fontSize: 13, fontWeight: "700" },
+  successStateBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#D1FAE5", width: "100%", height: 50, borderRadius: 14, borderWidth: 1, borderColor: "#A7F3D0" },
+  successBannerText: { color: "#065F46", fontSize: 13, fontWeight: "700" }
 });

@@ -27,6 +27,7 @@ export default function MatchingScreen({ navigation, route }) {
   const routeId = route?.params?.routeId || "3";
   const hubId = route?.params?.hubId || "1";
   const userId = route?.params?.userId || "1"; 
+  const currentUserId = parseInt(userId, 10);
   const ride = route?.params?.ride || { corridor: "Megenagna → Bole", time: "25 min" };
 
   // Track user hardware location
@@ -51,14 +52,15 @@ export default function MatchingScreen({ navigation, route }) {
     ).start();
   }, [radarAnim]);
 
-  // 🔄 Real-Time Matching Status Polling Loop
+  // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
   useEffect(() => {
     let pollingInterval;
+    let isMounted = true;
 
     const checkMyPoolStatus = async () => {
       try {
         // Query the dedicated, isolated GET endpoint by userId
-        const response = await fetch(`http://192.168.238.52:5000/api/routes/status/${userId}`);
+        const response = await fetch(`http://192.168.51.52:5000/api/routes/status/${userId}`);
         
         if (!response.ok) {
           const errorHtml = await response.text();
@@ -67,45 +69,95 @@ export default function MatchingScreen({ navigation, route }) {
         }
 
         const data = await response.json();
+        if (!isMounted) return;
 
-        // Evaluate matching pipeline status
-        if (data.status === "matched") {
+        const rideStatus = data.rideStatus || data.pool?.rideStatus || "";
+
+        // 🚀 INTERCEPT PATH 1: The trip has already left/started while backgrounded
+        if (rideStatus === "departed" || rideStatus === "started" || rideStatus === "inprogress") {
+          console.log("🏁 Active ride detected in production. Fast-tracking to TripInProgressScreen.");
+          if (pollingInterval) clearInterval(pollingInterval);
+          
+          navigation.replace("TripInProgressScreen", {
+            routeId,
+            rideOfferId: data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || 1,
+            ride: { ...ride },
+            userId: currentUserId
+          });
+          return;
+        }
+
+        const currentPoolStatus = data.status || data.pool?.status || "";
+
+        // 🚀 FIX: Consider both 'matched' AND 'arrived' as valid execution gates to handle hot restarts
+        if (currentPoolStatus === "matched" || currentPoolStatus === "arrived") {
           setMatchedCount(2); // Instantly update counter to core fulfillment threshold
           
-          if (data.finalPrice) {
-            setDisplayedPrice(`ETB ${parseInt(data.finalPrice, 10)}`);
-          }
+          const finalPriceValue = data.finalPrice || data.pool?.finalPrice || 80;
+          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || 1;
 
-          clearInterval(pollingInterval);
+          setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
 
-          // Route navigation sequence trigger
+          if (pollingInterval) clearInterval(pollingInterval);
+
+          // Deep scan the passenger table manifest array to find your user status row
+          const passengersList = data.passengers || data.pool?.passengers || [];
+          const myRow = passengersList.find(p => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId);
+          
+          // Verify arrival flag across the parent table block or individual profile metrics
+          const alreadyArrived = currentPoolStatus === "arrived" || myRow?.status === "arrived" || myRow?.status === "Arrived";
+
+          // 🔧 Wrapped inside macro-task delay to protect against navigation race states
           setTimeout(() => {
-            if (navigation) {
-              navigation.replace("PickupProposalScreen", { 
-                routeId, 
-                rideId: data.matched_ride_offer_id,
-                ride: { 
-                  ...ride, 
-                  price: `ETB ${parseInt(data.finalPrice || 80, 10)}`, 
-                  finalCount: 2 
-                } 
-              });
+            if (isMounted && navigation) {
+              if (alreadyArrived) {
+                // 🚀 INTERCEPT PATH 2: Matched AND already arrived -> bypass proposal view layer
+                console.log("🎯 User status verified as 'arrived'. Forwarding directly to LiveTrackingScreen.");
+                navigation.replace("LiveTrackingScreen", {
+                  routeId,
+                  rideOfferId: targetRideOfferId,
+                  ride: { 
+                    ...ride, 
+                    price: `ETB ${parseInt(finalPriceValue, 10)}`, 
+                    finalCount: 2 
+                  },
+                  userId: currentUserId,
+                  initialUserArrived: true // Locks interface elements to green state instantly
+                });
+              } else {
+                // 🚀 INTERCEPT PATH 3: Matched but still walking -> proceed to proposal deck
+                console.log("🚶 Match verified but status is walking. Moving to PickupProposalScreen.");
+                navigation.replace("PickupProposalScreen", { 
+                  routeId, 
+                  rideId: targetRideOfferId,
+                  ride: { 
+                    ...ride, 
+                    price: `ETB ${parseInt(finalPriceValue, 10)}`, 
+                    finalCount: 2 
+                  } 
+                });
+              }
             }
-          }, 1500);
+          }, 1000);
         } else {
           // Fallback to active searching count layout
-          setMatchedCount(data.currentPoolCount || 1);
+          const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
+          setMatchedCount(currentCount);
         }
       } catch (err) {
         console.log("Status lookup connection failure:", err);
       }
     };
 
+    // Run verification immediately on mount to process connection drop restorations instantly
     checkMyPoolStatus();
     pollingInterval = setInterval(checkMyPoolStatus, 2500);
 
-    return () => clearInterval(pollingInterval);
-  }, [routeId, hubId, userId]);
+    return () => {
+      isMounted = false;
+      clearInterval(pollingInterval);
+    };
+  }, [routeId, hubId, userId, navigation]);
 
   const ringScaleOut = radarAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.4] });
   const ringOpacityIn = radarAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 0.4, 0] });
@@ -145,9 +197,14 @@ export default function MatchingScreen({ navigation, route }) {
       </View>
 
       <View style={styles.matchCard}>
-        <View style={styles.iconCircle}><Text style={styles.avatarIcon}>👥</Text></View>
+        <View style={styles.iconCircle}>
+          <Text style={styles.avatarIcon}>👥</Text>
+        </View>
 
-        <Text style={styles.cardTitle}>{`Pooling Core Partners\non ${ride.corridor}`}</Text>
+        <Text style={styles.cardTitle}>
+          <Text>{`Pooling Core Partners\non `}</Text>
+          <Text>{ride.corridor}</Text>
+        </Text>
 
         <Text style={styles.matchCountText}>{`${matchedCount} / 2`}</Text>
         <Text style={styles.matchCountSubtitle}>Minimum of 2 required to launch run</Text>
