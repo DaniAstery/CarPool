@@ -21,9 +21,8 @@ export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
   const [coRiders, setCoRiders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isRejecting, setIsRejecting] = useState(false);
   
-  // ⏳ Countdown tracking state for User 3 acceptance window (in seconds)
+  // ⏳ Countdown tracking state for acceptance window (in seconds)
   const [timeLeft, setTimeLeft] = useState(45); 
 
   const currentUserId = route?.params?.userId ? parseInt(route?.params?.userId, 10) : 1;
@@ -37,8 +36,9 @@ export default function PickupProposalScreen({ navigation, route }) {
     longitudeDelta: 0.008,
   });
 
-  // Calculate global acceptance stats across the entire cluster
+  // Calculate dynamic acceptance stats across the entire cluster manifest
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted").length;
+  const totalPoolCapacity = 1 + coRiders.length; // Dynamic total capacity size
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
   // 1. Fetch Geolocation Parameters
@@ -63,9 +63,9 @@ export default function PickupProposalScreen({ navigation, route }) {
     })();
   }, []);
 
-  // 2. ⏳ Expiration Countdown Engine (Triggers *ONLY* when 2 or more users accept)
+  // 2. ⏳ Expiration Countdown Engine (Triggers when baseline pairs accept)
   useEffect(() => {
-    if (!isBaselinePairReady) return; // Keep countdown frozen until pair forms
+    if (!isBaselinePairReady) return; 
 
     if (timeLeft <= 0) {
       handleWindowExpiry();
@@ -75,9 +75,9 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => clearTimeout(timer);
   }, [timeLeft, isBaselinePairReady]);
 
-  // Handle the event when Rider 3's window elapses
+  // Handle the event when acceptance window elapses
   const handleWindowExpiry = () => {
-    console.log("⏰ Rider 3 acceptance window expired. Proceeding with active pair only.");
+    console.log("⏰ Pool acceptance window expired. Launching with active pairs.");
     
     const user1Accepted = currentUserId === 1 ? userAccepted : coRiders.find(r => r.id === 1)?.status === "Accepted";
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted";
@@ -88,10 +88,10 @@ export default function PickupProposalScreen({ navigation, route }) {
           routeId, 
           rideOfferId: activeRideOfferIdRef.current || 1,
           userId: currentUserId,
-          forcedLaunchPrice: 120 // Lock pricing at 2-passenger pair rates
+          forcedLaunchPrice: 120 
         });
-      } else if (currentUserId === 3) {
-        Alert.alert("Discount Window Closed", "The acceptance window for this pool closed. Returning to hub station.");
+      } else if (currentUserId > 2) {
+        Alert.alert("Window Closed", "The acceptance window for this pool closed. Returning to hub station.");
         navigation.reset({
           index: 0,
           routes: [{ name: "HubDashboardScreen", params: { userId: currentUserId } }],
@@ -111,39 +111,46 @@ export default function PickupProposalScreen({ navigation, route }) {
         const rideOfferId = data.rideOfferId || data.ride_offer_id;
         activeRideOfferIdRef.current = rideOfferId;
 
+        // Extract passengers array directly from backend (handles 3, 4, or more users)
         const rawAccepted = data.acceptedPassengers || [];
-        const cleanAccepted = rawAccepted.map(id => typeof id === 'object' ? parseInt(id.user_id || id.id, 10) : parseInt(id, 10));
+        const cleanAcceptedIds = rawAccepted.map(id => typeof id === 'object' ? parseInt(id.user_id || id.id, 10) : parseInt(id, 10));
 
-        if (cleanAccepted.includes(currentUserId)) {
+        // Fallback or explicit roster payload from server response
+        const fullRosterIds = data.allPassengerIds || [1, 2, 3, 4];
+
+        if (cleanAcceptedIds.includes(currentUserId)) {
           setUserAccepted(true);
         }
 
-        // Simulating matching states across the multi-passenger matrix
-        const mockManifest = [1, 2, 3];
-        const parsedCoRiders = mockManifest
+        // 🌟 FIXED: Map co-riders dynamically from the incoming roster data instead of a static array length
+        const parsedCoRiders = fullRosterIds
           .filter((id) => id !== currentUserId)
-          .map((id, index) => ({
-            id: id,
-            name: `Rider ${id}`,
-            status: cleanAccepted.includes(id) ? "Accepted" : "Pending", 
-            color: id === 2 ? "#E28743" : "#764ABC"
-          }));
+          .map((id, index) => {
+            // Assign identifiable tracking colors based on indices
+            const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+            return {
+              id: id,
+              name: `Rider ${id}`,
+              status: cleanAcceptedIds.includes(id) ? "Accepted" : "Pending", 
+              color: colorPalette[index % colorPalette.length]
+            };
+          });
 
         setCoRiders(parsedCoRiders);
 
-        // Check overall acceptance tree
-        const u1Acc = currentUserId === 1 ? userAccepted : parsedCoRiders.find(r => r.id === 1)?.status === "Accepted";
-        const u2Acc = currentUserId === 2 ? userAccepted : parsedCoRiders.find(r => r.id === 2)?.status === "Accepted";
-        const u3Acc = currentUserId === 3 ? userAccepted : parsedCoRiders.find(r => r.id === 3)?.status === "Accepted";
+        // Evaluate state validation matrix dynamically across the roster array
+        const allRosterAccepted = fullRosterIds.every(id => id === currentUserId ? userAccepted : cleanAcceptedIds.includes(id));
+        const corePairAccepted = (currentUserId === 1 ? userAccepted : cleanAcceptedIds.includes(1)) && 
+                                 (currentUserId === 2 ? userAccepted : cleanAcceptedIds.includes(2));
 
-        // Scenario A: Everyone accepted (All 3 Passengers) -> Launch straight away with discount!
-        if (u1Acc && u2Acc && u3Acc) {
+        // Scenario A: Everyone accepted -> Launch ride configuration
+        if (allRosterAccepted) {
           clearInterval(pollInterval);
           navigation.replace("LiveTrackingScreen", { routeId, rideOfferId, userId: currentUserId });
         }
         
-        // Scenario B: Timeout hit, and we are one of the accepted core users
-        if (u1Acc && u2Acc && timeLeft === 0 && (currentUserId === 1 || currentUserId === 2)) {
+        // Scenario B: Timeout hit, launch core group
+        if (corePairAccepted && timeLeft === 0 && (currentUserId === 1 || currentUserId === 2)) {
           clearInterval(pollInterval);
           navigation.replace("LiveTrackingScreen", { routeId, rideOfferId, userId: currentUserId });
         }
@@ -172,8 +179,8 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   };
 
-  // 5. ❌ Handle Decline Action
-  const handleDecline = () => {
+  // 5. ❌ Handle Decline Action & Run Engine Cleanup
+  const handleDecline = async () => {
     Alert.alert(
       "Decline Corridor Pool?",
       "Are you sure you want to reject this proposal? You will return to the hub station queue line.",
@@ -182,7 +189,18 @@ export default function PickupProposalScreen({ navigation, route }) {
         {
           text: "Decline",
           style: "destructive",
-          onPress: () => {
+          onPress: async () => {
+            try {
+              // Fire backend dropout handling route logic
+              await fetch(`${API_URL}/api/routes/decline-proposal`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user_id: currentUserId, ride_offer_id: activeRideOfferIdRef.current || 1 }),
+              });
+            } catch (err) {
+              console.log("Decline processing failure:", err);
+            }
+            
             navigation.reset({
               index: 0,
               routes: [{ name: "HubDashboardScreen", params: { userId: currentUserId } }],
@@ -236,11 +254,11 @@ export default function PickupProposalScreen({ navigation, route }) {
             </View>
             <View style={styles.priceBreakdownBox}>
               <Text style={styles.breakdownText}>• 2 Passengers Accepted (Forced Run): <Text style={{fontWeight:'700'}}>ETB 120</Text></Text>
-              <Text style={styles.breakdownText}>• 3 Passengers Accepted (Full Discount): <Text style={{color:'#10B981', fontWeight:'700'}}>ETB 80</Text></Text>
+              <Text style={styles.breakdownText}>• 3+ Passengers Accepted (Full Discount): <Text style={{color:'#10B981', fontWeight:'700'}}>ETB 80</Text></Text>
             </View>
           </View>
 
-          {/* ⏰ USER 3 TIME WINDOW CONTAINER */}
+          {/* ⏰ TIME WINDOW CONTAINER */}
           <View style={[styles.timerBanner, !isBaselinePairReady ? styles.timerWaiting : timeLeft < 15 ? styles.timerUrgent : null]}>
             <MaterialCommunityIcons 
               name={isBaselinePairReady ? "clock-fast" : "clock-alert-outline"} 
@@ -249,8 +267,8 @@ export default function PickupProposalScreen({ navigation, route }) {
             />
             <Text style={[styles.timerText, !isBaselinePairReady ? {color: "#6B7280"} : timeLeft < 15 ? {color: "#EF4444"} : null]}>
               {!isBaselinePairReady 
-                ? "Awaiting baseline pair to open 3rd seat window..." 
-                : `Rider 3 Discount Window Remaining: ${timeLeft}s`}
+                ? "Awaiting baseline pair to open cluster window..." 
+                : `Discount Window Remaining: ${timeLeft}s`}
             </Text>
           </View>
 
@@ -278,13 +296,15 @@ export default function PickupProposalScreen({ navigation, route }) {
               </View>
             </View>
 
-            {/* Co-riders */}
+            {/* Co-riders (Dynamically sizing row lists) */}
             {coRiders.map((rider) => (
               <View key={rider.id} style={styles.tableRow}>
                 <View style={styles.tableUserLabelGroup}>
                   <Ionicons name="person" size={14} color={rider.color} />
+                  {/* 🌟 FIXED: Kept conditional strings enclosed inside a dedicated <Text> component block */}
                   <Text style={styles.tableUserText}>
-                    {rider.name} {rider.id === 3 ? '(Window Controlled)' : ''}
+                    {rider.name}
+                    {rider.id > 2 ? <Text style={{fontSize: 11, color: '#6B7280'}}> (Window Controlled)</Text> : null}
                   </Text>
                 </View>
                 <View style={[styles.badge, rider.status === "Accepted" ? styles.badgeAccepted : styles.badgePending]}>
@@ -311,7 +331,7 @@ export default function PickupProposalScreen({ navigation, route }) {
                 <View style={styles.waitingBanner}>
                   <ActivityIndicator size="small" color="#1C75BC" style={{ marginRight: 8 }} />
                   <Text style={styles.waitingBannerText}>
-                    {timeLeft > 0 ? "Accepted! Waiting for third..." : "Launching transit views..."}
+                    {timeLeft > 0 ? "Accepted! Waiting for group..." : "Launching transit views..."}
                   </Text>
                 </View>
               )}
