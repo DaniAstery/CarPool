@@ -53,6 +53,7 @@ export default function MatchingScreen({ navigation, route }) {
   }, [radarAnim]);
 
   // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
+ // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
   useEffect(() => {
     let pollingInterval;
     let isMounted = true;
@@ -60,7 +61,7 @@ export default function MatchingScreen({ navigation, route }) {
     const checkMyPoolStatus = async () => {
       try {
         // Query the dedicated, isolated GET endpoint by userId
-        const response = await fetch(`http://192.168.51.52:5000/api/routes/status/${userId}`);
+        const response = await fetch(`http://192.168.106.52:5000/api/routes/status/${userId}`);
         
         if (!response.ok) {
           const errorHtml = await response.text();
@@ -71,41 +72,47 @@ export default function MatchingScreen({ navigation, route }) {
         const data = await response.json();
         if (!isMounted) return;
 
-        const rideStatus = data.rideStatus || data.pool?.rideStatus || "";
+        // 🎯 Fallback matrix parser designed for structural recovery payload traces
+        const rideStatus = data.rideStatus || data.pool?.rideStatus || data.match_pipeline?.rideStatus || "";
 
         // 🚀 INTERCEPT PATH 1: The trip has already left/started while backgrounded
         if (rideStatus === "departed" || rideStatus === "started" || rideStatus === "inprogress") {
           console.log("🏁 Active ride detected in production. Fast-tracking to TripInProgressScreen.");
           if (pollingInterval) clearInterval(pollingInterval);
           
+          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || 1;
+          
           navigation.replace("TripInProgressScreen", {
             routeId,
-            rideOfferId: data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || 1,
+            rideOfferId: targetRideOfferId,
             ride: { ...ride },
             userId: currentUserId
           });
           return;
         }
 
-        const currentPoolStatus = data.status || data.pool?.status || "";
+        // 🎯 Normalized Status Check (catches root status, data.pool.status, or pipeline status flags)
+        const currentPoolStatus = data.status || data.pool?.status || data.match_pipeline?.status || "";
 
-        // 🚀 FIX: Consider both 'matched' AND 'arrived' as valid execution gates to handle hot restarts
-        if (currentPoolStatus === "matched" || currentPoolStatus === "arrived") {
+        // 🚀 PATH EVALUATION: Handle recovery for both 'matched', 'recovered', AND 'arrived' states
+        if (currentPoolStatus === "matched" || currentPoolStatus === "arrived" || currentPoolStatus === "recovered") {
           setMatchedCount(2); // Instantly update counter to core fulfillment threshold
           
           const finalPriceValue = data.finalPrice || data.pool?.finalPrice || 80;
-          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || 1;
+          // 🎯 Safely maps both snake_case and camelCase parameters from your logs
+          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || 1;
 
           setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
 
           if (pollingInterval) clearInterval(pollingInterval);
 
-          // Deep scan the passenger table manifest array to find your user status row
+          // Deep scan passenger table manifest arrays across root or sub-nodes
           const passengersList = data.passengers || data.pool?.passengers || [];
           const myRow = passengersList.find(p => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId);
           
           // Verify arrival flag across the parent table block or individual profile metrics
-          const alreadyArrived = currentPoolStatus === "arrived" || myRow?.status === "arrived" || myRow?.status === "Arrived";
+          // 🎯 Explicitly checks if your main recovery status payload block states "arrived"
+          const alreadyArrived = currentPoolStatus === "arrived" || data.pool?.status === "arrived" || myRow?.status === "arrived" || myRow?.status === "Arrived";
 
           // 🔧 Wrapped inside macro-task delay to protect against navigation race states
           setTimeout(() => {
@@ -129,12 +136,13 @@ export default function MatchingScreen({ navigation, route }) {
                 console.log("🚶 Match verified but status is walking. Moving to PickupProposalScreen.");
                 navigation.replace("PickupProposalScreen", { 
                   routeId, 
-                  rideId: targetRideOfferId,
+                  rideOfferId: targetRideOfferId, 
                   ride: { 
                     ...ride, 
                     price: `ETB ${parseInt(finalPriceValue, 10)}`, 
                     finalCount: 2 
-                  } 
+                  },
+                  userId: currentUserId
                 });
               }
             }
