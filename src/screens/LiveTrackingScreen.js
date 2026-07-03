@@ -28,6 +28,11 @@ export default function LiveTrackingScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
 
+  // ⏱️ Arrival Threshold State
+  const [corePassengersArrived, setCorePassengersArrived] = useState(false);
+  const [countdownSeconds, setCountdownSeconds] = useState(20);
+  const [thresholdPassed, setThresholdPassed] = useState(false);
+
   const activeRideOfferIdRef = useRef(rideOfferIdFromParam);
   const [pulseAnim] = useState(new Animated.Value(0));
   
@@ -50,7 +55,6 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
     async function streamLiveTrackingData() {
       try {
-        // 🎯 FIX: Query by rideOfferId instead of userId to pulling the holistic status cluster matrix for ALL riders
         const res = await fetch(`http://192.168.106.52:5000/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
         
         if (!res.ok) {
@@ -75,23 +79,18 @@ export default function LiveTrackingScreen({ navigation, route }) {
           });
         }
 
-        // Parse exactly what is returned from route_pool query rows
         const parsedPassengers = data.passengers.map((p, index) => {
           const targetPassengerId = parseInt(p.userId || p.user_id || p.id, 10);
           const isMe = targetPassengerId === currentUserId;
-          
-          // Color choices for clear tracking differentiation
           const mapColor = isMe ? "#1C75BC" : "#E28743";
           
-          // Determine status state string straight from the db backend rows
           let currentStatus = "Pending";
           if (p.status === "Arrived" || p.status === "arrived") {
             currentStatus = "Arrived";
-          } else if (p.status === "Accepted" || p.status === "accepted" || p.status === "matched" || p.status === "matched_walking") {
+          } else if (p.status === "Accepted" || p.status === "accepted" || p.status === "matched") {
             currentStatus = "Accepted";
           }
 
-          // Safe algorithm scattering pins slightly to keep them clean on map interface
           const scatterLat = pickupLocation.latitude + (index * 0.0004 - 0.0002);
           const scatterLng = pickupLocation.longitude + (index * 0.0004 - 0.0002);
 
@@ -108,7 +107,6 @@ export default function LiveTrackingScreen({ navigation, route }) {
         setPassengerStates(parsedPassengers);
         setLoading(false);
 
-        // If your own backend payload status says you arrived, keep local state sync matched
         const meOnBackend = parsedPassengers.find(p => p.id === currentUserId);
         if (meOnBackend && meOnBackend.status === "Arrived") {
           setUserArrived(true);
@@ -135,6 +133,44 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
     return () => clearInterval(trackingInterval);
   }, [navigation, currentUserId, routeId]);
+
+  // 🎯 Threshold Logic Evaluator Effect
+  useEffect(() => {
+    if (passengerStates.length === 0) return;
+
+    // 🌟 FIX: Count how many riders total have arrived.
+    const totalArrived = passengerStates.filter(p => p.status === "Arrived").length;
+
+    // Require at least two riders to have physically arrived to trip the countdown window
+    if (totalArrived >= 2) {
+      setCorePassengersArrived(true);
+    } else {
+      setCorePassengersArrived(false);
+      setThresholdPassed(false);
+      setCountdownSeconds(20); // Reset countdown back up if someone drops out
+    }
+  }, [passengerStates]);
+
+  // ⏱️ Countdown Interval Clock
+  useEffect(() => {
+    let clockTimer = null;
+    if (corePassengersArrived && !thresholdPassed) {
+      clockTimer = setInterval(() => {
+        setCountdownSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(clockTimer);
+            setThresholdPassed(true);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (clockTimer) clearInterval(clockTimer);
+    };
+  }, [corePassengersArrived, thresholdPassed]);
 
   const handleUserArrival = async () => {
     const resolvedRideOfferId = activeRideOfferIdRef.current;
@@ -195,7 +231,6 @@ export default function LiveTrackingScreen({ navigation, route }) {
           }}
           customMapStyle={detailedMapStyle} 
         >
-          {/* Pickup Station Hub */}
           <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.hubStationWrapper}>
               <View style={styles.hubStationPin}>
@@ -205,14 +240,12 @@ export default function LiveTrackingScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          {/* Real-Time Driver Car Marker */}
           <Marker coordinate={driverLocation}>
             <View style={styles.driverCarPin}>
               <FontAwesome5 name="car-side" size={13} color="#FFFFFF" />
             </View>
           </Marker>
 
-          {/* Dynamic Passenger Pins Only */}
           {passengerStates.map((passenger, idx) => (
             <Marker key={`marker-${passenger.id}-${idx}`} coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}>
               <View style={[styles.passengerTrackingPin, { backgroundColor: passenger.color }]}>
@@ -254,28 +287,35 @@ export default function LiveTrackingScreen({ navigation, route }) {
                   </Text>
                 </View>
 
-                {/* 🎯 Exact Clean State Evaluator */}
                 {passenger.status === "Arrived" ? (
                   <View style={styles.statusArrivedBadge}>
                     <Ionicons name="checkmark-circle" size={15} color="#10B981" />
                     <Text style={styles.statusArrivedText}>ARRIVED</Text>
                   </View>
-                ) : passenger.status === "Accepted" ? (
-                  <View style={[styles.statusWalkingBadge, { backgroundColor: '#FEF3C7' }]}>
-                    <MaterialCommunityIcons name="account-check" size={14} color="#D97706" />
-                    <Text style={[styles.statusWalkingText, { color: '#D97706' }]}>ACCEPTED</Text>
-                  </View>
                 ) : (
                   <View style={styles.statusWalkingBadge}>
-                    <MaterialCommunityIcons name="clock-outline" size={14} color="#3B82F6" />
-                    <Text style={styles.statusWalkingText}>PENDING</Text>
+                    <MaterialCommunityIcons name="account-check" size={14} color="#D97706" />
+                    <Text style={styles.statusWalkingText}>ACCEPTED</Text>
                   </View>
                 )}
               </View>
             ))}
           </View>
 
-          {!userArrived ? (
+          {/* Dynamic Action Matrix View Engine */}
+          {thresholdPassed ? (
+            <View style={[styles.successStateBanner, { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" }]}>
+              <FontAwesome5 name="hourglass-half" size={14} color="#1D4ED8" style={{ marginRight: 10 }} />
+              <Text style={[styles.successBannerText, { color: "#1D4ED8" }]}>Waiting for driver to start the trip...</Text>
+            </View>
+          ) : corePassengersArrived ? (
+            <View style={[styles.successStateBanner, { backgroundColor: "#FFFBEB", borderColor: "#FDE68A" }]}>
+              <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 10 }} />
+              <Text style={[styles.successBannerText, { color: "#B45309" }]}>
+                Core threshold met. Starting lock window ({countdownSeconds}s)
+              </Text>
+            </View>
+          ) : !userArrived ? (
             <TouchableOpacity 
               style={styles.arrivedCallToActionButton}
               onPress={handleUserArrival}
@@ -286,7 +326,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
           ) : (
             <View style={styles.successStateBanner}>
               <ActivityIndicator size="small" color="#10B981" style={{ marginRight: 10 }} />
-              <Text style={styles.successBannerText}>Awaiting pipeline operational completion runs...</Text>
+              <Text style={styles.successBannerText}>Waiting for core match presence (Need $\ge$ 2 arrived)...</Text>
             </View>
           )}
 
@@ -331,8 +371,8 @@ const styles = StyleSheet.create({
   boldName: { fontWeight: "800", color: "#111111" },
   statusArrivedBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   statusArrivedText: { color: "#10B981", fontSize: 11, fontWeight: "700", marginLeft: 4 },
-  statusWalkingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#EFF6FF", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  statusWalkingText: { color: "#3B82F6", fontSize: 11, fontWeight: "700", marginLeft: 4 },
+  statusWalkingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#FEF3C7", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  statusWalkingText: { color: "#D97706", fontSize: 11, fontWeight: "700", marginLeft: 4 },
   arrivedCallToActionButton: { backgroundColor: "#1C75BC", paddingVertical: 14, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   arrivedCallToActionText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
   successStateBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#ECFDF5", width: "100%", height: 50, borderRadius: 14, borderWidth: 1, borderColor: "#A7F3D0" },
