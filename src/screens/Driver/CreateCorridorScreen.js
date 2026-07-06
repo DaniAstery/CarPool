@@ -12,9 +12,15 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
+// 🎯 FIX: Declare the missing base API URL for your Corridor system infrastructure
+const API_URL = "http://192.168.236.52:5000"; 
+
 export default function CreateCorridorScreen({ route, navigation }) {
   // Safe authentication fallback (Replace with your actual Global Context Hooks)
   const currentAuthenticatedUser = route?.params?.user || { id: 1, activeVehicleId: null };
+
+  // 🎯 FIX: Safely derive the missing driverId from the authenticated profile context
+  const currentDriverId = currentAuthenticatedUser?.id || 1;
 
   const [capacity, setCapacity] = useState(4);
   const [pricePerSeat, setPricePerSeat] = useState("100");
@@ -35,6 +41,48 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
 
+
+  // 🚦 NAVIGATION SESSION GATEKEEPER LOCK
+  useEffect(() => {
+    async function checkActiveDriverSession() {
+      try {
+        // Uses the correctly declared local tracking driver ID variable
+        const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+
+        // 🎯 TARGET ACTIVE STATE ROUTING MATRIX
+        if (data.hasActiveSession) {
+          switch (data.status) {
+            case "accepted":
+            case "arrived":
+              navigation.replace("NavigateToPickup", {
+                routeId: data.routeId,
+                rideOfferId: data.rideOfferId,
+                driverId: currentDriverId
+              });
+              break;
+            case "ontrip":
+              navigation.replace("InTripScreen", {
+                routeId: data.routeId,
+                rideOfferId: data.rideOfferId,
+                driverId: currentDriverId
+              });
+              break;
+            default:
+              break;
+          }
+        }
+      } catch (err) {
+        console.log("Failed to verify driver dispatch gatekeeper status:", err);
+      }
+    }
+
+    checkActiveDriverSession();
+  }, [currentDriverId]);
+
+
   // Trigger hub search when driver types
   useEffect(() => {
     if (hubSearchTerm.trim().length > 1) {
@@ -48,7 +96,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const searchStartingHubs = async () => {
     setIsSearchingHubs(true);
     try {
-      const res = await fetch(`http://192.168.236.52:5000/api/hubs/search/${hubSearchTerm}`);
+      const res = await fetch(`${API_URL}/api/hubs/search/${hubSearchTerm}`);
       const data = await res.json();
       setFoundHubs(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -67,12 +115,12 @@ export default function CreateCorridorScreen({ route, navigation }) {
     
     try {
       // Fetch matching fixed corridors
-      const routeRes = await fetch(`http://192.168.236.52:5000/api/routes/from/${encodeURIComponent(hubName)}`);
+      const routeRes = await fetch(`${API_URL}/api/routes/from/${encodeURIComponent(hubName)}`);
       const routeData = await routeRes.json();
       setPredefinedCorridors(Array.isArray(routeData) ? routeData : []);
 
-      // 🎯 FIXED: Pulling live unserved demand straight from route_pool mappings
-      const reqRes = await fetch("http://192.168.236.52:5000/api/corridors/passenger-requests");
+      // Pulling live unserved demand straight from route_pool mappings
+      const reqRes = await fetch(`${API_URL}/api/corridors/passenger-requests`);
       const reqData = await reqRes.json();
       
       const localizedRequests = Array.isArray(reqData) 
@@ -105,7 +153,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
     setIsPublishing(true);
     try {
-      const response = await fetch("http://192.168.236.52:5000/api/rides/create", {
+      const response = await fetch(`${API_URL}/api/rides/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
