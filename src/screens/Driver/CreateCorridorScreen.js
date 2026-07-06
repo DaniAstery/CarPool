@@ -48,7 +48,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const searchStartingHubs = async () => {
     setIsSearchingHubs(true);
     try {
-      const res = await fetch(`http://192.168.106.52:5000/api/hubs/search/${hubSearchTerm}`);
+      const res = await fetch(`http://192.168.236.52:5000/api/hubs/search/${hubSearchTerm}`);
       const data = await res.json();
       setFoundHubs(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -67,12 +67,12 @@ export default function CreateCorridorScreen({ route, navigation }) {
     
     try {
       // Fetch matching fixed corridors
-      const routeRes = await fetch(`http://192.168.106.52:5000/api/routes/from/${encodeURIComponent(hubName)}`);
+      const routeRes = await fetch(`http://192.168.236.52:5000/api/routes/from/${encodeURIComponent(hubName)}`);
       const routeData = await routeRes.json();
       setPredefinedCorridors(Array.isArray(routeData) ? routeData : []);
 
       // 🎯 FIXED: Pulling live unserved demand straight from route_pool mappings
-      const reqRes = await fetch("http://192.168.106.52:5000/api/corridors/passenger-requests");
+      const reqRes = await fetch("http://192.168.236.52:5000/api/corridors/passenger-requests");
       const reqData = await reqRes.json();
       
       const localizedRequests = Array.isArray(reqData) 
@@ -105,7 +105,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
     setIsPublishing(true);
     try {
-      const response = await fetch("http://192.168.106.52:5000/api/rides/create", {
+      const response = await fetch("http://192.168.236.52:5000/api/rides/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

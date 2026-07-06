@@ -31,7 +31,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
     async function streamHubRoster() {
       try {
         const response = await fetch(
-          `http://192.168.106.52:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`
+          `http://192.168.236.52:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`
         );
         if (!response.ok) return;
 
@@ -61,18 +61,18 @@ export default function WaitingForPassengersScreen({ navigation }) {
     if (!activeRideOfferId) return;
     
     try {
-      const res = await fetch("http://192.168.106.52:5000/api/rides/start-trip", {
+      const res = await fetch("http://192.168.236.52:5000/api/rides/start-trip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ride_offer_id: activeRideOfferId }),
       });
 
       if (res.ok) {
-        navigation.navigate("TripInProgress", { rideOfferId: activeRideOfferId });
+        navigation.navigate("ProposalDriver", { rideOfferId: activeRideOfferId });
       }
     } catch (err) {
       console.log("Failed to issue transit start command to backend database:", err);
-      navigation.navigate("TripInProgress", { rideOfferId: activeRideOfferId });
+      navigation.navigate("ProposalDriver", { rideOfferId: activeRideOfferId });
     }
   };
 

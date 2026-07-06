@@ -41,7 +41,7 @@ export default function PassengerScreen({ navigation }) {
     }
     setLoadingHubs(true);
     try {
-      const res = await fetch(`http://192.168.106.52:5000/api/hubs/search/${text}`);
+      const res = await fetch(`http://192.168.236.52:5000/api/hubs/search/${text}`);
       const data = await res.json();
       setHubs(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -62,7 +62,7 @@ export default function PassengerScreen({ navigation }) {
     setLoadingRoutes(true);
 
     try {
-      const res = await fetch(`http://192.168.106.52:5000/api/routes/from/${hub.name}`);
+      const res = await fetch(`http://192.168.236.52:5000/api/routes/from/${hub.name}`);
       const data = await res.json();
       setRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -84,7 +84,7 @@ export default function PassengerScreen({ navigation }) {
 
     setLoadingRides(true);
     try {
-      const res = await fetch(`http://192.168.106.52:5000/api/rides?route_id=${parsedRouteId}`);
+      const res = await fetch(`http://192.168.236.52:5000/api/rides?route_id=${parsedRouteId}`);
       const data = await res.json();
       setSelectedRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -112,7 +112,7 @@ export default function PassengerScreen({ navigation }) {
           onPress: async (destination) => {
             if (!destination || destination.trim() === "") return;
             try {
-              const res = await fetch("http://192.168.106.52:5000/api/corridors/request", {
+              const res = await fetch("http://192.168.236.52:5000/api/corridors/request", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -141,13 +141,13 @@ export default function PassengerScreen({ navigation }) {
       // Determine if this item is a baseline Route template or a live Driver Ride Offer
       const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
       
-      let endpoint = "http://192.168.106.52:5000/api/routes/join";
+      let endpoint = "http://192.168.236.52:5000/api/routes/join";
       let payload = {};
       let corridorLabel = "Selected Corridor";
 
       if (isLiveDriverOffer) {
         // Option A: User clicked an active driver's matching card deployment layout
-        endpoint = "http://192.168.106.52:5000/api/rides/join-pool";
+        endpoint = "http://192.168.236.52:5000/api/rides/join-pool";
         payload = {
           ride_id: item.id,
           passenger_id: 1, // Static Context matching server tracker specs
@@ -158,7 +158,7 @@ export default function PassengerScreen({ navigation }) {
         corridorLabel = `${item.start_location} → ${item.end_location}`;
       } else {
         // Option B: User clicked a baseline route blueprint pipeline directly
-        endpoint = "http://192.168.106.52:5000/api/routes/join";
+        endpoint = "http://192.168.236.52:5000/api/routes/join";
         payload = {
           route_id: item.route_id || item.id,
           user_id: 1,
