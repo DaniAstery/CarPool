@@ -48,7 +48,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     ).start();
   }, [pulseAnim]);
 
-  // Real-Time Telemetry Polling Loop: Monitors passenger status changes and ride offer transitions
+  // 1. Real-Time Telemetry Polling Loop: Monitors passenger status changes
   useEffect(() => {
     console.log(`📡 Driver Telemetry streaming active for Ride Offer ID: [${rideOfferId}]`);
     let isMounted = true;
@@ -67,7 +67,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
         setRideMetrics(data);
         
-        // Track the current high-level status of the offer directly from the backend
+        // Track the current high-level status of the offer directly from the endpoint
         if (data.rideStatus) {
           setCurrentRideStatus(data.rideStatus.toLowerCase());
         }
@@ -79,7 +79,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           };
           setDriverLocation(newDriverLoc);
 
-          // Zoom map to max bounding viewport accommodating driver and destination positions
+          // Dynamic Camera Projection Zoom Engine
           if (mapRef.current) {
             mapRef.current.fitToCoordinates([newDriverLoc, pickupLocation], {
               edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
@@ -124,7 +124,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     }
 
     pollLiveManifestData();
-    const manifestPollInterval = setInterval(pollLiveManifestData, 2500); // Polling frame window
+    const manifestPollInterval = setInterval(pollLiveManifestData, 2500);
 
     return () => {
       isMounted = false;
@@ -132,9 +132,9 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     };
   }, [rideOfferId]);
 
-  // 🎯 Action Flow Orchestration Button (Three-Step Progression Logic)
+  // 2. Action Flow Orchestration Button
   const handleWorkflowAction = async () => {
-    // STEP 2: If status is already 'arrived' in DB, click routes driver smoothly to TripInProgress Screen
+    // Structural Guard: If status is already marked arrived, shift routing to immediate transition
     if (currentRideStatus === "arrived") {
       navigation.replace("TripInProgress", { 
         routeId: routeId, 
@@ -144,7 +144,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       return;
     }
 
-    // STEP 1: First click fires network handshake to change ride status to 'arrived' 
     setSubmitting(true);
     try {
       const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
@@ -156,8 +155,12 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       const result = await response.json();
 
       if (response.ok) {
-        // Optimistically flip the label to "START TRIP" immediately
         setCurrentRideStatus("arrived");
+        navigation.replace("TripInProgress", { 
+          routeId: routeId, 
+          rideOfferId: rideOfferId,
+          rideStatus: "arrived"
+        });
       } else {
         Alert.alert("Arrival Sync Failure", result.error || "Could not update state.");
       }
@@ -245,7 +248,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          {/* 🎯 REDLINE PATH MAPPING POLYLINE */}
+          {/* 🎯 REDLINE PATH MAPPING VECTOR */}
           <Polyline
             coordinates={[driverLocation, pickupLocation]}
             strokeColor="#EF4444"
@@ -336,11 +339,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       {/* Persistent Call-to-Action Footer Button */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
-            style={[
-              styles.actionButton, 
-              submitting && { opacity: 0.6 }, 
-              currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }
-            ]}
+            style={[styles.actionButton, submitting && { opacity: 0.6 }, currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }]}
             activeOpacity={0.8}
             disabled={submitting}
             onPress={handleWorkflowAction}
