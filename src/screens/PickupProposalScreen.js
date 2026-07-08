@@ -16,7 +16,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 // 📡 Ensure this matches your target active backend server IP address
-const API_URL = "http://192.168.236.52:5000"; 
+const API_URL = "http://192.168.253.52:5000"; 
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);

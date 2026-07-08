@@ -15,13 +15,13 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.236.52:5000"; 
+const API_URL = "http://192.168.253.52:5000/api"; 
 
 export default function ProposalDriver({ navigation, route }) {
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
   
-  // 👥 Dynamic roster containing users assigned to this offer cluster
+  // 👥 Dynamic roster containing unified users assigned to this offer cluster
   const [poolPassengers, setPoolPassengers] = useState([]); 
   // ⚡ Fresh array tracking explicit passenger IDs that committed to the run
   const [acceptedPassengerIds, setAcceptedPassengerIds] = useState([]); 
@@ -45,7 +45,6 @@ export default function ProposalDriver({ navigation, route }) {
   const currentDriverPayout = currentAcceptedCount * pricePerSeat;
 
   // 🔐 CORE LOGIC CONDITIONS
-  // Rule: Countdown timer starts ONLY after at least 2 passengers accept
   const hasMinimumTwoPassengersAccepted = currentAcceptedCount >= 2;
   
   // Enforce validation constraints for Core Passengers (User 1 and User 2)
@@ -77,7 +76,6 @@ export default function ProposalDriver({ navigation, route }) {
 
   // 🕒 ELAPSED TIMER CONTROLLER
   useEffect(() => {
-    // Keep timer completely frozen until at least two users change status to accepted
     if (!hasMinimumTwoPassengersAccepted || isOfferLockedIn) return;
 
     if (timeLeft <= 0 && !driverAccepted) {
@@ -103,7 +101,7 @@ export default function ProposalDriver({ navigation, route }) {
   useEffect(() => {
     async function syncDatabaseManifestState() {
       try {
-        const res = await fetch(`${API_URL}/api/rides/driver-proposal/${currentDriverId}`);
+        const res = await fetch(`${API_URL}/rides/driver-proposal/${currentDriverId}`);
         if (!res.ok) return;
         
         const data = await res.json(); 
@@ -126,27 +124,35 @@ export default function ProposalDriver({ navigation, route }) {
 
         setAcceptedPassengerIds(cleanIds);
 
-        // 🎯 FIX: Smart Roster Parsing
-        if (data.route_pool_passengers && Array.isArray(data.route_pool_passengers) && data.route_pool_passengers.length > 0) {
-          setPoolPassengers(data.route_pool_passengers);
-        } else {
-          // If the nested array is missing, build it dynamically from the keys we DO have!
-          // This makes sure User 1 and User 2 show up properly instead of ghost text.
-          const activeIds = cleanIds.length > 0 ? cleanIds : [1, 2];
-          
-          // Ensure we display at least the seats that have interacted
-          const uniqueRiders = [...new Set([...activeIds, 1, 2])]; 
-          
-          const structuredRoster = uniqueRiders.map(id => ({
-            user_id: id,
-            status: cleanIds.includes(id) ? "accepted" : "matched",
-            name: `Passenger Slot ${id}`
-          }));
-          
-          setPoolPassengers(structuredRoster);
-        }
+        // 🎯 CRITICAL FIX: Smart Roster Union Merge Engine
+        const rawPoolArray = Array.isArray(data.route_pool_passengers) ? data.route_pool_passengers : [];
 
-        // Handle auto-routing state migrations
+        // Gather all unique user IDs across both arrays to prevent ghosting or dropouts
+        const totalUniqueUserIds = new Set([
+          ...cleanIds,
+          ...rawPoolArray.map(p => parseInt(p.user_id || p.id, 10)).filter(id => !isNaN(id)),
+          1, 2 // Maintain structural baseline visibility for Core targets
+        ]);
+
+        const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
+          const isExplicitlyAccepted = cleanIds.includes(userId);
+          const matchingPoolUser = rawPoolArray.find(p => parseInt(p.user_id || p.id, 10) === userId);
+          
+          let currentStatus = "matched";
+          if (isExplicitlyAccepted || (matchingPoolUser && matchingPoolUser.status === "accepted")) {
+            currentStatus = "accepted";
+          }
+
+          return {
+            user_id: userId,
+            status: currentStatus,
+            name: `Passenger Slot ${userId}`
+          };
+        });
+
+        setPoolPassengers(unifiedRoster);
+
+        // Handle auto-routing state migrations if another thread handles acceptance
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
           navigation.replace("NavigateToPickup", { 
@@ -165,10 +171,7 @@ export default function ProposalDriver({ navigation, route }) {
     const pollInterval = setInterval(syncDatabaseManifestState, 2000); 
     
     return () => clearInterval(pollInterval);
-    
-    // 🎯 FIX: Removed acceptedPassengerIds and poolPassengers from the dependency array 
-    // to stop the state from constantly clearing out its own data variables.
-  }, [currentDriverId]);
+  }, [currentDriverId, routeId, navigation]);
 
   // 🎯 SUBMIT HANDSHAKE TRANSITION TO DISPATCH PIPELINE
   const handleDriverAccept = async () => {
@@ -177,7 +180,7 @@ export default function ProposalDriver({ navigation, route }) {
     setDriverAccepted(true); 
     
     try {
-      const res = await fetch(`${API_URL}/api/rides/driver-accept`, {
+      const res = await fetch(`${API_URL}/rides/driver-accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -189,7 +192,6 @@ export default function ProposalDriver({ navigation, route }) {
       const responseData = await res.json();
 
       if (res.ok && responseData.success) {
-        // Redirect to pickup execution map view using exact App.js key string
         navigation.replace("NavigateToPickup", { 
           routeId, 
           rideOfferId: responseData.rideOfferId || activeRideOfferIdRef.current || 1, 
@@ -217,7 +219,7 @@ export default function ProposalDriver({ navigation, route }) {
           style: "destructive",
           onPress: async () => {
             try {
-              await fetch(`${API_URL}/api/rides/driver-decline`, {
+              await fetch(`${API_URL}/rides/driver-decline`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ driver_id: currentDriverId, ride_offer_id: activeRideOfferIdRef.current || 1 }),
@@ -308,39 +310,32 @@ export default function ProposalDriver({ navigation, route }) {
           {/* DYNAMIC MANIFEST ROSTER RENDERING SECTION */}
           <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${currentAcceptedCount}/${totalSeatsAllocated} Filled)`}</Text>
           <View style={styles.statusTable}>
-         {poolPassengers.map((passenger) => {
-  // Force clean integer parsing to prevent string-vs-number mismatches
-  const pId = parseInt(passenger.user_id || passenger.id, 10);
-  
-  // Cross-verify acceptance status from both sources
-  const isPassengerAccepted = 
-    acceptedPassengerIds.includes(pId) || 
-    passenger.status === 'accepted' || 
-    offerDetails?.accepted_passengers?.map(Number).includes(pId);
-
-  const isCoreRequirement = pId === 1 || pId === 2;
-  
-  return (
-    <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
-      <View style={styles.tableUserLabelGroup}>
-        <Ionicons 
-          name="person-outline" 
-          size={14} 
-          color={isPassengerAccepted ? "#10B981" : "#6B7280"} 
-        />
-        <Text style={styles.tableUserText}>
-          {passenger.name || `Passenger ${pId}`}
-          {isCoreRequirement && <Text style={{fontSize: 11, color: '#EF4444', fontWeight:'600'}}> *Core Lock</Text>}
-        </Text>
-      </View>
-      <View style={[styles.badge, isPassengerAccepted ? styles.badgeAccepted : styles.badgePending]}>
-        <Text style={[styles.badgeText, isPassengerAccepted ? styles.textAccepted : styles.textPending]}>
-          {isPassengerAccepted ? "Accepted" : "Matched / Pending"}
-        </Text>
-      </View>
-    </View>
-  );
-})}
+            {poolPassengers.map((passenger) => {
+              const pId = parseInt(passenger.user_id || passenger.id, 10);
+              const isPassengerAccepted = passenger.status === 'accepted';
+              const isCoreRequirement = pId === 1 || pId === 2;
+              
+              return (
+                <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
+                  <View style={styles.tableUserLabelGroup}>
+                    <Ionicons 
+                      name="person-outline" 
+                      size={14} 
+                      color={isPassengerAccepted ? "#10B981" : "#6B7280"} 
+                    />
+                    <Text style={styles.tableUserText}>
+                      {passenger.name || `Passenger ${pId}`}
+                      {isCoreRequirement && <Text style={{fontSize: 11, color: '#EF4444', fontWeight:'600'}}> *Core Lock</Text>}
+                    </Text>
+                  </View>
+                  <View style={[styles.badge, isPassengerAccepted ? styles.badgeAccepted : styles.badgePending]}>
+                    <Text style={[styles.badgeText, isPassengerAccepted ? styles.textAccepted : styles.textPending]}>
+                      {isPassengerAccepted ? "Accepted" : "Matched / Pending"}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
           </View>
 
           {/* WORKFLOW DISPATCH SELECTION CONTROLS */}

@@ -1,24 +1,51 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
+  Animated,
+  Easing,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
-import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
+import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-export default function NavigateToPickupScreen({ navigation }) {
-  // Initial State: 2 Passengers locked in at a premium non-optimized rate
-  const [passengerCount, setPassengerCount] = useState(2);
-  const [pricePerSeat, setPricePerSeat] = useState(120); 
-  const [totalEarnings, setTotalEarnings] = useState(240); // 2 * 120 = 240
-  const [countdown, setCountdown] = useState(300); // 5:00 minutes countdown
+// Production network cluster gateway layout setup
+const API_BASE_URL = "http://192.168.253.52:5000/api";
+
+export default function NavigateToPickupScreen({ navigation, route }) {
+  // Extract parameters passed down from previous stack navigation context
+  const routeId = route?.params?.routeId || route?.params?.route_id || "1";
+  const rideOfferId = route?.params?.rideId || route?.params?.ride_offer_id || 1;
+
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [passengerStates, setPassengerStates] = useState([]);
+  const [rideMetrics, setRideMetrics] = useState(null);
   
-  const [thirdPassengerJoined, setThirdPassengerJoined] = useState(false);
+  // Default coordinates centered on Megenagna Blue Taxi Stop area
+  const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
+  const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // 1. Core Countdown Timer Loop
+  const [countdown, setCountdown] = useState(300); // 5:00 Minutes target countdown
+  const [pulseAnim] = useState(new Animated.Value(0));
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 2000,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      })
+    ).start();
+  }, [pulseAnim]);
+
+  // 1. Ticking Countdown Clock Loop
   useEffect(() => {
     const interval = setInterval(() => {
       setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
@@ -26,28 +53,135 @@ export default function NavigateToPickupScreen({ navigation }) {
     return () => clearInterval(interval);
   }, []);
 
-  // 2. Simulate Passenger 3 joining mid-route during the countdown
+  // 2. Real-Time Telemetry Polling Loop: Monitors passenger status changes
   useEffect(() => {
-    const joinTimer = setTimeout(() => {
-      setPassengerCount(3);
-      setPricePerSeat(80); // Rate decreases for passengers due to full pool matching
-      setTotalEarnings(240); // Driver total gain remains optimized at 240 (3 * 80)
-      setThirdPassengerJoined(true);
-      console.log("Simulation Log: Passenger 3 joined! Rates optimized successfully.");
-    }, 6000);
+    console.log(`📡 Driver Telemetry streaming active for Ride Offer ID: [${rideOfferId}]`);
+    let isMounted = true;
 
-    return () => clearTimeout(joinTimer);
-  }, []);
+    async function pollLiveManifestData() {
+      try {
+        // Fetch raw response package from your endpoint structure
+        const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${rideOfferId}`);
+        
+        if (!res.ok) {
+          if (isMounted) setLoading(false);
+          return;
+        }
 
-  // Format seconds into MM:SS format
+        const data = await res.json();
+        if (!data || !isMounted) return;
+
+        // Save backend metadata metrics object locally
+        setRideMetrics(data);
+
+        if (data.driverLocation) {
+          setDriverLocation({
+            latitude: parseFloat(data.driverLocation.latitude),
+            longitude: parseFloat(data.driverLocation.longitude)
+          });
+        }
+
+        // 🎯 CRITICAL SYNC FIX: Map properties matching endpoint JSON signature (userId, status)
+        if (data.passengers && Array.isArray(data.passengers)) {
+          const parsedPassengers = data.passengers.map((p, index) => {
+            // Fall back cleanly to allow parsing errors to pass without rendering blank states
+            const passengerId = parseInt(p.userId || p.user_id || p.id, 10);
+            
+            // Normalize case variations ('Accepted', 'accepted', 'Arrived', 'arrived')
+            const rawStatus = (p.status || "accepted").toLowerCase();
+            let statusLabel = "Accepted";
+            
+            if (rawStatus === "arrived") {
+              statusLabel = "Arrived";
+            }
+
+            // Scatter markers across hub boundary for clean visual separation on canvas map
+            const scatterLat = pickupLocation.latitude + (index * 0.0003 - 0.00015);
+            const scatterLng = pickupLocation.longitude + (index * 0.0003 - 0.00015);
+
+            return {
+              id: passengerId,
+              name: `Rider ${passengerId}`,
+              latitude: scatterLat,
+              longitude: scatterLng,
+              status: statusLabel
+            };
+          });
+          
+          setPassengerStates(parsedPassengers);
+        } else {
+          setPassengerStates([]);
+        }
+
+        setLoading(false);
+      } catch (err) {
+        console.log("Telemetry engine reading fault:", err);
+        if (isMounted) setLoading(false);
+      }
+    }
+
+    pollLiveManifestData();
+    const manifestPollInterval = setInterval(pollLiveManifestData, 2500); // Polling window 2.5 seconds
+
+    return () => {
+      isMounted = false;
+      clearInterval(manifestPollInterval);
+    };
+  }, [rideOfferId]);
+
+  // 3. Trigger Driver Arrival State Switch Event
+  const handleDriverArrival = async () => {
+    setSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ride_offer_id: rideOfferId }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok) {
+        // ✅ Successfully modified ride_offers table status to 'arrived'
+        // Atomic screen swap sequence to bypass the passenger side layout tree
+        navigation.replace("TripInProgress", { 
+          routeId: routeId, 
+          rideOfferId: rideOfferId,
+          rideStatus: "arrived"
+        });
+      } else {
+        Alert.alert("Arrival Sync Failure", result.error || "Could not update state.");
+      }
+    } catch (err) {
+      Alert.alert("Server Connection Error", "Verify network routing path to backend cluster setup.");
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
+  if (loading) {
+    return (
+      <View style={styles.centeredLoadingScreen}>
+        <ActivityIndicator size="large" color="#059669" />
+        <Text style={styles.loadingText}>Syncing Corridor Manifest Matrix...</Text>
+      </View>
+    );
+  }
+
+  const activeCount = passengerStates.length;
+  const pricePerSeat = parseFloat(rideMetrics?.price_per_seat) || 100;
+  const totalEarnings = activeCount * pricePerSeat;
+  const isFullyPacked = activeCount >= 3;
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       
       {/* Header Block */}
       <View style={styles.headerBlock}>
@@ -62,132 +196,191 @@ export default function NavigateToPickupScreen({ navigation }) {
       </View>
 
       {/* Dynamic Optimization Toast Notification */}
- 
-      {thirdPassengerJoined ? (
+      {isFullyPacked && (
         <View style={styles.toastNotification}>
           <Ionicons name="sparkles" size={16} color="#15803D" style={{ marginRight: 8 }} />
           <Text style={styles.toastText}>
-            Passenger 3 joined! Cost per seat dropped to ETB 80 for all riders.
+            Corridor fully packed! Cost per seat dropped to ETB {pricePerSeat} for all riders.
           </Text>
         </View>
-      ) : null}
+      )}
 
-      <ScrollView style={styles.contentBody} showsVerticalScrollIndicator={false}>
-        
-        {/* Nav Dynamic Banner */}
-        <View style={[styles.statusBanner, thirdPassengerJoined && styles.statusBannerSuccess]}>
-          <FontAwesome5 name="route" size={14} color="#FFFFFF" style={{ marginRight: 10 }} />
-          <View style={styles.bannerTextFrame}>
-            <Text style={styles.bannerMainText}>
-              {thirdPassengerJoined ? "Corridor Fully Packed" : "Proceeding with 2 Riders"}
-            </Text>
-            <Text style={styles.bannerSubText}>
-              {thirdPassengerJoined ? "Maximum occupancy achieved" : "Passenger 3 is still pending arrival"}
-            </Text>
-          </View>
-        </View>
+      {/* Canvas Map Tracker */}
+      <View style={styles.mapContainer}>
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={{
+            latitude: 9.0115,       
+            longitude: 38.7945,
+            latitudeDelta: 0.005,  
+            longitudeDelta: 0.005,
+          }}
+          customMapStyle={minimalMapStyle}
+        >
+          {/* Target Hub Station Pin */}
+          <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.hubStationWrapper}>
+              <View style={styles.hubStationPin}>
+                <Ionicons name="flag" size={13} color="#FFFFFF" />
+              </View>
+              <View style={styles.hubStationPulseRing} />
+            </View>
+          </Marker>
 
-        {/* Target Location Metadata */}
-        <View style={styles.destinationHeader}>
-          <Text style={styles.hubTitleText}>Megenagna Blue Taxi Stop</Text>
-          <Text style={styles.hubDistanceText}>180m • 2 min away</Text>
-        </View>
+          {/* Driver Vector Marker */}
+          <Marker coordinate={driverLocation}>
+            <View style={styles.driverCarPin}>
+              <FontAwesome5 name="car-side" size={12} color="#FFFFFF" />
+            </View>
+          </Marker>
 
-        {/* Visual Map Canvas Placeholder */}
-        <View style={styles.mapCanvas}>
-          <View style={styles.routeLine} />
-          <View style={styles.carIndicator}>
-            <FontAwesome5 name="car" size={11} color="#FFFFFF" />
-          </View>
-          <View style={styles.pinIndicator}>
-            <MaterialCommunityIcons name="map-marker" size={22} color="#059669" />
-          </View>
-          <Text style={styles.etaLabel}>ETA to pickup: 2 min (400m)</Text>
-        </View>
+          {/* Live Passenger Vector Nodes linking actual manifest array status */}
+          {passengerStates.map((passenger) => (
+            <Marker key={`marker-${passenger.id}`} coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}>
+              <View style={[styles.passengerTrackingPin, passenger.status === "Arrived" ? { backgroundColor: "#10B981" } : { backgroundColor: "#D97706" }]}>
+                <MaterialCommunityIcons 
+                  name={passenger.status === "Arrived" ? "account-check" : "account-clock"} 
+                  size={11} 
+                  color="#FFFFFF" 
+                />
+              </View>
+            </Marker>
+          ))}
+        </MapView>
+      </View>
 
-        {/* Live Ledger Price breakdown */}
-        <Text style={styles.sectionHeadingLabel}>Corridor Ledger Details</Text>
-        <View style={styles.ledgerCard}>
-          <View style={styles.ledgerRow}>
-            <Text style={styles.ledgerLabel}>Active Manifest Count</Text>
-            <Text style={styles.ledgerValue}>{passengerCount} / 3 Riders</Text>
-          </View>
-          <View style={styles.horizontalDivider} />
+      {/* Sliding Ledger & Co-Rider Status Sheet */}
+      <View style={styles.slidingPanelDrawer}>
+        <ScrollView showsVerticalScrollIndicator={false}>
           
-          <View style={styles.ledgerRow}>
-            <Text style={styles.ledgerLabel}>Passenger Seat Rate</Text>
-            <View style={{ alignItems: 'end' }}>
-              <Text style={[styles.ledgerValue, thirdPassengerJoined && styles.priceDroppedText]}>
-                ETB {pricePerSeat}
+          {/* Dynamic Progress Indicator Bar */}
+          <View style={[styles.statusBanner, isFullyPacked && styles.statusBannerSuccess]}>
+            <FontAwesome5 name="route" size={13} color="#FFFFFF" style={{ marginRight: 10 }} />
+            <View style={styles.bannerTextFrame}>
+              <Text style={styles.bannerMainText}>
+                {isFullyPacked ? "Corridor Fully Packed" : `Proceeding with ${activeCount} Riders`}
               </Text>
-              {!thirdPassengerJoined && <Text style={styles.rateSubHint}>Premium unpooled tier</Text>}
+              <Text style={styles.bannerSubText}>
+                Awaiting convergence at terminal hub node
+              </Text>
             </View>
           </View>
-          <View style={styles.horizontalDivider} />
 
-          <View style={styles.ledgerRow}>
-            <Text style={styles.ledgerLabel}>Total Driver Yield</Text>
-            <Text style={styles.driverGainValue}>ETB {totalEarnings}</Text>
+          {/* Co-Rider Acceptance Matrix */}
+          <Text style={styles.sectionHeadingLabel}>Co-Rider Acceptance Matrix</Text>
+          <View style={styles.manifestContainer}>
+            {passengerStates.length === 0 ? (
+              <Text style={styles.emptyManifestText}>Awaiting corridor user group configurations...</Text>
+            ) : (
+              passengerStates.map((passenger) => (
+                <View key={`rider-${passenger.id}`} style={styles.passengerRow}>
+                  <View style={styles.passengerIdentity}>
+                    <View style={styles.avatarCircle}>
+                      <Ionicons name="person" size={13} color="#4B5563" />
+                    </View>
+                    <Text style={styles.passengerName}>{passenger.name}</Text>
+                  </View>
+
+                  {passenger.status === "Arrived" ? (
+                    <View style={styles.statusArrivedBadge}>
+                      <Ionicons name="checkmark-circle" size={14} color="#10B981" style={{ marginRight: 4 }} />
+                      <Text style={styles.statusArrivedText}>ARRIVED</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.statusAcceptedBadge}>
+                      <MaterialCommunityIcons name="account-arrow-right" size={14} color="#D97706" style={{ marginRight: 4 }} />
+                      <Text style={styles.statusAcceptedText}>ACCEPTED</Text>
+                    </View>
+                  )}
+                </View>
+              ))
+            )}
           </View>
-        </View>
 
-      </ScrollView>
+          {/* Live Earnings Metric Card */}
+          <Text style={styles.sectionHeadingLabel}>Corridor Ledger Summary</Text>
+          <View style={styles.ledgerCard}>
+            <View style={styles.ledgerRow}>
+              <Text style={styles.ledgerLabel}>Passenger Seat Rate</Text>
+              <Text style={styles.ledgerValue}>ETB {pricePerSeat}</Text>
+            </View>
+            <View style={styles.horizontalDivider} />
+            <View style={styles.ledgerRow}>
+              <Text style={styles.ledgerLabel}>Est. Total Revenue</Text>
+              <Text style={styles.driverGainValue}>ETB {totalEarnings}</Text>
+            </View>
+          </View>
+          
+        </ScrollView>
+      </View>
 
-      {/* Persistent Button Actions */}
-     // Change this target inside src/screens/driver/NavigateToPickupScreen.js:
-        <View style={styles.footerContainer}>
+      {/* Persistent Call-to-Action Footer Button */}
+      <View style={styles.footerContainer}>
         <TouchableOpacity 
-            style={styles.actionButton}
+            style={[styles.actionButton, submitting && { opacity: 0.6 }]}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate("WaitingForPassengers")} // Direct skip straight to Screen 8 tracking list
+            disabled={submitting}
+            onPress={handleDriverArrival}
         >
-            <Ionicons name="people" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.actionButtonText}>ARRIVED AT PICKUP POINT</Text>
+            {submitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="location-sharp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.actionButtonText}>ARRIVED AT PICKUP POINT</Text>
+              </>
+            )}
         </TouchableOpacity>
-        </View>
+      </View>
 
     </SafeAreaView>
   );
 }
 
+const minimalMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { featureType: "poi", stylers: [{ visibility: "off" }] }
+];
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
-  headerBlock: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB" },
+  centeredLoadingScreen: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F9FAFB" },
+  loadingText: { marginTop: 12, fontSize: 13, color: "#4B5563", fontWeight: "600" },
+  headerBlock: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB", zIndex: 10 },
   headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
   countdownPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#FEE2E2", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   countdownPillText: { color: "#DC2626", fontSize: 12, fontWeight: "700", fontFamily: "monospace" },
-  
-  toastNotification: { flexDirection: "row", backgroundColor: "#DCFCE7", padding: 12, marginHorizontal: 16, marginTop: 12, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#BBF7D0" },
+  toastNotification: { flexDirection: "row", backgroundColor: "#DCFCE7", padding: 12, marginHorizontal: 16, marginTop: 12, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#BBF7D0", zIndex: 10 },
   toastText: { flex: 1, fontSize: 13, color: "#15803D" },
-  
-  contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  statusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#3B82F6", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, marginBottom: 16 },
+  mapContainer: { flex: 1, minHeight: 220 },
+  hubStationWrapper: { justifyContent: "center", alignItems: "center" },
+  hubStationPin: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", zIndex: 5 },
+  hubStationPulseRing: { position: "absolute", width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(16, 185, 129, 0.2)" },
+  driverCarPin: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
+  passengerTrackingPin: { width: 22, height: 22, borderRadius: 11, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#FFFFFF" },
+  slidingPanelDrawer: { flex: 1, backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 16, borderWidth: 1, borderColor: "#E5E7EB" },
+  statusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#3B82F6", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
   statusBannerSuccess: { backgroundColor: "#059669" },
   bannerTextFrame: { flex: 1 },
   bannerMainText: { fontSize: 14, fontWeight: "700", color: "#FFFFFF" },
-  bannerSubText: { fontSize: 11, color: "#E0F2FE", marginTop: 1 },
-  
-  destinationHeader: { marginBottom: 16, marginLeft: 2 },
-  hubTitleText: { fontSize: 18, fontWeight: "800", color: "#111827" },
-  hubDistanceText: { fontSize: 13, color: "#6B7280", marginTop: 2 },
-  
-  mapCanvas: { height: 150, backgroundColor: "#E5E7EB", borderRadius: 12, position: "relative", justifyContent: "center", alignItems: "center", marginBottom: 24, overflow: "hidden" },
-  routeLine: { width: "60%", height: 4, backgroundColor: "#3B82F6", borderRadius: 2 },
-  carIndicator: { width: 22, height: 22, borderRadius: 11, backgroundColor: "#2563EB", justifyContent: "center", alignItems: "center", position: "absolute", left: "25%" },
-  pinIndicator: { position: "absolute", right: "25%" },
-  etaLabel: { position: "absolute", bottom: 10, backgroundColor: "#FFFFFF", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, fontSize: 11, fontWeight: "600", color: "#111827" },
-  
   sectionHeadingLabel: { fontSize: 11, fontWeight: "700", color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, marginLeft: 2 },
-  ledgerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, marginBottom: 24 },
-  ledgerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 14 },
+  manifestContainer: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, paddingHorizontal: 14, marginBottom: 16 },
+  emptyManifestText: { paddingVertical: 16, textAlign: "center", color: "#9CA3AF", fontSize: 13 },
+  passengerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, borderColor: "#F3F4F6" },
+  passengerIdentity: { flexDirection: "row", alignItems: "center" },
+  avatarCircle: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center", marginRight: 10 },
+  passengerName: { fontSize: 14, color: "#374151", fontWeight: "600" },
+  statusArrivedBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  statusArrivedText: { color: "#10B981", fontSize: 11, fontWeight: "700" },
+  statusAcceptedBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  statusAcceptedText: { color: "#D97706", fontSize: 11, fontWeight: "700" },
+  ledgerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 16 },
   ledgerLabel: { fontSize: 13, color: "#4B5563", fontWeight: "500" },
   ledgerValue: { fontSize: 14, fontWeight: "700", color: "#111827" },
-  priceDroppedText: { color: "#10B981" },
-  rateSubHint: { fontSize: 10, color: "#D97706", fontWeight: "600", marginTop: 1 },
-  driverGainValue: { fontSize: 16, fontWeight: "800", color: "#059669" },
+  driverGainValue: { fontSize: 15, fontWeight: "800", color: "#059669" },
   horizontalDivider: { height: 1, backgroundColor: "#F3F4F6" },
-  
-  footerContainer: { paddingHorizontal: 16, paddingVertical: 16, backgroundColor: "#FFFFFF", borderTopWidth: 1, borderColor: "#E5E7EB" },
-  actionButton: { backgroundColor: "#059669", borderRadius: 10, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  footerContainer: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderTopWidth: 1, borderColor: "#E5E7EB" },
+  actionButton: { backgroundColor: "#059669", borderRadius: 10, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700", letterSpacing: 0.4 },
 });

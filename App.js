@@ -70,8 +70,8 @@ export default function App() {
         <Stack.Screen name="WaitingForAcceptance" component={WaitingForAcceptanceScreen} />
         <Stack.Screen name="NavigateToPickup" component={NavigateToPickupScreen} />
         <Stack.Screen name="WaitingForPassengers" component={WaitingForPassengersScreen} />
-        <Stack.Screen name="TripInProgress" component={TripInProgressScreen} options={{ headerShown: false }}/>
-          <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
+        <Stack.Screen name="TripInProgress" component={TripInProgressScreen}/>
+        <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
     </Stack.Navigator>
     </NavigationContainer>
   );

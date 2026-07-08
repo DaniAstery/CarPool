@@ -55,7 +55,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
     async function streamLiveTrackingData() {
       try {
-        const res = await fetch(`http://192.168.236.52:5000/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
+        const res = await fetch(`http://192.168.253.52:5000/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
         
         if (!res.ok) {
           setLoading(false);
@@ -179,7 +179,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
     setUserArrived(true); 
 
     try {
-      await fetch("http://192.168.236.52:5000/api/rides/signal-arrival", {
+      await fetch("http://192.168.253.52:5000/api/rides/signal-arrival", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
