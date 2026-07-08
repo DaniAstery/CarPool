@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
@@ -18,6 +18,8 @@ import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-ico
 const API_BASE_URL = "http://192.168.253.52:5000/api";
 
 export default function NavigateToPickupScreen({ navigation, route }) {
+  const mapRef = useRef(null);
+
   // Extract parameters passed down from previous stack navigation context
   const routeId = route?.params?.routeId || route?.params?.route_id || "1";
   const rideOfferId = route?.params?.rideId || route?.params?.ride_offer_id || 1;
@@ -26,6 +28,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   const [submitting, setSubmitting] = useState(false);
   const [passengerStates, setPassengerStates] = useState([]);
   const [rideMetrics, setRideMetrics] = useState(null);
+  const [currentRideStatus, setCurrentRideStatus] = useState("pending");
   
   // Default coordinates centered on Megenagna Blue Taxi Stop area
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
@@ -45,22 +48,13 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     ).start();
   }, [pulseAnim]);
 
-  // 1. Ticking Countdown Clock Loop
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // 2. Real-Time Telemetry Polling Loop: Monitors passenger status changes
+  // Real-Time Telemetry Polling Loop: Monitors passenger status changes and ride offer transitions
   useEffect(() => {
     console.log(`📡 Driver Telemetry streaming active for Ride Offer ID: [${rideOfferId}]`);
     let isMounted = true;
 
     async function pollLiveManifestData() {
       try {
-        // Fetch raw response package from your endpoint structure
         const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${rideOfferId}`);
         
         if (!res.ok) {
@@ -71,23 +65,33 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         const data = await res.json();
         if (!data || !isMounted) return;
 
-        // Save backend metadata metrics object locally
         setRideMetrics(data);
-
-        if (data.driverLocation) {
-          setDriverLocation({
-            latitude: parseFloat(data.driverLocation.latitude),
-            longitude: parseFloat(data.driverLocation.longitude)
-          });
+        
+        // Track the current high-level status of the offer directly from the backend
+        if (data.rideStatus) {
+          setCurrentRideStatus(data.rideStatus.toLowerCase());
         }
 
-        // 🎯 CRITICAL SYNC FIX: Map properties matching endpoint JSON signature (userId, status)
+        if (data.driverLocation) {
+          const newDriverLoc = {
+            latitude: parseFloat(data.driverLocation.latitude),
+            longitude: parseFloat(data.driverLocation.longitude)
+          };
+          setDriverLocation(newDriverLoc);
+
+          // Zoom map to max bounding viewport accommodating driver and destination positions
+          if (mapRef.current) {
+            mapRef.current.fitToCoordinates([newDriverLoc, pickupLocation], {
+              edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+              animated: true,
+            });
+          }
+        }
+
+        // Map properties matching endpoint JSON signature (userId, status)
         if (data.passengers && Array.isArray(data.passengers)) {
           const parsedPassengers = data.passengers.map((p, index) => {
-            // Fall back cleanly to allow parsing errors to pass without rendering blank states
             const passengerId = parseInt(p.userId || p.user_id || p.id, 10);
-            
-            // Normalize case variations ('Accepted', 'accepted', 'Arrived', 'arrived')
             const rawStatus = (p.status || "accepted").toLowerCase();
             let statusLabel = "Accepted";
             
@@ -95,7 +99,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
               statusLabel = "Arrived";
             }
 
-            // Scatter markers across hub boundary for clean visual separation on canvas map
             const scatterLat = pickupLocation.latitude + (index * 0.0003 - 0.00015);
             const scatterLng = pickupLocation.longitude + (index * 0.0003 - 0.00015);
 
@@ -121,7 +124,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     }
 
     pollLiveManifestData();
-    const manifestPollInterval = setInterval(pollLiveManifestData, 2500); // Polling window 2.5 seconds
+    const manifestPollInterval = setInterval(pollLiveManifestData, 2500); // Polling frame window
 
     return () => {
       isMounted = false;
@@ -129,8 +132,19 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     };
   }, [rideOfferId]);
 
-  // 3. Trigger Driver Arrival State Switch Event
-  const handleDriverArrival = async () => {
+  // 🎯 Action Flow Orchestration Button (Three-Step Progression Logic)
+  const handleWorkflowAction = async () => {
+    // STEP 2: If status is already 'arrived' in DB, click routes driver smoothly to TripInProgress Screen
+    if (currentRideStatus === "arrived") {
+      navigation.replace("TripInProgress", { 
+        routeId: routeId, 
+        rideOfferId: rideOfferId,
+        rideStatus: "inprogress"
+      });
+      return;
+    }
+
+    // STEP 1: First click fires network handshake to change ride status to 'arrived' 
     setSubmitting(true);
     try {
       const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
@@ -142,13 +156,8 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       const result = await response.json();
 
       if (response.ok) {
-        // ✅ Successfully modified ride_offers table status to 'arrived'
-        // Atomic screen swap sequence to bypass the passenger side layout tree
-        navigation.replace("TripInProgressScreen", { 
-          routeId: routeId, 
-          rideOfferId: rideOfferId,
-          rideStatus: "arrived"
-        });
+        // Optimistically flip the label to "START TRIP" immediately
+        setCurrentRideStatus("arrived");
       } else {
         Alert.alert("Arrival Sync Failure", result.error || "Could not update state.");
       }
@@ -208,6 +217,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       {/* Canvas Map Tracker */}
       <View style={styles.mapContainer}>
         <MapView
+          ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
@@ -235,7 +245,15 @@ export default function NavigateToPickupScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          {/* Live Passenger Vector Nodes linking actual manifest array status */}
+          {/* 🎯 REDLINE PATH MAPPING POLYLINE */}
+          <Polyline
+            coordinates={[driverLocation, pickupLocation]}
+            strokeColor="#EF4444"
+            strokeWidth={4}
+            geodesic={true}
+          />
+
+          {/* Live Passenger Vector Nodes */}
           {passengerStates.map((passenger) => (
             <Marker key={`marker-${passenger.id}`} coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}>
               <View style={[styles.passengerTrackingPin, passenger.status === "Arrived" ? { backgroundColor: "#10B981" } : { backgroundColor: "#D97706" }]}>
@@ -318,17 +336,28 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       {/* Persistent Call-to-Action Footer Button */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
-            style={[styles.actionButton, submitting && { opacity: 0.6 }]}
+            style={[
+              styles.actionButton, 
+              submitting && { opacity: 0.6 }, 
+              currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }
+            ]}
             activeOpacity={0.8}
             disabled={submitting}
-            onPress={handleDriverArrival}
+            onPress={handleWorkflowAction}
         >
             {submitting ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons name="location-sharp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.actionButtonText}>ARRIVED AT PICKUP POINT</Text>
+                <Ionicons 
+                  name={currentRideStatus === "arrived" ? "play-sharp" : "location-sharp"} 
+                  size={18} 
+                  color="#FFFFFF" 
+                  style={{ marginRight: 8 }} 
+                />
+                <Text style={styles.actionButtonText}>
+                  {currentRideStatus === "arrived" ? "START TRIP" : "ARRIVED AT PICKUP POINT"}
+                </Text>
               </>
             )}
         </TouchableOpacity>
