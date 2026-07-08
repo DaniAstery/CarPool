@@ -43,44 +43,66 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
 
   // 🚦 NAVIGATION SESSION GATEKEEPER LOCK
-  useEffect(() => {
-    async function checkActiveDriverSession() {
-      try {
-        // Uses the correctly declared local tracking driver ID variable
-        const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
-        if (!res.ok) return;
+useEffect(() => {
+  async function checkActiveDriverSession() {
+    try {
+      // 🎯 Ensure your fetch path explicitly targets your driver session endpoint configuration
+      const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
+      if (!res.ok) return;
 
-        const data = await res.json();
+      const data = await res.json();
 
-        // 🎯 TARGET ACTIVE STATE ROUTING MATRIX
-        if (data.hasActiveSession) {
-          switch (data.status) {
-            case "accepted":
-            case "arrived":
-              navigation.replace("NavigateToPickup", {
-                routeId: data.routeId,
-                rideOfferId: data.rideOfferId,
-                driverId: currentDriverId
-              });
-              break;
-            case "ontrip":
-              navigation.replace("InTripScreen", {
-                routeId: data.routeId,
-                rideOfferId: data.rideOfferId,
-                driverId: currentDriverId
-              });
-              break;
-            default:
-              break;
-          }
+      // 🔄 DYNAMIC ACTIVE STATE RESUMPTION MATRIX
+      if (data.hasActiveSession) {
+        const normalizedStatus = (data.status || "").toLowerCase();
+
+        switch (normalizedStatus) {
+          case "pending":
+            console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room for Offer #${data.rideOfferId}`);
+            navigation.replace("WaitingForRidersScreen", {
+              routeId: data.routeId,
+              rideOfferId: data.rideOfferId,
+              driverId: currentDriverId
+            });
+            break;
+
+          case "accepted":
+          case "arrived":
+            console.log(`🗺️ State recovery caught [${normalizedStatus}]. Routing to Pickup Navigation HUD.`);
+            navigation.replace("NavigateToPickup", {
+              routeId: data.routeId,
+              rideOfferId: data.rideOfferId,
+              driverId: currentDriverId
+            });
+            break;
+
+          case "inprogress":
+          case "ontrip":
+            console.log(`🚗 State recovery caught [${normalizedStatus}]. Routing to Live Transit HUD.`);
+            // NOTE: Double-check your stack navigator screen naming. 
+            // If you are using the full template built earlier, change this to "TripInProgress"
+            navigation.replace("TripInProgress", {
+              routeId: data.routeId,
+              rideOfferId: data.rideOfferId,
+              driverId: currentDriverId
+            });
+            break;
+
+          default:
+            console.log(`⚠️ Gatekeeper caught unhandled status vector [${data.status}]. Bypassing auto-route.`);
+            break;
         }
-      } catch (err) {
-        console.log("Failed to verify driver dispatch gatekeeper status:", err);
       }
+    } catch (err) {
+      console.log("Failed to verify driver dispatch gatekeeper status:", err);
     }
+  }
 
+  if (currentDriverId) {
     checkActiveDriverSession();
-  }, [currentDriverId]);
+  }
+}, [currentDriverId]);
+
 
 
   // Trigger hub search when driver types
