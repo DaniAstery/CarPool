@@ -144,7 +144,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       if (response.ok) {
         // ✅ Successfully modified ride_offers table status to 'arrived'
         // Atomic screen swap sequence to bypass the passenger side layout tree
-        navigation.replace("TripInProgress", { 
+        navigation.replace("TripInProgressScreen", { 
           routeId: routeId, 
           rideOfferId: rideOfferId,
           rideStatus: "arrived"
