@@ -16,7 +16,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 const API_URL = "http://192.168.204.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
-  // Safe authentication fallback
+  // Safe authentication fallback (Replace with your actual Global Context Hooks)
   const currentAuthenticatedUser = route?.params?.user || { id: 1, activeVehicleId: null };
   const currentDriverId = currentAuthenticatedUser?.id || 1;
 
@@ -43,69 +43,81 @@ export default function CreateCorridorScreen({ route, navigation }) {
   useEffect(() => {
     async function checkActiveDriverSession() {
       try {
+        console.log(`📡 Fetching driver session from: ${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
         const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.log(`⚠️ Server responded with status: ${res.status}`);
+          return;
+        }
 
         const data = await res.json();
+        console.log("📦 Active Session Payload Received:", data);
 
-        // 🔄 DYNAMIC ACTIVE STATE RESUMPTION MATRIX
-        if (data.hasActiveSession) {
+        if (data && data.hasActiveSession) {
+          // Normalize case and spacing to align perfectly with backend & DB variants
           const normalizedStatus = (data.status || "").toLowerCase().trim();
-          console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
+          
+          // Fallback extraction parameters strategy to protect against snake_case / camelCase mixing
+          const targetRouteId = data.routeId || data.route_id;
+          const targetRideId = data.rideOfferId || data.ride_offer_id || data.id;
+
+          console.log(`🗺️ Gatekeeper routing evaluation: [${normalizedStatus}] | Target Ride ID: ${targetRideId}`);
 
           switch (normalizedStatus) {
             case "pending":
-              console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room.`);
+              console.log(`⏳ State recovery routing to [WaitingForRiders]`);
               navigation.replace("WaitingForRiders", {
-                routeId: data.routeId,
-                rideOfferId: data.rideOfferId,
-                ride_offer_id: data.rideOfferId,
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
                 driverId: currentDriverId
               });
               break;
 
             case "accepted":
             case "arrived":
-              console.log(`🗺️ State recovery caught [${normalizedStatus}]. Routing to Pickup Navigation HUD.`);
+              console.log(`🗺️ State recovery routing to [NavigateToPickup]`);
               navigation.replace("NavigateToPickup", {
-                routeId: data.routeId,
-                rideId: data.rideOfferId,       
-                rideOfferId: data.rideOfferId,  
-                ride_offer_id: data.rideOfferId, 
+                routeId: targetRouteId,
+                rideId: targetRideId,       
+                rideOfferId: targetRideId,  
+                ride_offer_id: targetRideId, 
                 driverId: currentDriverId
               });
               break;
 
-            // 🎯 FIXED ALL CASING VARIATIONS FOR LIVE TRANSIT CONSTRAINTS
+            // 🎯 UPGRADE FIX: Added 'intransit' to securely trap raw camelCase 'inTransit' from Postgres
             case "inprogress":
-            case "intransit":
+            case "inTransit":  
             case "intrip":
             case "in_transit":
-              console.log(`🚗 State recovery caught [${normalizedStatus}]. Routing to Live Transit HUD.`);
+              console.log(`🚗 State recovery routing to [TripInProgress]`);
               navigation.replace("TripInProgress", {
-                routeId: data.routeId,
-                rideOfferId: data.rideOfferId,
-                ride_offer_id: data.rideOfferId,
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
                 driverId: currentDriverId
               });
               break;
 
             case "completed":
-              console.log(`💰 State recovery caught [completed]. Routing to Trips Earning Summary.`);
+              console.log(`💰 State recovery routing to [TripEarningsSummary]`);
               navigation.replace("TripEarningsSummary", {
-                rideOfferId: data.rideOfferId,
-                ride_offer_id: data.rideOfferId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
                 driverId: currentDriverId
               });
               break;
 
             default:
-              console.log(`⚠️ Gatekeeper caught unhandled status vector [${data.status}]. Bypassing auto-route.`);
+              console.log(`⚠️ Gatekeeper bypass. Unhandled status vector: [${data.status}]`);
               break;
           }
+        } else {
+          console.log("No active session found for driver. Allowing manual configuration.");
         }
       } catch (err) {
-        console.log("Failed to verify driver dispatch gatekeeper status:", err);
+        console.log("❌ Failed to verify driver dispatch gatekeeper status:", err);
       }
     }
 
@@ -328,7 +340,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
           {isPublishing ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Text style={styles.goOnlineActionText}>GO ONLINE </Text>
+            <Text style={styles.goOnlineActionText}>GO ONLINE</Text>
           )}
         </TouchableOpacity>
                 
