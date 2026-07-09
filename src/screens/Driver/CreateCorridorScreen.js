@@ -12,14 +12,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
-// 🎯 FIX: Declare the missing base API URL for your Corridor system infrastructure
+// 🎯 BASE ENDPOINT CONFIGURATION
 const API_URL = "http://192.168.204.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
-  // Safe authentication fallback (Replace with your actual Global Context Hooks)
+  // Safe authentication fallback
   const currentAuthenticatedUser = route?.params?.user || { id: 1, activeVehicleId: null };
-
-  // 🎯 FIX: Safely derive the missing driverId from the authenticated profile context
   const currentDriverId = currentAuthenticatedUser?.id || 1;
 
   const [capacity, setCapacity] = useState(4);
@@ -35,87 +33,86 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const [selectedHubName, setSelectedHubName] = useState(null);
   const [isSearchingHubs, setIsSearchingHubs] = useState(false);
   
-  // Lists fetched from your backend endpoints
+  // Lists fetched from backend
   const [passengerRequests, setPassengerRequests] = useState([]);
   const [predefinedCorridors, setPredefinedCorridors] = useState([]);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
 
+  // 🚦 UPGRADED NAVIGATION SESSION GATEKEEPER LOCK
+  useEffect(() => {
+    async function checkActiveDriverSession() {
+      try {
+        const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
+        if (!res.ok) return;
 
-  // 🚦 NAVIGATION SESSION GATEKEEPER LOCK
-useEffect(() => {
-  async function checkActiveDriverSession() {
-    try {
-      const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
-      if (!res.ok) return;
+        const data = await res.json();
 
-      const data = await res.json();
+        // 🔄 DYNAMIC ACTIVE STATE RESUMPTION MATRIX
+        if (data.hasActiveSession) {
+          const normalizedStatus = (data.status || "").toLowerCase().trim();
+          console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
 
-      // 🔄 DYNAMIC ACTIVE STATE RESUMPTION MATRIX
-      if (data.hasActiveSession) {
-        // Trim and lowercase to align with your Postgres check constraints safely
-        const normalizedStatus = (data.status || "").toLowerCase().trim();
-        console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
+          switch (normalizedStatus) {
+            case "pending":
+              console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room.`);
+              navigation.replace("WaitingForRidersScreen", {
+                routeId: data.routeId,
+                rideOfferId: data.rideOfferId,
+                ride_offer_id: data.rideOfferId,
+                driverId: currentDriverId
+              });
+              break;
 
-        switch (normalizedStatus) {
-          case "pending":
-            console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room.`);
-            navigation.replace("WaitingForRidersScreen", {
-              routeId: data.routeId,
-              rideOfferId: data.rideOfferId, // Keeping for compatibility
-              ride_offer_id: data.rideOfferId, // Syncing parameter formatting
-              driverId: currentDriverId
-            });
-            break;
+            case "accepted":
+            case "arrived":
+              console.log(`🗺️ State recovery caught [${normalizedStatus}]. Routing to Pickup Navigation HUD.`);
+              navigation.replace("NavigateToPickup", {
+                routeId: data.routeId,
+                rideId: data.rideOfferId,       
+                rideOfferId: data.rideOfferId,  
+                ride_offer_id: data.rideOfferId, 
+                driverId: currentDriverId
+              });
+              break;
 
-          case "accepted":
-          case "arrived":
-            console.log(`🗺️ State recovery caught [${normalizedStatus}]. Routing to Pickup Navigation HUD.`);
-            navigation.replace("NavigateToPickup", {
-              routeId: data.routeId,
-              rideId: data.rideOfferId,       // Fixed lookup map parameter target
-              rideOfferId: data.rideOfferId,  // Backup parameter slot
-              ride_offer_id: data.rideOfferId, // Matches standard screen parsing keys
-              driverId: currentDriverId
-            });
-            break;
+            // 🎯 FIXED ALL CASING VARIATIONS FOR LIVE TRANSIT CONSTRAINTS
+            case "inprogress":
+            case "intransit":
+            case "intrip":
+            case "in_transit":
+              console.log(`🚗 State recovery caught [${normalizedStatus}]. Routing to Live Transit HUD.`);
+              navigation.replace("TripInProgress", {
+                routeId: data.routeId,
+                rideOfferId: data.rideOfferId,
+                ride_offer_id: data.rideOfferId,
+                driverId: currentDriverId
+              });
+              break;
 
-          // 🎯 UPGRADE: Catching all variations of the active transit phase statuses
+            case "completed":
+              console.log(`💰 State recovery caught [completed]. Routing to Trips Earning Summary.`);
+              navigation.replace("TripEarningsSummary", {
+                rideOfferId: data.rideOfferId,
+                ride_offer_id: data.rideOfferId,
+                driverId: currentDriverId
+              });
+              break;
 
-          case "in_transit":
-            console.log(`🚗 State recovery caught [${normalizedStatus}]. Routing to Live Transit HUD.`);
-            navigation.replace("TripInProgress", {
-              routeId: data.routeId,
-              rideOfferId: data.rideOfferId,
-              ride_offer_id: data.rideOfferId,
-              driverId: currentDriverId
-            });
-            break;
-
-          // 🎯 UPGRADE: Catching completed rides to drop drivers directly on their ledger sheet
-          case "completed":
-            console.log(`💰 State recovery caught [completed]. Routing to Trips Earning Summary.`);
-            navigation.replace("TripEarningsSummary", {
-              rideOfferId: data.rideOfferId,
-              ride_offer_id: data.rideOfferId,
-              driverId: currentDriverId
-            });
-            break;
-
-          default:
-            console.log(`⚠️ Gatekeeper caught unhandled status vector [${data.status}]. Bypassing auto-route.`);
-            break;
+            default:
+              console.log(`⚠️ Gatekeeper caught unhandled status vector [${data.status}]. Bypassing auto-route.`);
+              break;
+          }
         }
+      } catch (err) {
+        console.log("Failed to verify driver dispatch gatekeeper status:", err);
       }
-    } catch (err) {
-      console.log("Failed to verify driver dispatch gatekeeper status:", err);
     }
-  }
 
-  if (currentDriverId) {
-    checkActiveDriverSession();
-  }
-}, [currentDriverId]);
+    if (currentDriverId) {
+      checkActiveDriverSession();
+    }
+  }, [currentDriverId]);
 
   // Trigger hub search when driver types
   useEffect(() => {
@@ -126,7 +123,6 @@ useEffect(() => {
     }
   }, [hubSearchTerm]);
 
-  // 1. Core Hub Search using your /api/hubs/search/:term endpoint
   const searchStartingHubs = async () => {
     setIsSearchingHubs(true);
     try {
@@ -140,20 +136,17 @@ useEffect(() => {
     }
   };
 
-  // 2. Hub Selection -> Fetches valid corridors using your /api/routes/from/:pickupHub endpoint
   const handleSelectHub = async (hubName) => {
     setSelectedHubName(hubName);
-    setHubSearchTerm(""); // Clear search bar
+    setHubSearchTerm(""); 
     setFoundHubs([]);
     setLoadingRoutes(true);
     
     try {
-      // Fetch matching fixed corridors
       const routeRes = await fetch(`${API_URL}/api/routes/from/${encodeURIComponent(hubName)}`);
       const routeData = await routeRes.json();
       setPredefinedCorridors(Array.isArray(routeData) ? routeData : []);
 
-      // Pulling live unserved demand straight from route_pool mappings
       const reqRes = await fetch(`${API_URL}/api/corridors/passenger-requests`);
       const reqData = await reqRes.json();
       
@@ -191,7 +184,7 @@ useEffect(() => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          driver_id: currentAuthenticatedUser.id,
+          driver_id: currentDriverId,
           vehicle_id: currentAuthenticatedUser.activeVehicleId, 
           route_id: selectedRouteId,
           total_seats: capacity,
@@ -238,8 +231,6 @@ useEffect(() => {
       </View>
 
       <ScrollView style={styles.contentBody} keyboardShouldPersistTaps="handled">
-        
-        {/* 🔍 STEP 1: SELECT STARTING HUB */}
         <Text style={styles.sectionHeading}>📍 Where are you starting from?</Text>
         <View style={styles.searchSection}>
           <Ionicons name="search" size={18} color="#6B7280" style={styles.searchIcon} />
@@ -252,7 +243,6 @@ useEffect(() => {
           />
         </View>
 
-        {/* Hub Search Results Dropdown */}
         {foundHubs.length > 0 && (
           <View style={styles.searchResultsDropdown}>
             {foundHubs.map((hub) => (
@@ -274,7 +264,6 @@ useEffect(() => {
           </View>
         )}
 
-        {/* 🔏 SELECTED TARGET PREVIEW */}
         <Text style={[styles.sectionHeading, { marginTop: 15 }]}>Active Ride Target</Text>
         <View style={styles.corridorRouteContainer}>
           <Text style={styles.locationValueText}>From: {routeDisplay.start}</Text>
@@ -282,7 +271,6 @@ useEffect(() => {
           <Text style={styles.locationValueText}>To: {routeDisplay.end}</Text>
         </View>
 
-        {/* 🗺️ STEP 2: AVAILABLE VALID CORRIDORS LIST */}
         <Text style={styles.sectionHeading}>🗺️ Available Corridors from {selectedHubName || "Selected Hub"}</Text>
         
         {loadingRoutes ? (
@@ -307,7 +295,6 @@ useEffect(() => {
           ))
         )}
 
-        {/* Dynamic Passenger Waiting List Manifest Indicator */}
         {passengerRequests.length > 0 && (
           <View style={styles.demandIndicatorBadge}>
             <Ionicons name="people" size={14} color="#0369a1" />
@@ -317,7 +304,6 @@ useEffect(() => {
           </View>
         )}
 
-        {/* 🛠️ STEP 3: CONSTRAINTS & GO LIVE */}
         <Text style={[styles.sectionHeading, { marginTop: 15 }]}>Capacity Settings</Text>
         <View style={styles.detailsContainerCard}>
           <View style={styles.detailRowItem}>
