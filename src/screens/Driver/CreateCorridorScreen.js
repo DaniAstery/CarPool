@@ -40,80 +40,89 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const [isPublishing, setIsPublishing] = useState(false);
 
   // 🚦 UPGRADED NAVIGATION SESSION GATEKEEPER LOCK
- // Inside CreateCorridorScreen.js
-useEffect(() => {
-  async function checkActiveDriverSession() {
-    try {
-      // 🎯 Target the specific ride offer ID target you want verified
-      const targetTrackingId = route?.params?.rideOfferId || 1; 
-
-      console.log(`📡 Fetching status for Ride ID from: ${API_URL}/api/rides/driver-active-session/${targetTrackingId}`);
-      const res = await fetch(`${API_URL}/api/rides/driver-active-session/${targetTrackingId}`);
-      if (!res.ok) return;
-
-      const data = await res.json();
-      console.log("📦 Active Session Payload Received:", data);
-
-      if (data && data.hasActiveSession) {
-        const normalizedStatus = (data.status || "").toLowerCase().trim();
-        const targetRouteId = data.routeId || data.route_id;
-        const targetRideId = data.rideOfferId || data.ride_offer_id || data.id;
-
-        switch (normalizedStatus) {
-          case "pending":
-            navigation.replace("WaitingForRiders", {
-              routeId: targetRouteId,
-              rideOfferId: targetRideId,
-              ride_offer_id: targetRideId,
-              driverId: data.driverId
-            });
-            break;
-
-          case "accepted":
-          case "arrived":
-            navigation.replace("NavigateToPickup", {
-              routeId: targetRouteId,
-              rideId: targetRideId,       
-              rideOfferId: targetRideId,  
-              ride_offer_id: targetRideId, 
-              driverId: data.driverId
-            });
-            break;
-
-          case "inprogress":
-          case "intransit":  
-          case "intrip":
-          case "in_transit":
-            console.log(`🚗 Matching state code caught [intransit]. Routing directly to HUD.`);
-            navigation.replace("TripInProgress", {
-              routeId: targetRouteId,
-              rideOfferId: targetRideId,
-              ride_offer_id: targetRideId,
-              driverId: data.driverId
-            });
-            break;
-
-          case "completed":
-            navigation.replace("TripEarningsSummary", {
-              rideOfferId: targetRideId,
-              ride_offer_id: targetRideId,
-              driverId: data.driverId
-            });
-            break;
-
-          default:
-            console.log(`⚠️ Gatekeeper bypass: [${data.status}]`);
-            break;
+  useEffect(() => {
+    async function checkActiveDriverSession() {
+      try {
+        // 🎯 FIX: Query the runtime profile status using currentDriverId 
+        console.log(`📡 Fetching status for Driver from: ${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
+        const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
+        if (!res.ok) {
+          console.log(`⚠️ Network check response failed with status level: ${res.status}`);
+          return;
         }
+
+        const data = await res.json();
+        console.log("📦 Active Session Payload Received:", data);
+
+        if (data && data.hasActiveSession) {
+          const normalizedStatus = (data.status || "").toLowerCase().trim();
+          const targetRouteId = data.routeId || data.route_id;
+          const targetRideId = data.rideOfferId || data.ride_offer_id || data.id;
+
+          console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
+
+          switch (normalizedStatus) {
+            case "pending":
+              console.log(`⏳ State recovery routing to [WaitingForRiders]`);
+              navigation.replace("WaitingForRiders", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              break;
+
+            case "accepted":
+            case "arrived":
+              console.log(`🗺️ State recovery routing to [NavigateToPickup]`);
+              navigation.replace("NavigateToPickup", {
+                routeId: targetRouteId,
+                rideId: targetRideId,       
+                rideOfferId: targetRideId,  
+                ride_offer_id: targetRideId, 
+                driverId: data.driverId || currentDriverId
+              });
+              break;
+
+            // 🎯 FIXED CASE MATRIX: Matches 'intransit' parsed straight from your db 'inTransit' string 
+            case "inprogress":
+            case "intransit":  
+            case "intrip":
+            case "in_transit":
+              console.log(`🚗 Matching state code caught [intransit]. Routing directly to HUD.`);
+              navigation.replace("TripInProgress", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              break;
+
+            case "completed":
+              console.log(`💰 State recovery routing to [TripEarningsSummary]`);
+              navigation.replace("TripEarningsSummary", {
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              break;
+
+            default:
+              console.log(`⚠️ Gatekeeper bypass: Unhandled database status vector [${data.status}]`);
+              break;
+          }
+        } else {
+          console.log("No active or uncompleted session profiles found for driver. Manual entry unlocked.");
+        }
+      } catch (err) {
+        console.log("❌ Failed to verify driver dispatch gatekeeper status:", err);
       }
-    } catch (err) {
-      console.log("❌ Failed to verify driver dispatch gatekeeper status:", err);
     }
-  }
 
-  checkActiveDriverSession();
-}, []);
-
+    if (currentDriverId) {
+      checkActiveDriverSession();
+    }
+  }, [currentDriverId]);
 
   // Trigger hub search when driver types
   useEffect(() => {
