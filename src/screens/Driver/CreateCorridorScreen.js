@@ -87,8 +87,9 @@ export default function CreateCorridorScreen({ route, navigation }) {
                         // 🎯 UPDATED CASE MATRIX: Matches the new snake_case 'in_trip' database standard
               case "in_trip":
               case "inprogress":
-              case "in_transit": // Left as a safe fallback for legacy items
-                console.log(`🚗 Matching active state caught [${status}]. Routing directly to HUD.`);
+              case "in_transit": 
+                // FIX: Changed ${status} to ${normalizedStatus}
+                console.log(`🚗 Matching active state caught [${normalizedStatus}]. Routing directly to HUD.`);
                 navigation.replace("TripInProgress", {
                   routeId: targetRouteId,
                   rideOfferId: targetRideId,
