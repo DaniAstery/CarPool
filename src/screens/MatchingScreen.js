@@ -52,7 +52,7 @@ export default function MatchingScreen({ navigation, route }) {
     ).start();
   }, [radarAnim]);
 
-  // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
+
  // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
   useEffect(() => {
     let pollingInterval;
@@ -61,7 +61,7 @@ export default function MatchingScreen({ navigation, route }) {
     const checkMyPoolStatus = async () => {
       try {
         // Query the dedicated, isolated GET endpoint by userId
-        const response = await fetch(`http://192.168.253.52:5000/api/routes/status/${userId}`);
+        const response = await fetch(`http://192.168.204.52:5000/api/routes/status/${userId}`);
         
         if (!response.ok) {
           const errorHtml = await response.text();

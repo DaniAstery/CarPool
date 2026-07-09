@@ -14,7 +14,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-const API_BASE_URL = "http://192.168.253.52:5000/api";
+const API_BASE_URL = "http://192.168.204.52:5000/api";
 
 export default function NavigateToPickupScreen({ navigation, route }) {
   const mapRef = useRef(null);

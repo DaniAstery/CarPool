@@ -10,23 +10,27 @@ import {
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-export default function WaitingForRidersScreen({ navigation }) {
-  // 🚖 Driver Context matching your schema configuration
-  const currentPickupHubId = 1; // Corresponds to Megenagna Hub ID 
-  const hubNameDisplay = "Megenagna";
+export default function WaitingForRidersScreen({ route, navigation }) {
+  // Pull parameters directly. If navigation params fail, fall back safely to Route 1 / Hub 1 
+  // to prevent running lookups against mismatched offline default states
+  const routeId = route?.params?.routeId || 1; 
+  const currentPickupHubId = route?.params?.hubId || 1; 
 
   const [loading, setLoading] = useState(true);
   const [seatsFilled, setSeatsFilled] = useState(0);
   const [statusText, setStatusText] = useState("Waiting for riders to join");
   const [activityLogs, setActivityLogs] = useState([]);
 
+  const [hubNameDisplay, setHubNameDisplay] = useState("Loading...");
+  const [destinationDisplay, setDestinationDisplay] = useState("...");
+
   useEffect(() => {
-    console.log(`📡 Streaming routepool updates for Pickup Hub ID: [${currentPickupHubId}]`);
+    console.log(`📡 Streaming routepool updates for Route: [${routeId}] | Hub ID: [${currentPickupHubId}]`);
 
     async function checkCorridorStatus() {
       try {
         const response = await fetch(
-          `http://192.168.253.52:5000/api/rides/corridor-pool-status?hubId=${currentPickupHubId}`
+          `http://192.168.204.52:5000/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
         );
         
         if (!response.ok) {
@@ -38,31 +42,44 @@ export default function WaitingForRidersScreen({ navigation }) {
         const totalSearching = data.totalSearching || 0;
         const totalMatched = data.totalMatched || 0;
         const matchedRiders = data.matchedRiders || [];
+        const serverRouteId = data.routeId || routeId;
 
-        // Combine both statuses to accurately reflect total occupants filling up the progress circle
-        setSeatsFilled(totalSearching + totalMatched);
+        // Dynamic header resolution driven by what the server path yields
+        if (currentPickupHubId === 1 || serverRouteId === 1) {
+          setHubNameDisplay("Megenagna");
+          setDestinationDisplay("Piassa");
+        } else {
+          setHubNameDisplay("Mexico");
+          setDestinationDisplay("Bole");
+        }
+
+        // 🎯 TOTAL CAPACITY ACCUMULATION: Combined headcount footprint
+        const currentActiveHeadcount = totalSearching + totalMatched;
+        setSeatsFilled(currentActiveHeadcount);
         setLoading(false);
 
-        // Populate recent activity logs dynamically from the DB query array rows
+        // Populate recent activity logs dynamically
         if (matchedRiders.length > 0) {
           const formattedLogs = matchedRiders.map((rider) => ({
             id: String(rider.userId),
-            message: `Passenger ID ${rider.userId} joined`,
+            message: `Passenger ID ${rider.userId} ${rider.status === 'matched' ? 'matched' : 'joined'}`,
             time: "Just now",
           }));
           setActivityLogs(formattedLogs);
-          setStatusText("Riders are joining...");
+          setStatusText(`${totalMatched} matched, ${totalSearching} searching...`);
         } else if (totalSearching > 0) {
           setStatusText(`${totalSearching} rider(s) searching nearby...`);
         } else {
           setStatusText("Waiting for riders to join");
         }
 
-        // 🚀 NAVIGATION TRIGGER: Auto-Advance to Proposal Driver Screen when min threshold of 2 is met
-        if (totalMatched >= 2) {
-          console.log("Threshold satisfied! Forwarding to pickup optimization segment.");
+        // 🚀 CRITICAL DISPATCH OVERHAUL:
+        // Trigger progression if either 2 passengers have matched, OR the combined 
+        // queue pool headcount reaches the target threshold to execute a full stream.
+        if (totalMatched >= 2 || currentActiveHeadcount >= 2) {
+          console.log("🚀 Match threshold satisfied directly via server! Advancing to ProposalDriver.");
           clearInterval(syncInterval);
-          navigation.navigate("ProposalDriver");
+          navigation.navigate("ProposalDriver", { routeId: serverRouteId, hubId: currentPickupHubId });
         }
 
       } catch (err) {
@@ -71,12 +88,11 @@ export default function WaitingForRidersScreen({ navigation }) {
       }
     }
 
-    // Run lookups immediately on frame mount, then cycle every 2.5 seconds
     checkCorridorStatus();
     const syncInterval = setInterval(checkCorridorStatus, 2500);
 
     return () => clearInterval(syncInterval);
-  }, [currentPickupHubId, navigation]);
+  }, [currentPickupHubId, routeId, navigation]);
 
   if (loading) {
     return (
@@ -89,8 +105,6 @@ export default function WaitingForRidersScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* Top Header Row Panel */}
       <View style={styles.headerBlock}>
         <TouchableOpacity style={styles.menuButton} activeOpacity={0.7}>
           <Ionicons name="menu" size={24} color="#111827" />
@@ -102,43 +116,31 @@ export default function WaitingForRidersScreen({ navigation }) {
       </View>
 
       <ScrollView style={styles.contentBody} showsVerticalScrollIndicator={false}>
-        
-        {/* Active Status Banner */}
         <View style={styles.statusBannerCard}>
-          <View style={[
-            styles.greenPulseIndicator, 
-            seatsFilled > 0 && styles.orangePulseIndicator
-          ]} />
+          <View style={[styles.greenPulseIndicator, seatsFilled > 0 && styles.orangePulseIndicator]} />
           <View style={styles.statusTextFrame}>
             <Text style={styles.statusMainText}>You are Online</Text>
             <Text style={styles.statusSubText}>{statusText}</Text>
           </View>
         </View>
 
-        {/* Core Main Shared Manifest Card */}
         <View style={styles.manifestCard}>
-          <Text style={styles.routeHeaderLabel}>{hubNameDisplay} ➔ Bole</Text>
-          <Text style={styles.routeSubLabelText}>via Bole Road Corridor</Text>
+          <Text style={styles.routeHeaderLabel}>{hubNameDisplay} ➔ {destinationDisplay}</Text>
+          <Text style={styles.routeSubLabelText}>via Corridor Express Blueprint</Text>
 
-          {/* Precision Circular Graphical Meter Frame */}
           <View style={styles.progressCircleWrapper}>
-            <View style={[
-              styles.outerProgressCircle,
-              seatsFilled > 0 && styles.outerProgressCircleActive
-            ]}>
+            <View style={[styles.outerProgressCircle, seatsFilled > 0 && styles.outerProgressCircleActive]}>
               <Text style={styles.circleCounterMetricsText}>{seatsFilled}/3</Text>
               <Text style={styles.circleSubLabelMetricsText}>seats filled</Text>
             </View>
           </View>
 
-          {/* Pricing Metrics Reference Sub-Row */}
           <View style={styles.priceSummaryRow}>
             <Text style={styles.priceLabelText}>Price per seat</Text>
-            <Text style={styles.priceValueText}>ETB 80</Text>
+            <Text style={styles.priceValueText}>{routeId === 2 ? "ETB 180" : "ETB 150"}</Text>
           </View>
         </View>
 
-        {/* Recent Activity Log Module Card */}
         {activityLogs.length > 0 && (
           <View style={{ marginTop: 12 }}>
             <Text style={styles.activityHeadingText}>Recent Activity</Text>
@@ -158,10 +160,8 @@ export default function WaitingForRidersScreen({ navigation }) {
             </View>
           </View>
         )}
-
       </ScrollView>
 
-      {/* Persistent Bottom Controls */}
       <View style={styles.bottomControlContainer}>
         <TouchableOpacity 
           style={styles.goOfflineOutlinedButton}
@@ -171,7 +171,6 @@ export default function WaitingForRidersScreen({ navigation }) {
           <Text style={styles.goOfflineOutlinedButtonText}>GO OFFLINE</Text>
         </TouchableOpacity>
       </View>
-
     </SafeAreaView>
   );
 }

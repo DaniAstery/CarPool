@@ -13,7 +13,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 // 🎯 FIX: Declare the missing base API URL for your Corridor system infrastructure
-const API_URL = "http://192.168.253.52:5000"; 
+const API_URL = "http://192.168.204.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
   // Safe authentication fallback (Replace with your actual Global Context Hooks)
