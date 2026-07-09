@@ -115,7 +115,6 @@ useEffect(() => {
 }, []);
 
 
-
   // Trigger hub search when driver types
   useEffect(() => {
     if (hubSearchTerm.trim().length > 1) {
