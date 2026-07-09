@@ -10,14 +10,13 @@ import {
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const API_BASE_URL = "http://192.168.204.52:5000/api";
 
 export default function NavigateToPickupScreen({ navigation, route }) {
   const mapRef = useRef(null);
 
-  // Core state handles
   const [activeRideOfferId, setActiveRideOfferId] = useState(
     route?.params?.rideId || route?.params?.ride_offer_id || null
   );
@@ -34,7 +33,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
   const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // Real-Time Telemetry Streaming & Discovery Lifecycle
   useEffect(() => {
     let isMounted = true;
     let manifestPollInterval;
@@ -43,7 +41,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       try {
         let currentId = activeRideOfferId;
 
-        // 🎯 DISCOVERY LOCK: If local state lacks an ID, fetch the active 'accepted' row from the DB
         if (!currentId) {
           const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
           if (discoveryRes.ok) {
@@ -56,14 +53,9 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           }
         }
 
-        if (!currentId) {
-          console.log("Waiting for an active accepted ride offer to register in database...");
-          return;
-        }
+        if (!currentId) return;
 
-        console.log(`📡 Streaming live context stream for Offer ID: [${currentId}]`);
         const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${currentId}`);
-        
         if (!res.ok) {
           if (isMounted) setLoading(false);
           return;
@@ -74,8 +66,9 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
         setRideMetrics(data);
         
+        // 🎯 CRITICAL SYNC: Ensure the parent ride status is force-updated accurately
         if (data.rideStatus) {
-          setCurrentRideStatus(data.rideStatus.toLowerCase());
+          setCurrentRideStatus(data.rideStatus.toLowerCase().trim());
         }
 
         if (data.driverLocation) {
@@ -89,17 +82,16 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           const parsedPassengers = data.passengers.map((p, index) => {
             const rawId = p.userId || p.user_id || p.id;
             const uniqueId = rawId ? parseInt(rawId, 10) : (index + 1);
-            const rawStatus = (p.status || "matched").toLowerCase();
+            const rawStatus = (p.status || "matched").toLowerCase().trim();
 
             return {
               id: uniqueId,
               name: `Rider ${uniqueId}`,
               latitude: pickupLocation.latitude + (index * 0.0004 - 0.0002),
               longitude: pickupLocation.longitude + (index * 0.0004 - 0.0002),
-              status: rawStatus === "arrived" ? "Arrived" : "Accepted"
+              status: rawStatus === "arrived" ? "Arrived" : rawStatus === "intransit" ? "In Transit" : "Accepted"
             };
           });
-
           setPassengerStates(parsedPassengers);
         } else {
           setPassengerStates([]);
@@ -107,7 +99,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
         setLoading(false);
       } catch (err) {
-        console.log("Telemetry exception frame block caught:", err);
+        console.log("Telemetry poll error:", err);
         if (isMounted) setLoading(false);
       }
     }
@@ -121,51 +113,64 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     };
   }, [activeRideOfferId]);
 
-  // Dynamic Camera Recalibration Bound Box Adjustment
-  useEffect(() => {
-    if (mapRef.current && !loading) {
-      mapRef.current.fitToCoordinates([driverLocation, pickupLocation], {
-        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-        animated: true,
-      });
-    }
-  }, [driverLocation, loading]);
-
-  // State Action Workflow Router Handler
   const handleWorkflowAction = async () => {
-    if (!activeRideOfferId) {
-      Alert.alert("Error", "No active ride context selected to process arrival.");
+    const targetRideId = activeRideOfferId;
+
+    if (!targetRideId) {
+      Alert.alert("Error", "Resolving active corridor offer instance...");
       return;
     }
 
-    // 🚀 STEP 2: Status is already updated to 'arrived'. Second click triggers trip startup navigation.
+    // 🚀 STEP 2: Driver is 'arrived' -> Tap to set everything to 'inTransit'
     if (currentRideStatus === "arrived") {
-      navigation.replace("TripInProgress", { 
-        routeId: resolvedRouteId, 
-        rideOfferId: activeRideOfferId
-      });
+      setSubmitting(true);
+      try {
+        console.log(`📡 Sending start-trip request for Offer ID: [${targetRideId}]`);
+        const response = await fetch(`${API_BASE_URL}/rides/start-trip`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ride_offer_id: parseInt(targetRideId, 10) }),
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          console.log("🚀 Trip successfully activated in DB! Shifting view parameters.");
+          navigation.replace("TripInProgress", { 
+            routeId: resolvedRouteId, 
+            rideOfferId: targetRideId
+          });
+        } else {
+          Alert.alert("Trip Initiation Aborted", result.error || "Check backend engine rules.");
+        }
+      } catch (err) {
+        Alert.alert("Connection Failed", "Could not reach transit route service parameters.");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
-    // 🚀 STEP 1: Driver clicks for the first time to log arrival at pickup destination terminal hub
+    // 🚀 STEP 1: Driver is 'accepted' -> Tap to log arrival at pickup point
     setSubmitting(true);
     try {
+      console.log(`📍 Sending arrive request for Offer ID: [${targetRideId}]`);
       const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: activeRideOfferId }),
+        body: JSON.stringify({ ride_offer_id: parseInt(targetRideId, 10) }),
       });
 
+      const result = await response.json();
+
       if (response.ok) {
-        // 🎯 Shifts state locally. Changes layout to "START CORRIDOR TRIP" instead of immediately executing replace transition
         setCurrentRideStatus("arrived");
-        console.log("Arrival committed! Interface flipped to start-trip configuration state.");
+        console.log("✅ Arrival locked locally. Button transformed.");
       } else {
-        const result = await response.json();
-        Alert.alert("Arrival Sync Failure", result.error || "Could not update state.");
+        Alert.alert("Arrival Failure", result.error || "Driver status update rejected.");
       }
     } catch (err) {
-      Alert.alert("Server Connection Error", "Verify network link route paths directly.");
+      Alert.alert("Connection Failed", "Could not submit arrival parameter logs.");
     } finally {
       setSubmitting(false);
     }
@@ -175,7 +180,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     return (
       <View style={styles.centeredLoadingScreen}>
         <ActivityIndicator size="large" color="#059669" />
-        <Text style={styles.loadingText}>Locating Active Accepted Corridor Offer...</Text>
+        <Text style={styles.loadingText}>Locating Active Corridor Offer...</Text>
       </View>
     );
   }
@@ -188,28 +193,16 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       
-      {/* HUD Header Bar */}
       <View style={styles.headerBlock}>
         <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={22} color="#111827" />
         </TouchableOpacity>
         <Text style={styles.headerTitleText}>Navigate To Pickup</Text>
         <View style={styles.statusBadgeHUD}>
-          <Text style={styles.statusBadgeHUDText}>ID: #{activeRideOfferId || "Searching..."}</Text>
+          <Text style={styles.statusBadgeHUDText}>ID: #{activeRideOfferId || "..."}</Text>
         </View>
       </View>
 
-      {/* Dynamic Packing Value Proposition Banner */}
-      {isFullyPacked && (
-        <View style={styles.toastNotification}>
-          <Ionicons name="sparkles" size={16} color="#15803D" style={{ marginRight: 8 }} />
-          <Text style={styles.toastText}>
-            Corridor fully packed! Cost per seat optimized to ETB {pricePerSeat} for all riders.
-          </Text>
-        </View>
-      )}
-
-      {/* Tracking Canvas Interface */}
       <View style={styles.mapContainer}>
         <MapView
           ref={mapRef}
@@ -248,7 +241,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
               key={`marker-node-rider-${passenger.id}`} 
               coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}
             >
-              <View style={[styles.passengerTrackingPin, passenger.status === "Arrived" ? { backgroundColor: "#10B981" } : { backgroundColor: "#D97706" }]}>
+              <View style={[styles.passengerTrackingPin, passenger.status === "Arrived" ? { backgroundColor: "#10B981" } : passenger.status === "In Transit" ? { backgroundColor: "#3B82F6" } : { backgroundColor: "#D97706" }]}>
                 <Text style={styles.markerText}>{passenger.id}</Text>
               </View>
             </Marker>
@@ -256,18 +249,17 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         </MapView>
       </View>
 
-      {/* Ledger & Status Drawer */}
       <View style={styles.slidingPanelDrawer}>
         <ScrollView showsVerticalScrollIndicator={false}>
           
-          <View style={[styles.statusBanner, isFullyPacked && styles.statusBannerSuccess]}>
+          <View style={[styles.statusBanner, currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }]}>
             <FontAwesome5 name="route" size={13} color="#FFFFFF" style={{ marginRight: 10 }} />
             <View style={styles.bannerTextFrame}>
               <Text style={styles.bannerMainText}>
-                {isFullyPacked ? "Corridor Fully Packed" : `Proceeding with ${activeCount} Passengers`}
+                {currentRideStatus === "arrived" ? "Arrival Confirmed" : `Proceeding with ${activeCount} Passengers`}
               </Text>
               <Text style={styles.bannerSubText}>
-                {currentRideStatus === "arrived" ? "Arrival recorded. Initialize trip parameters below." : "Awaiting gathering alignment at terminal hub node"}
+                {currentRideStatus === "arrived" ? "All riders identified. Initialize transit matrix below." : "Awaiting gathering alignment at terminal hub node"}
               </Text>
             </View>
           </View>
@@ -283,38 +275,24 @@ export default function NavigateToPickupScreen({ navigation, route }) {
                   <Text style={styles.passengerName}>{passenger.name}</Text>
                 </View>
 
-                <View style={passenger.status === "Arrived" ? styles.statusArrivedBadge : styles.statusAcceptedBadge}>
-                  <Text style={passenger.status === "Arrived" ? styles.statusArrivedText : styles.statusAcceptedText}>
+                <View style={passenger.status === "Arrived" ? styles.statusArrivedBadge : passenger.status === "In Transit" ? styles.statusTransitBadge : styles.statusAcceptedBadge}>
+                  <Text style={passenger.status === "Arrived" ? styles.statusArrivedText : passenger.status === "In Transit" ? styles.statusTransitText : styles.statusAcceptedText}>
                     {passenger.status.toUpperCase()}
                   </Text>
                 </View>
               </View>
             ))}
           </View>
-
-          <Text style={styles.sectionHeadingLabel}>Corridor Ledger Summary</Text>
-          <View style={styles.ledgerCard}>
-            <View style={styles.ledgerRow}>
-              <Text style={styles.ledgerLabel}>Passenger Seat Rate</Text>
-              <Text style={styles.ledgerValue}>ETB {pricePerSeat.toFixed(2)}</Text>
-            </View>
-            <View style={styles.horizontalDivider} />
-            <View style={styles.ledgerRow}>
-              <Text style={styles.ledgerLabel}>Est. Total Revenue</Text>
-              <Text style={styles.driverGainValue}>ETB {totalEarnings.toFixed(2)}</Text>
-            </View>
-          </View>
           
         </ScrollView>
       </View>
 
-      {/* Sticky Bottom Actions Footprint Bar */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
             style={[
               styles.actionButton, 
               submitting && { opacity: 0.6 }, 
-              currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" } // Flips to clean blue layout state
+              currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" } 
             ]}
             activeOpacity={0.85}
             disabled={submitting}
@@ -352,8 +330,6 @@ const styles = StyleSheet.create({
   headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
   statusBadgeHUD: { backgroundColor: "#F3F4F6", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   statusBadgeHUDText: { color: "#4B5563", fontSize: 11, fontWeight: "700" },
-  toastNotification: { flexDirection: "row", backgroundColor: "#DCFCE7", padding: 12, marginHorizontal: 16, marginTop: 12, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "#BBF7D0" },
-  toastText: { flex: 1, fontSize: 12, color: "#15803D", fontWeight: "500" },
   mapContainer: { flex: 1, minHeight: 240 },
   hubStationWrapper: { justifyContent: "center", alignItems: "center" },
   hubStationPin: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", zIndex: 5 },
@@ -362,8 +338,7 @@ const styles = StyleSheet.create({
   passengerTrackingPin: { width: 20, height: 20, borderRadius: 10, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#FFFFFF" },
   markerText: { color: "#FFFFFF", fontSize: 9, fontWeight: "800" },
   slidingPanelDrawer: { flex: 1, backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 16, borderWidth: 1, borderColor: "#E5E7EB", marginTop: -10 },
-  statusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#3B82F6", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
-  statusBannerSuccess: { backgroundColor: "#059669" },
+  statusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#059669", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
   bannerTextFrame: { flex: 1 },
   bannerMainText: { fontSize: 14, fontWeight: "700", color: "#FFFFFF" },
   bannerSubText: { fontSize: 11, color: "rgba(255,255,255,0.85)" },
@@ -375,14 +350,10 @@ const styles = StyleSheet.create({
   passengerName: { fontSize: 13, color: "#374151", fontWeight: "600" },
   statusArrivedBadge: { backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   statusArrivedText: { color: "#10B981", fontSize: 10, fontWeight: "700" },
+  statusTransitBadge: { backgroundColor: "#EFF6FF", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  statusTransitText: { color: "#3B82F6", fontSize: 10, fontWeight: "700" },
   statusAcceptedBadge: { backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   statusAcceptedText: { color: "#D97706", fontSize: 10, fontWeight: "700" },
-  ledgerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 16 },
-  ledgerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
-  ledgerLabel: { fontSize: 13, color: "#4B5563", fontWeight: "500" },
-  ledgerValue: { fontSize: 13, fontWeight: "700", color: "#111827" },
-  driverGainValue: { fontSize: 15, fontWeight: "800", color: "#059669" },
-  horizontalDivider: { height: 1, backgroundColor: "#F3F4F6" },
   footerContainer: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderTopWidth: 1, borderColor: "#E5E7EB" },
   actionButton: { backgroundColor: "#059669", borderRadius: 10, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700", letterSpacing: 0.3 },
