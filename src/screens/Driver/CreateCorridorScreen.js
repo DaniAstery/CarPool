@@ -84,21 +84,21 @@ export default function CreateCorridorScreen({ route, navigation }) {
               });
               break;
 
-            // 🎯 FIXED CASE MATRIX: Matches 'intransit' parsed straight from your db 'inTransit' string 
-            case "inprogress":
-            case "intransit":  
-            case "intrip":
-            case "in_transit":
-              console.log(`🚗 Matching state code caught [intransit]. Routing directly to HUD.`);
-              navigation.replace("TripInProgress", {
-                routeId: targetRouteId,
-                rideOfferId: targetRideId,
-                ride_offer_id: targetRideId,
-                driverId: data.driverId || currentDriverId
-              });
-              break;
+                        // 🎯 UPDATED CASE MATRIX: Matches the new snake_case 'in_trip' database standard
+              case "in_trip":
+              case "inprogress":
+              case "in_transit": // Left as a safe fallback for legacy items
+                console.log(`🚗 Matching active state caught [${status}]. Routing directly to HUD.`);
+                navigation.replace("TripInProgress", {
+                  routeId: targetRouteId,
+                  rideOfferId: targetRideId,
+                  ride_offer_id: targetRideId,
+                  driverId: data.driverId || currentDriverId
+                });
+                break;
 
-            case "completed":
+
+               case "completed":
               console.log(`💰 State recovery routing to [TripEarningsSummary]`);
               navigation.replace("TripEarningsSummary", {
                 rideOfferId: targetRideId,
