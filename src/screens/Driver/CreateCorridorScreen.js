@@ -56,7 +56,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
           switch (normalizedStatus) {
             case "pending":
               console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room.`);
-              navigation.replace("WaitingForRidersScreen", {
+              navigation.replace("WaitingForRiders", {
                 routeId: data.routeId,
                 rideOfferId: data.rideOfferId,
                 ride_offer_id: data.rideOfferId,
