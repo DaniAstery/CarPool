@@ -85,10 +85,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
               break;
 
             // 🎯 FIXED CASE MATRIX: Matches 'intransit' parsed straight from your db 'inTransit' string 
-            case "inprogress":
-            case "intransit":  
-            case "intrip":
-            case "in_transit":
+            case "inTransit":
               console.log(`🚗 Matching state code caught [intransit]. Routing directly to HUD.`);
               navigation.replace("TripInProgress", {
                 routeId: targetRouteId,
