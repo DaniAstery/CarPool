@@ -88,7 +88,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
             // 🎯 UPGRADE FIX: Added 'intransit' to securely trap raw camelCase 'inTransit' from Postgres
             case "inprogress":
-            case "inTransit":  
+            case "intransit":  
             case "intrip":
             case "in_transit":
               console.log(`🚗 State recovery routing to [TripInProgress]`);
