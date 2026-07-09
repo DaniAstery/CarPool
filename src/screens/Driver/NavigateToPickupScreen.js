@@ -5,8 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Animated,
-  Easing,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -19,27 +17,52 @@ const API_BASE_URL = "http://192.168.204.52:5000/api";
 export default function NavigateToPickupScreen({ navigation, route }) {
   const mapRef = useRef(null);
 
-  // Fallback context validation parameters
-  const routeId = route?.params?.routeId || route?.params?.route_id || "1";
-  const rideOfferId = route?.params?.rideId || route?.params?.ride_offer_id || 2; // Defaulting to your active ID 2
+  // Core state handles
+  const [activeRideOfferId, setActiveRideOfferId] = useState(
+    route?.params?.rideId || route?.params?.ride_offer_id || null
+  );
+  const [resolvedRouteId, setResolvedRouteId] = useState(
+    route?.params?.routeId || route?.params?.route_id || "1"
+  );
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [passengerStates, setPassengerStates] = useState([]);
   const [rideMetrics, setRideMetrics] = useState(null);
-  const [currentRideStatus, setCurrentRideStatus] = useState("pending");
+  const [currentRideStatus, setCurrentRideStatus] = useState("accepted");
   
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
   const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // Real-Time Telemetry Streaming Interval Polling Loop
+  // Real-Time Telemetry Streaming & Discovery Lifecycle
   useEffect(() => {
-    console.log(`📡 Opening live context stream interface link for Offer instance ID: [${rideOfferId}]`);
     let isMounted = true;
+    let manifestPollInterval;
 
     async function pollLiveManifestData() {
       try {
-        const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${rideOfferId}`);
+        let currentId = activeRideOfferId;
+
+        // 🎯 DISCOVERY LOCK: If local state lacks an ID, fetch the active 'accepted' row from the DB
+        if (!currentId) {
+          const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
+          if (discoveryRes.ok) {
+            const discoveryData = await discoveryRes.json();
+            if (isMounted) {
+              currentId = discoveryData.id;
+              setActiveRideOfferId(discoveryData.id);
+              if (discoveryData.route_id) setResolvedRouteId(discoveryData.route_id);
+            }
+          }
+        }
+
+        if (!currentId) {
+          console.log("Waiting for an active accepted ride offer to register in database...");
+          return;
+        }
+
+        console.log(`📡 Streaming live context stream for Offer ID: [${currentId}]`);
+        const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${currentId}`);
         
         if (!res.ok) {
           if (isMounted) setLoading(false);
@@ -56,36 +79,24 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         }
 
         if (data.driverLocation) {
-          const newDriverLoc = {
+          setDriverLocation({
             latitude: parseFloat(data.driverLocation.latitude),
             longitude: parseFloat(data.driverLocation.longitude)
-          };
-          setDriverLocation(newDriverLoc);
+          });
         }
 
-        // 🎯 FIX: Explicit parsing targeting the raw 'userId' cargo fields verified via curl
         if (data.passengers && Array.isArray(data.passengers)) {
           const parsedPassengers = data.passengers.map((p, index) => {
             const rawId = p.userId || p.user_id || p.id;
             const uniqueId = rawId ? parseInt(rawId, 10) : (index + 1);
-            
             const rawStatus = (p.status || "matched").toLowerCase();
-            let statusLabel = "Accepted";
-            
-            if (rawStatus === "arrived") {
-              statusLabel = "Arrived";
-            }
-
-            // Scatter coordinates slightly based on position index array offsets
-            const scatterLat = pickupLocation.latitude + (index * 0.0004 - 0.0002);
-            const scatterLng = pickupLocation.longitude + (index * 0.0004 - 0.0002);
 
             return {
               id: uniqueId,
               name: `Rider ${uniqueId}`,
-              latitude: scatterLat,
-              longitude: scatterLng,
-              status: statusLabel
+              latitude: pickupLocation.latitude + (index * 0.0004 - 0.0002),
+              longitude: pickupLocation.longitude + (index * 0.0004 - 0.0002),
+              status: rawStatus === "arrived" ? "Arrived" : "Accepted"
             };
           });
 
@@ -102,15 +113,15 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     }
 
     pollLiveManifestData();
-    const manifestPollInterval = setInterval(pollLiveManifestData, 2500);
+    manifestPollInterval = setInterval(pollLiveManifestData, 2500);
 
     return () => {
       isMounted = false;
       clearInterval(manifestPollInterval);
     };
-  }, [rideOfferId]);
+  }, [activeRideOfferId]);
 
-  // Dynamic Projection Recalibration Vector Adjustment
+  // Dynamic Camera Recalibration Bound Box Adjustment
   useEffect(() => {
     if (mapRef.current && !loading) {
       mapRef.current.fitToCoordinates([driverLocation, pickupLocation], {
@@ -120,30 +131,35 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     }
   }, [driverLocation, loading]);
 
-  // State Action Router Handler
+  // State Action Workflow Router Handler
   const handleWorkflowAction = async () => {
+    if (!activeRideOfferId) {
+      Alert.alert("Error", "No active ride context selected to process arrival.");
+      return;
+    }
+
+    // 🚀 STEP 2: Status is already updated to 'arrived'. Second click triggers trip startup navigation.
     if (currentRideStatus === "arrived") {
       navigation.replace("TripInProgress", { 
-        routeId: routeId, 
-        rideOfferId: rideOfferId
+        routeId: resolvedRouteId, 
+        rideOfferId: activeRideOfferId
       });
       return;
     }
 
+    // 🚀 STEP 1: Driver clicks for the first time to log arrival at pickup destination terminal hub
     setSubmitting(true);
     try {
       const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: rideOfferId }),
+        body: JSON.stringify({ ride_offer_id: activeRideOfferId }),
       });
 
       if (response.ok) {
+        // 🎯 Shifts state locally. Changes layout to "START CORRIDOR TRIP" instead of immediately executing replace transition
         setCurrentRideStatus("arrived");
-        navigation.replace("TripInProgress", { 
-          routeId: routeId, 
-          rideOfferId: rideOfferId
-        });
+        console.log("Arrival committed! Interface flipped to start-trip configuration state.");
       } else {
         const result = await response.json();
         Alert.alert("Arrival Sync Failure", result.error || "Could not update state.");
@@ -155,11 +171,11 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     }
   };
 
-  if (loading) {
+  if (loading && !activeRideOfferId) {
     return (
       <View style={styles.centeredLoadingScreen}>
         <ActivityIndicator size="large" color="#059669" />
-        <Text style={styles.loadingText}>Syncing Corridor Manifest Matrix...</Text>
+        <Text style={styles.loadingText}>Locating Active Accepted Corridor Offer...</Text>
       </View>
     );
   }
@@ -179,7 +195,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         </TouchableOpacity>
         <Text style={styles.headerTitleText}>Navigate To Pickup</Text>
         <View style={styles.statusBadgeHUD}>
-          <Text style={styles.statusBadgeHUDText}>ID: #{rideOfferId}</Text>
+          <Text style={styles.statusBadgeHUDText}>ID: #{activeRideOfferId || "Searching..."}</Text>
         </View>
       </View>
 
@@ -206,7 +222,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           }}
           customMapStyle={minimalMapStyle}
         >
-          {/* Main Pickup Hub Node Pin */}
           <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.hubStationWrapper}>
               <View style={styles.hubStationPin}>
@@ -216,21 +231,18 @@ export default function NavigateToPickupScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          {/* Active Moving Driver Profile Node */}
           <Marker coordinate={driverLocation}>
             <View style={styles.driverCarPin}>
               <FontAwesome5 name="car-side" size={11} color="#FFFFFF" />
             </View>
           </Marker>
 
-          {/* Path Direction Polyline Route Line */}
           <Polyline
             coordinates={[driverLocation, pickupLocation]}
             strokeColor="#EF4444"
             strokeWidth={4}
           />
 
-          {/* Unique Passenger Tracking Elements */}
           {passengerStates.map((passenger) => (
             <Marker 
               key={`marker-node-rider-${passenger.id}`} 
@@ -254,11 +266,12 @@ export default function NavigateToPickupScreen({ navigation, route }) {
               <Text style={styles.bannerMainText}>
                 {isFullyPacked ? "Corridor Fully Packed" : `Proceeding with ${activeCount} Passengers`}
               </Text>
-              <Text style={styles.bannerSubText}>Awaiting gathering alignment at terminal hub node</Text>
+              <Text style={styles.bannerSubText}>
+                {currentRideStatus === "arrived" ? "Arrival recorded. Initialize trip parameters below." : "Awaiting gathering alignment at terminal hub node"}
+              </Text>
             </View>
           </View>
 
-          {/* Manifest Integration Layer List */}
           <Text style={styles.sectionHeadingLabel}>Co-Rider Acceptance Matrix</Text>
           <View style={styles.manifestContainer}>
             {passengerStates.map((passenger) => (
@@ -279,7 +292,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
             ))}
           </View>
 
-          {/* Corridor Pricing Balance Matrix Card */}
           <Text style={styles.sectionHeadingLabel}>Corridor Ledger Summary</Text>
           <View style={styles.ledgerCard}>
             <View style={styles.ledgerRow}>
@@ -296,10 +308,14 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         </ScrollView>
       </View>
 
-      {/* Sticky Bottom Actions Command Footprint Bar */}
+      {/* Sticky Bottom Actions Footprint Bar */}
       <View style={styles.footerContainer}>
         <TouchableOpacity 
-            style={[styles.actionButton, submitting && { opacity: 0.6 }, currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }]}
+            style={[
+              styles.actionButton, 
+              submitting && { opacity: 0.6 }, 
+              currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" } // Flips to clean blue layout state
+            ]}
             activeOpacity={0.85}
             disabled={submitting}
             onPress={handleWorkflowAction}
