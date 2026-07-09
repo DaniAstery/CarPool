@@ -3,13 +3,13 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
   TextInput,
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 // 🎯 FIX: Declare the missing base API URL for your Corridor system infrastructure
@@ -46,7 +46,6 @@ export default function CreateCorridorScreen({ route, navigation }) {
 useEffect(() => {
   async function checkActiveDriverSession() {
     try {
-      // 🎯 Ensure your fetch path explicitly targets your driver session endpoint configuration
       const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
       if (!res.ok) return;
 
@@ -54,14 +53,17 @@ useEffect(() => {
 
       // 🔄 DYNAMIC ACTIVE STATE RESUMPTION MATRIX
       if (data.hasActiveSession) {
-        const normalizedStatus = (data.status || "").toLowerCase();
+        // Trim and lowercase to align with your Postgres check constraints safely
+        const normalizedStatus = (data.status || "").toLowerCase().trim();
+        console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
 
         switch (normalizedStatus) {
           case "pending":
-            console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room for Offer #${data.rideOfferId}`);
+            console.log(`⏳ State recovery caught [pending]. Routing to Waiting Room.`);
             navigation.replace("WaitingForRidersScreen", {
               routeId: data.routeId,
-              rideOfferId: data.rideOfferId,
+              rideOfferId: data.rideOfferId, // Keeping for compatibility
+              ride_offer_id: data.rideOfferId, // Syncing parameter formatting
               driverId: currentDriverId
             });
             break;
@@ -71,19 +73,31 @@ useEffect(() => {
             console.log(`🗺️ State recovery caught [${normalizedStatus}]. Routing to Pickup Navigation HUD.`);
             navigation.replace("NavigateToPickup", {
               routeId: data.routeId,
-              rideOfferId: data.rideOfferId,
+              rideId: data.rideOfferId,       // Fixed lookup map parameter target
+              rideOfferId: data.rideOfferId,  // Backup parameter slot
+              ride_offer_id: data.rideOfferId, // Matches standard screen parsing keys
               driverId: currentDriverId
             });
             break;
 
-          case "inprogress":
-          case "ontrip":
+          // 🎯 UPGRADE: Catching all variations of the active transit phase statuses
+
+          case "in_transit":
             console.log(`🚗 State recovery caught [${normalizedStatus}]. Routing to Live Transit HUD.`);
-            // NOTE: Double-check your stack navigator screen naming. 
-            // If you are using the full template built earlier, change this to "TripInProgress"
             navigation.replace("TripInProgress", {
               routeId: data.routeId,
               rideOfferId: data.rideOfferId,
+              ride_offer_id: data.rideOfferId,
+              driverId: currentDriverId
+            });
+            break;
+
+          // 🎯 UPGRADE: Catching completed rides to drop drivers directly on their ledger sheet
+          case "completed":
+            console.log(`💰 State recovery caught [completed]. Routing to Trips Earning Summary.`);
+            navigation.replace("TripEarningsSummary", {
+              rideOfferId: data.rideOfferId,
+              ride_offer_id: data.rideOfferId,
               driverId: currentDriverId
             });
             break;
@@ -102,8 +116,6 @@ useEffect(() => {
     checkActiveDriverSession();
   }
 }, [currentDriverId]);
-
-
 
   // Trigger hub search when driver types
   useEffect(() => {
