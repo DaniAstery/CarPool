@@ -15,7 +15,6 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-// 📡 Ensure this matches your target active backend server IP address
 const API_URL = "http://192.168.204.52:5000"; 
 
 export default function PickupProposalScreen({ navigation, route }) {
@@ -38,6 +37,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted" || r.status === "Arrived").length;
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
+  // Track hardware location tracking
   useEffect(() => {
     (async () => {
       try {
@@ -59,6 +59,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     })();
   }, []);
 
+  // Window acceptance countdown countdown ticking
   useEffect(() => {
     if (!isBaselinePairReady) return; 
 
@@ -71,7 +72,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, [timeLeft, isBaselinePairReady]);
 
   const handleWindowExpiry = () => {
-    console.log("⏰ Pool acceptance window expired. Launching with active pairs.");
+    console.log("⏰ Pool acceptance window expired. Processing launch parameters.");
     
     const user1Accepted = currentUserId === 1 ? userAccepted : coRiders.find(r => r.id === 1)?.status === "Accepted" || coRiders.find(r => r.id === 1)?.status === "Arrived";
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted" || coRiders.find(r => r.id === 2)?.status === "Arrived";
@@ -94,7 +95,10 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   };
 
+  // 📡 Real-Time Status Synchronization Pipeline
   useEffect(() => {
+    let pollInterval;
+
     async function checkProposalStatus() {
       try {
         const res = await fetch(`${API_URL}/api/rides/active-proposal/${currentUserId}`);
@@ -102,6 +106,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         
         const data = await res.json();
 
+        // Safe Intercept: If server flags the active profile state as arrived, short-circuit onward
         if (data.currentUserPoolStatus === "arrived") {
           clearInterval(pollInterval);
           navigation.replace("LiveTrackingScreen", { 
@@ -118,7 +123,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         const rawAccepted = data.acceptedPassengers || [];
         const cleanAcceptedIds = rawAccepted.map(id => typeof id === 'object' ? parseInt(id.user_id || id.id, 10) : parseInt(id, 10));
-        const fullRosterIds = data.manifestPassengers || [1, 2, 3, 4];
+        const fullRosterIds = data.manifestPassengers || [1, 2]; // Defaults to core duo vector to clear checks safely
 
         if (cleanAcceptedIds.includes(currentUserId)) {
           setUserAccepted(true);
@@ -128,7 +133,7 @@ export default function PickupProposalScreen({ navigation, route }) {
           .filter((id) => id !== currentUserId)
           .map((id, index) => {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-            const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId, 10) === id);
+            const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId || p.user_id, 10) === id);
             let mappedStatus = cleanAcceptedIds.includes(id) ? "Accepted" : "Pending";
             
             if (serverPassengerRecord?.status === "arrived" || serverPassengerRecord?.status === "Arrived") {
@@ -145,32 +150,41 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         setCoRiders(parsedCoRiders);
 
-        const allRosterAccepted = fullRosterIds.every(id => {
+        // 🎯 BULLETPROOF NAVIGATION INTERCEPT MATRIX:
+        // Parse states strictly for the absolute baseline core partners (Riders 1 & 2)
+        const r1Ready = currentUserId === 1 ? userAccepted : (cleanAcceptedIds.includes(1) || parsedCoRiders.find(r => r.id === 1)?.status === "Arrived");
+        const r2Ready = currentUserId === 2 ? userAccepted : (cleanAcceptedIds.includes(2) || parsedCoRiders.find(r => r.id === 2)?.status === "Arrived");
+        const corePairAccepted = r1Ready && r2Ready;
+
+        // Check if any additional burst-joiners (Riders 3+) matched on this run have cleared verification
+        const secondaryRosterIds = fullRosterIds.filter(id => id > 2);
+        const secondariesAllAccepted = secondaryRosterIds.length === 0 || secondaryRosterIds.every(id => {
           if (id === currentUserId) return userAccepted;
-          const riderRecord = parsedCoRiders.find(r => r.id === id);
-          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
+          const record = parsedCoRiders.find(r => r.id === id);
+          return record?.status === "Accepted" || record?.status === "Arrived";
         });
 
-        const corePairAccepted = (currentUserId === 1 ? userAccepted : (cleanAcceptedIds.includes(1) || parsedCoRiders.find(r => r.id === 1)?.status === "Arrived")) && 
-                                 (currentUserId === 2 ? userAccepted : (cleanAcceptedIds.includes(2) || parsedCoRiders.find(r => r.id === 2)?.status === "Arrived"));
-
-        if (allRosterAccepted) {
-          clearInterval(pollInterval);
-          navigation.replace("LiveTrackingScreen", { routeId, rideOfferId, userId: currentUserId });
-        }
-        
-        if (corePairAccepted && timeLeft === 0 && (currentUserId === 1 || currentUserId === 2)) {
-          clearInterval(pollInterval);
-          navigation.replace("LiveTrackingScreen", { routeId, rideOfferId, userId: currentUserId });
+        // 🚀 FAST-TRACK FORWARD CONDITION
+        if (corePairAccepted) {
+          if (secondariesAllAccepted || timeLeft === 0) {
+            console.log("🎉 Core pairing ready and verified! Routing straight to LiveTrackingScreen.");
+            clearInterval(pollInterval);
+            navigation.replace("LiveTrackingScreen", { 
+              routeId, 
+              rideOfferId: rideOfferId || 1, 
+              userId: currentUserId 
+            });
+            return;
+          }
         }
 
       } catch (err) {
-        console.log("Sync pooling error:", err);
+        console.log("Sync pooling connection error:", err);
       }
     }
 
     checkProposalStatus();
-    const pollInterval = setInterval(checkProposalStatus, 2500);
+    pollInterval = setInterval(checkProposalStatus, 2200); // 2.2s latency polling footprint
     return () => clearInterval(pollInterval);
   }, [navigation, currentUserId, userAccepted, timeLeft]);
 
@@ -183,7 +197,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         body: JSON.stringify({ ride_offer_id: activeRideOfferIdRef.current || 1, user_id: currentUserId }),
       });
     } catch (err) {
-      console.log("Handshake error:", err);
+      console.log("Handshake optimization failure:", err);
     }
   };
 
@@ -303,7 +317,6 @@ export default function PickupProposalScreen({ navigation, route }) {
               <View key={`rider-row-${rider.id}`} style={styles.tableRow}>
                 <View style={styles.tableUserLabelGroup}>
                   <Ionicons name="person" size={14} color={rider.color} />
-                  {/* 🔍 FIXED: Safe nesting of conditional component layout blocks to avoid compilation crashes */}
                   <Text style={styles.tableUserText}>
                     {rider.name}
                     {rider.id > 2 && (
