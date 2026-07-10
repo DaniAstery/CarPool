@@ -15,6 +15,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
+// 📡 FIXED: Synchronized third octet base to target your live development server block (.204)
+const API_URL = "http://192.168.204.52:5000"; 
 
 export default function LiveTrackingScreen({ navigation, route }) {
   const routeId = route?.params?.routeId || "1";
@@ -28,7 +30,6 @@ export default function LiveTrackingScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
 
-  // ⏱️ Arrival Threshold State
   const [corePassengersArrived, setCorePassengersArrived] = useState(false);
   const [countdownSeconds, setCountdownSeconds] = useState(20);
   const [thresholdPassed, setThresholdPassed] = useState(false);
@@ -55,7 +56,8 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
     async function streamLiveTrackingData() {
       try {
-        const res = await fetch(`http://192.168.253.52:5000/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
+        // Updated with safe API_URL constant references 
+        const res = await fetch(`${API_URL}/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
         
         if (!res.ok) {
           setLoading(false);
@@ -138,16 +140,14 @@ export default function LiveTrackingScreen({ navigation, route }) {
   useEffect(() => {
     if (passengerStates.length === 0) return;
 
-    // 🌟 FIX: Count how many riders total have arrived.
     const totalArrived = passengerStates.filter(p => p.status === "Arrived").length;
 
-    // Require at least two riders to have physically arrived to trip the countdown window
     if (totalArrived >= 2) {
       setCorePassengersArrived(true);
     } else {
       setCorePassengersArrived(false);
       setThresholdPassed(false);
-      setCountdownSeconds(20); // Reset countdown back up if someone drops out
+      setCountdownSeconds(20); 
     }
   }, [passengerStates]);
 
@@ -179,7 +179,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
     setUserArrived(true); 
 
     try {
-      await fetch("http://192.168.253.52:5000/api/rides/signal-arrival", {
+      await fetch(`${API_URL}/api/rides/signal-arrival`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -302,7 +302,6 @@ export default function LiveTrackingScreen({ navigation, route }) {
             ))}
           </View>
 
-          {/* Dynamic Action Matrix View Engine */}
           {thresholdPassed ? (
             <View style={[styles.successStateBanner, { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" }]}>
               <FontAwesome5 name="hourglass-half" size={14} color="#1D4ED8" style={{ marginRight: 10 }} />
@@ -326,7 +325,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
           ) : (
             <View style={styles.successStateBanner}>
               <ActivityIndicator size="small" color="#10B981" style={{ marginRight: 10 }} />
-              <Text style={styles.successBannerText}>Waiting for core match presence (Need $\ge$ 2 arrived)...</Text>
+              <Text style={styles.successBannerText}>Waiting for core match presence (Need 2+ arrived)...</Text>
             </View>
           )}
 
