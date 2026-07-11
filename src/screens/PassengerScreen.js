@@ -1,5 +1,4 @@
-import React, { useState } from "react";
-// ❌ Remove standard SafeAreaView from react-native
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,13 +8,15 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
+  Dimensions,
 } from "react-native";
-
-//  Add the correct framework layout context package:
 import { SafeAreaView } from 'react-native-safe-area-context';
-
 import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
+
+const { width } = Dimensions.get("window");
+const API_URL = "http://192.168.204.52:5000/api"; 
+const STATIC_USER_ID = 1; // Explicitly anchored to match your platform test parameters
 
 export default function PassengerScreen({ navigation }) {
   const [searchText, setSearchText] = useState("");
@@ -23,14 +24,58 @@ export default function PassengerScreen({ navigation }) {
   const [routes, setRoutes] = useState([]);
   const [selectedRoutes, setSelectedRoutes] = useState([]);
 
-  // App States
+  // App Configuration States
   const [selectedPickupHub, setSelectedPickupHub] = useState(null);
-  const [isSoloRide, setIsSoloRide] = useState(false); // 🚀 Tracks Solo vs Shared selection
+  const [isSoloRide, setIsSoloRide] = useState(false); 
 
   // Loading States
   const [loadingHubs, setLoadingHubs] = useState(false);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [loadingRides, setLoadingRides] = useState(false);
+
+  // 🛡️ GATEKEEPER RENDERING SAFETY CONTAINER
+  const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
+
+  /* 🚪 GATEKEEPER APP LIFE-CYCLE STATE RECOVERY PIPELINE */
+  useEffect(() => {
+    async function runGatekeeperCheck() {
+      try {
+        console.log(`🛡️ [Gatekeeper] Scanning active session layout for Passenger ID: [${STATIC_USER_ID}]`);
+        const res = await fetch(`${API_URL}/routes/status/${STATIC_USER_ID}`);
+        
+        if (!res.ok) throw new Error("Status check query rejected by routing server.");
+        
+        const data = await res.json();
+        
+        // If passenger has an unresolved active record thread, execute auto-routing recovery
+        if (data && data.status !== "idle" && data.navigateTo) {
+          console.log(`🚀 [Gatekeeper Recovery] Catching state [${data.status}] -> Relocating views to: ${data.navigateTo}`);
+          
+          navigation.reset({
+            index: 0,
+            routes: [{ 
+              name: data.navigateTo, 
+              params: {
+                routeId: data.routeId,
+                rideOfferId: data.matched_ride_offer_id,
+                ride_offer_id: data.matched_ride_offer_id,
+                rideId: data.matched_ride_offer_id,
+                userId: STATIC_USER_ID
+              } 
+            }],
+          });
+          return;
+        }
+      } catch (err) {
+        console.log("Gatekeeper local networking failure:", err);
+      } finally {
+        // Allow dashboard to render cleanly only if no active states are recovered
+        setCheckingGatekeeper(false);
+      }
+    }
+    
+    runGatekeeperCheck();
+  }, [navigation]);
 
   /* ---------------- HUB SEARCH ---------------- */
   const searchHubs = async (text) => {
@@ -41,7 +86,7 @@ export default function PassengerScreen({ navigation }) {
     }
     setLoadingHubs(true);
     try {
-      const res = await fetch(`http://192.168.204.52:5000/api/hubs/search/${text}`);
+      const res = await fetch(`${API_URL}/hubs/search/${text}`);
       const data = await res.json();
       setHubs(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -62,7 +107,7 @@ export default function PassengerScreen({ navigation }) {
     setLoadingRoutes(true);
 
     try {
-      const res = await fetch(`http://192.168.204.52:5000/api/routes/from/${hub.name}`);
+      const res = await fetch(`${API_URL}/routes/from/${hub.name}`);
       const data = await res.json();
       setRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -84,7 +129,7 @@ export default function PassengerScreen({ navigation }) {
 
     setLoadingRides(true);
     try {
-      const res = await fetch(`http://192.168.204.52:5000/api/rides?route_id=${parsedRouteId}`);
+      const res = await fetch(`${API_URL}/rides?route_id=${parsedRouteId}`);
       const data = await res.json();
       setSelectedRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -112,13 +157,13 @@ export default function PassengerScreen({ navigation }) {
           onPress: async (destination) => {
             if (!destination || destination.trim() === "") return;
             try {
-              const res = await fetch("http://192.168.204.52:5000/api/corridors/request", {
+              const res = await fetch(`${API_URL}/corridors/request`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   pickup_hub_id: selectedPickupHub.id,
                   destination_name: destination,
-                  user_id: 1,
+                  user_id: STATIC_USER_ID,
                 }),
               });
               if (res.ok) {
@@ -133,35 +178,31 @@ export default function PassengerScreen({ navigation }) {
     );
   };
 
- /* ---------------- JOIN POOL / BOOK SEAT DIRECTLY ---------------- */
+  /* ---------------- JOIN POOL / BOOK SEAT DIRECTLY ---------------- */
   const joinPool = async (item) => {
     try {
       const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
-      
-      // Determine if this item is a baseline Route template or a live Driver Ride Offer
       const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
       
-      let endpoint = "http://192.168.204.52:5000/api/routes/join";
+      let endpoint = `${API_URL}/routes/join`;
       let payload = {};
       let corridorLabel = "Selected Corridor";
 
       if (isLiveDriverOffer) {
-        // Option A: User clicked an active driver's matching card deployment layout
-        endpoint = "http://192.168.204.52:5000/api/rides/join-pool";
+        endpoint = `${API_URL}/rides/join-pool`;
         payload = {
           ride_id: item.id,
-          passenger_id: 1, // Static Context matching server tracker specs
+          passenger_id: STATIC_USER_ID, 
           pickup_hub_id: pickupHubId,
           dropoff_hub_id: item.dropoff_hub_id || null,
           seats_booked: 1
         };
         corridorLabel = `${item.start_location} → ${item.end_location}`;
       } else {
-        // Option B: User clicked a baseline route blueprint pipeline directly
-        endpoint = "http://192.168.204.52:5000/api/routes/join";
+        endpoint = `${API_URL}/routes/join`;
         payload = {
           route_id: item.route_id || item.id,
-          user_id: 1,
+          user_id: STATIC_USER_ID,
           pickup_hub_id: pickupHubId,
           dropoff_hub_id: null,
           booking_type: isSoloRide ? "solo" : "shared",
@@ -169,7 +210,7 @@ export default function PassengerScreen({ navigation }) {
         corridorLabel = Array.isArray(item.stops) ? item.stops.join(" → ") : "Selected Route";
       }
 
-      console.log(`📡 Dispatching payload to endpoint: ${endpoint}`);
+      console.log(`📡 Dispatching passenger intent: ${endpoint}`);
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -180,18 +221,24 @@ export default function PassengerScreen({ navigation }) {
       if (!res.ok) {
         const errorHtml = await res.text();
         console.log("⚠️ Raw Server Error Intercept:", errorHtml.slice(0, 200));
-        Alert.alert("Router Disconnect", "Express returned a 404 HTML string. Check your parameter layout mappings.");
+        Alert.alert("Router Disconnect", "Verification processing failed. Check parameter layout structures.");
         return;
       }
 
       const data = await res.json();
       console.log("✅ Server response received successfully:", data);
 
-      // Transition beautifully onto your real-time tracking dashboard view
-      navigation.navigate("MatchingScreen", {
-        routeId: isLiveDriverOffer ? item.route_id : (item.route_id || item.id),
+      const computedRouteId = isLiveDriverOffer ? item.route_id : (item.route_id || item.id);
+
+      // Handle cases where the endpoint safely intercepts a duplicate action and passes a navigation direction
+      const finalTargetScreen = data.navigateTo || "MatchingScreen";
+
+      navigation.navigate(finalTargetScreen, {
+        routeId: computedRouteId,
         hubId: pickupHubId,
-        userId: "1", 
+        userId: STATIC_USER_ID,
+        rideOfferId: data.pool?.matched_ride_offer_id || data.pool?.id || null,
+        ride_offer_id: data.pool?.matched_ride_offer_id || data.pool?.id || null,
         ride: {
           corridor: corridorLabel,
           time: isLiveDriverOffer ? "Driver waiting" : "Evaluating Hub Options...",
@@ -205,120 +252,133 @@ export default function PassengerScreen({ navigation }) {
       Alert.alert("Connection Failure", "Could not reach matchmaking server pipeline layer.");
     }
   };
+
+  // 🛡️ GATEKEEPER RENDERING GUARD INTERCEPT
+  if (checkingGatekeeper) {
+    return (
+      <View style={styles.gatekeeperContainer}>
+        <ActivityIndicator size="large" color="#10B981" />
+        <Text style={styles.gatekeeperText}>Resuming Corridor Session...</Text>
+      </View>
+    );
+  }
   
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Find Shared Ride</Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#FFF" }} edges={["top", "left", "right"]}>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+        <Text style={styles.title}>Find Shared Ride</Text>
 
-      {/* HUB SEARCH */}
-      <TextInput
-        placeholder="Search pickup hub..."
-        value={searchText}
-        onChangeText={searchHubs}
-        style={styles.inputBox}
-      />
+        {/* HUB SEARCH */}
+        <TextInput
+          placeholder="Search pickup hub..."
+          value={searchText}
+          onChangeText={searchHubs}
+          style={styles.inputBox}
+          placeholderTextColor="#9CA3AF"
+        />
 
-      {loadingHubs && <ActivityIndicator style={{ marginBottom: 10 }} />}
+        {loadingHubs && <ActivityIndicator style={{ marginBottom: 10 }} color="#10B981" />}
 
-      {hubs.map((hub) => (
-        <TouchableOpacity key={hub.id || hub.name} style={styles.suggestion} onPress={() => selectHub(hub)}>
-          <Text style={styles.suggestionText}>{hub.name}</Text>
-        </TouchableOpacity>
-      ))}
-
-      {/* RIDE TYPE SELECTION PANEL */}
-      <Text style={styles.label}>Select Service Tier</Text>
-      <View style={styles.toggleRow}>
-        <TouchableOpacity
-          style={[styles.tierButton, !isSoloRide && styles.activeTierButton]}
-          onPress={() => setIsSoloRide(false)}
-        >
-          <Ionicons name="people" size={20} color={!isSoloRide ? "#FFF" : "#374151"} />
-          <Text style={[styles.tierText, !isSoloRide && styles.activeTierText]}>Shared Pool</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tierButton, isSoloRide && styles.activeSoloButton]}
-          onPress={() => setIsSoloRide(true)}
-        >
-          <FontAwesome5 name="user-alt" size={14} color={isSoloRide ? "#FFF" : "#374151"} />
-          <Text style={[styles.tierText, isSoloRide && styles.activeTierText]}>Solo Buyout</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* AVAILABLE CORRIDORS */}
-      <View style={styles.sectionHeaderRow}>
-        <Text style={styles.label}>Available Corridors</Text>
-        {selectedPickupHub && (
-          <TouchableOpacity onPress={handleRequestCorridor}>
-            <Text style={styles.requestLink}>+ Request New Route</Text>
+        {hubs.map((hub) => (
+          <TouchableOpacity key={`hub-suggestion-${hub.id || hub.name}`} style={styles.suggestion} onPress={() => selectHub(hub)}>
+            <Text style={styles.suggestionText}>{hub.name}</Text>
           </TouchableOpacity>
-        )}
-      </View>
+        ))}
 
-      <TouchableOpacity
-        style={styles.floatingDriverBtn}
-        activeOpacity={0.8}
-        onPress={() => navigation.navigate("CreateCorridorScreen")}
-      >
-        <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
-        <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
-      </TouchableOpacity>
+        {/* RIDE TYPE SELECTION PANEL */}
+        <Text style={styles.label}>Select Service Tier</Text>
+        <View style={styles.toggleRow}>
+          <TouchableOpacity
+            style={[styles.tierButton, !isSoloRide && styles.activeTierButton]}
+            onPress={() => setIsSoloRide(false)}
+          >
+            <Ionicons name="people" size={20} color={!isSoloRide ? "#FFF" : "#374151"} />
+            <Text style={[styles.tierText, !isSoloRide && styles.activeTierText]}>Shared Pool</Text>
+          </TouchableOpacity>
 
-      {loadingRoutes ? (
-        <ActivityIndicator style={{ marginVertical: 20 }} />
-      ) : routes.length === 0 && selectedPickupHub ? (
-        <View style={styles.emptyRoutesBlock}>
-          <Text style={styles.emptyText}>No corridors registered from this hub yet.</Text>
-          <TouchableOpacity style={styles.requestCorridorBtn} onPress={handleRequestCorridor}>
-            <MaterialIcons name="add_location_alt" size={20} color="#FFF" />
-            <Text style={styles.requestCorridorBtnText}>Request Custom Corridor</Text>
+          <TouchableOpacity
+            style={[styles.tierButton, isSoloRide && styles.activeSoloButton]}
+            onPress={() => setIsSoloRide(true)}
+          >
+            <FontAwesome5 name="user-alt" size={14} color={isSoloRide ? "#FFF" : "#374151"} />
+            <Text style={[styles.tierText, isSoloRide && styles.activeTierText]}>Solo Buyout</Text>
           </TouchableOpacity>
         </View>
-      ) : (
-     // Look around line 170 inside your JSX returns:
-            routes.map((route) => (
-              <TouchableOpacity
-                key={route.route_id || route.id}
-                style={styles.routeCard}
-                onPress={() => joinPool(route)} // ✨ Change this line to pass the entire route object
-              >
-                <Text style={styles.routeText}>
-                  {Array.isArray(route.stops) ? route.stops.join(" → ") : "Invalid route"}
-                </Text>
-                {/* ... remaining layout logic */}
-              </TouchableOpacity>
-            ))
-      )}
 
-      {/* RIDES OPTIONS LIST */}
-      <Text style={styles.label}>Available Options</Text>
+        {/* AVAILABLE CORRIDORS SECTION */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.label}>Available Corridors</Text>
+          {selectedPickupHub && (
+            <TouchableOpacity onPress={handleRequestCorridor}>
+              <Text style={styles.requestLink}>+ Request New Route</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
-      {loadingRides ? (
-        <ActivityIndicator style={{ marginVertical: 20 }} />
-      ) : (
-       // Look around line 190 inside your JSX returns:
-          selectedRoutes.map((route) => (
+        <TouchableOpacity
+          style={styles.floatingDriverBtn}
+          activeOpacity={0.8}
+          onPress={() => navigation.navigate("CreateCorridorScreen")}
+        >
+          <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
+          <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
+        </TouchableOpacity>
+
+        {loadingRoutes ? (
+          <ActivityIndicator style={{ marginVertical: 20 }} color="#10B981" />
+        ) : routes.length === 0 && selectedPickupHub ? (
+          <View style={styles.emptyRoutesBlock}>
+            <Text style={styles.emptyText}>No corridors registered from this hub yet.</Text>
+            <TouchableOpacity style={styles.requestCorridorBtn} onPress={handleRequestCorridor}>
+              <MaterialIcons name="add_location_alt" size={20} color="#FFF" />
+              <Text style={styles.requestCorridorBtnText}>Request Custom Corridor</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          routes.map((route) => (
+            <TouchableOpacity
+              key={`route-blueprint-${route.route_id || route.id}`}
+              style={styles.routeCard}
+              onPress={() => joinPool(route)} 
+            >
+              <Text style={styles.routeText}>
+                {Array.isArray(route.stops) ? route.stops.join(" → ") : "Invalid route Blueprint configuration"}
+              </Text>
+              <Text style={styles.subText}>Tap to join active matchmaking cluster</Text>
+            </TouchableOpacity>
+          ))
+        )}
+
+        {/* RIDES OPTIONS LIST */}
+        <Text style={styles.label}>Available Live Offers</Text>
+
+        {loadingRides ? (
+          <ActivityIndicator style={{ marginVertical: 20 }} color="#10B981" />
+        ) : selectedRoutes.length === 0 ? (
+          <Text style={styles.secondaryEmptyText}>Select a departure point above to load dynamic driver dispatches.</Text>
+        ) : (
+          selectedRoutes.map((rideOffer) => (
             <PoolOfferCard
-              key={route.id}
-              route={route}
+              key={`live-offer-card-${rideOffer.id}`}
+              route={rideOffer}
               isSoloIntent={isSoloRide}
-              onPress={() => joinPool(route)} // ✨ Change this line to pass the entire ride offer object
+              onPress={() => joinPool(rideOffer)} 
             />
           ))
-      )}
-      <View style={{ height: 40 }} />
-    </ScrollView>
+        )}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff", padding: 20 },
-  title: { fontSize: 32, fontWeight: "bold", marginBottom: 20 },
-  inputBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 15, padding: 18, marginBottom: 15 },
-  suggestion: { padding: 15, borderBottomWidth: 1, borderBottomColor: "#eee" },
-  suggestionText: { fontSize: 15, color: "#1F2937" },
-  label: { fontSize: 16, fontWeight: "700", marginTop: 15, marginBottom: 10 },
+  container: { flex: 1, backgroundColor: "#fff", paddingHorizontal: 20, paddingTop: 10 },
+  title: { fontSize: 32, fontWeight: "bold", marginBottom: 20, color: "#111827" },
+  inputBox: { borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 15, padding: 18, marginBottom: 15, fontSize: 15, color: "#111827", backgroundColor: "#F9FAFB" },
+  suggestion: { padding: 15, borderBottomWidth: 1, borderBottomColor: "#F3F4F6" },
+  suggestionText: { fontSize: 15, color: "#1F2937", fontWeight: "500" },
+  label: { fontSize: 16, fontWeight: "700", marginTop: 15, marginBottom: 10, color: "#374151" },
   sectionHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 15, marginBottom: 10 },
   requestLink: { color: "#10B981", fontWeight: "700", fontSize: 14 },
   toggleRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 15 },
@@ -327,13 +387,16 @@ const styles = StyleSheet.create({
   activeSoloButton: { backgroundColor: "#10B981", borderColor: "#10B981" },
   tierText: { marginLeft: 8, fontWeight: "700", color: "#374151" },
   activeTierText: { color: "#FFF" },
-  routeCard: { backgroundColor: "#f5f5f5", padding: 18, borderRadius: 12, marginBottom: 12 },
-  routeText: { fontSize: 16, fontWeight: "600" },
+  routeCard: { backgroundColor: "#F9FAFB", padding: 18, borderRadius: 15, marginBottom: 12, borderWidth: 1, borderColor: "#E5E7EB" },
+  routeText: { fontSize: 16, fontWeight: "600", color: "#111827" },
   subText: { fontSize: 12, color: "#10B981", fontWeight: "700", marginTop: 5 },
-  emptyRoutesBlock: { padding: 20, alignItems: "center", backgroundColor: "#F9FAFB", borderRadius: 12 },
-  emptyText: { color: "#6B7280", marginBottom: 12, textAlign: "center" },
+  emptyRoutesBlock: { padding: 24, alignItems: "center", backgroundColor: "#F9FAFB", borderRadius: 15, borderWidth: 1, borderColor: "#E5E7EB", width: "100%" },
+  emptyText: { color: "#6B7280", marginBottom: 14, textAlign: "center", fontSize: 14, fontWeight: "500" },
+  secondaryEmptyText: { color: "#9CA3AF", fontSize: 13, textAlign: "center", marginVertical: 15, fontStyle: "italic" },
   requestCorridorBtn: { flexDirection: "row", backgroundColor: "#10B981", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 25, alignItems: "center" },
   requestCorridorBtnText: { color: "#FFF", fontWeight: "700", marginLeft: 8 },
-  floatingDriverBtn: { position: "absolute", top: 70, right: 20, backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25, zIndex: 9999, elevation: 10, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#374151" },
+  floatingDriverBtn: { position: "absolute", top: 60, right: 0, backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25, zIndex: 9999, elevation: 10, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#374151" },
   floatingDriverText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
+  gatekeeperContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" },
+  gatekeeperText: { marginTop: 12, color: "#4B5563", fontWeight: "600", fontSize: 14, letterSpacing: 0.3 }
 });
