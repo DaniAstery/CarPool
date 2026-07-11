@@ -155,9 +155,15 @@ export default function ProposalDriver({ navigation, route }) {
         // Handle auto-routing state migrations if another thread handles acceptance
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
+          
+          // 🎯 FIX: Hardening the background auto-routing parameter package
+          const payloadId = parseInt(data.id, 10);
           navigation.replace("NavigateToPickup", { 
             routeId: data.route_id || routeId, 
-            rideOfferId: data.id, 
+            route_id: data.route_id || routeId,
+            rideOfferId: payloadId,
+            ride_offer_id: payloadId,
+            rideId: payloadId,
             driverId: currentDriverId 
           });
         }
@@ -192,9 +198,16 @@ export default function ProposalDriver({ navigation, route }) {
       const responseData = await res.json();
 
       if (res.ok && responseData.success) {
+        // 🎯 FIX: Flattening the object to provide absolute key compatibility redundancy.
+        // This makes sure both snake_case and camelCase receivers parse the ID instantly on mount.
+        const finalId = parseInt(responseData.rideOfferId || activeRideOfferIdRef.current || 1, 10);
+        
         navigation.replace("NavigateToPickup", { 
-          routeId, 
-          rideOfferId: responseData.rideOfferId || activeRideOfferIdRef.current || 1, 
+          routeId: routeId, 
+          route_id: routeId,
+          rideOfferId: finalId, 
+          ride_offer_id: finalId,
+          rideId: finalId,
           driverId: currentDriverId 
         });
       } else {
