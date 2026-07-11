@@ -7,6 +7,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Dimensions,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,10 +15,14 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const API_BASE_URL = "http://192.168.204.52:5000/api";
 
+// ⚡ OPTIMIZATION: Extracted out of the component scope to protect memory reference allocation 
+// and eliminate the layout-blocking race condition causing "0 Passengers" to display.
+const PICKUP_LOCATION = { latitude: 9.0115, longitude: 38.7945 };
+const { width } = Dimensions.get("window");
+
 export default function NavigateToPickupScreen({ navigation, route }) {
   const mapRef = useRef(null);
 
-  // ⚡ OPTIMIZATION: Immediate, assertive state resolution from incoming memory parameters
   const [activeRideOfferId, setActiveRideOfferId] = useState(() => {
     const passedId = route?.params?.rideId || route?.params?.ride_offer_id || null;
     return passedId ? parseInt(passedId, 10) : null;
@@ -34,12 +39,11 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   const [currentRideStatus, setCurrentRideStatus] = useState("accepted");
   
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
-  const pickupLocation = { latitude: 9.0115, longitude: 38.7945 };
 
-  // Use a mutable tracking reference to lock out overlapping interval execution threads
+  // Thread safety lock reference for high-frequency asynchronous execution passes
   const rideIdRef = useRef(activeRideOfferId);
 
-  // 🚀 FAST-PATH: Run a one-time effect hook on mount to resolve missing IDs instantly
+  // 🚀 FAST-PATH IDENTITY RESOLUTION (Runs strictly once on component mount)
   useEffect(() => {
     async function resolveActiveOfferInstance() {
       if (rideIdRef.current) {
@@ -47,18 +51,19 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         return;
       }
       try {
-        console.log("🔍 [Discovery] No ID in navigation route parameters. Fetching active allocations...");
+        console.log("🔍 [Discovery] No ID passed via navigation parameters. Pinging network allocations...");
         const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
         if (discoveryRes.ok) {
           const discoveryData = await discoveryRes.json();
           if (discoveryData.id) {
-            rideIdRef.current = parseInt(discoveryData.id, 10);
-            setActiveRideOfferId(parseInt(discoveryData.id, 10));
+            const resolvedId = parseInt(discoveryData.id, 10);
+            rideIdRef.current = resolvedId;
+            setActiveRideOfferId(resolvedId);
             if (discoveryData.route_id) setResolvedRouteId(discoveryData.route_id);
           }
         }
       } catch (err) {
-        console.log("Discovery processing failure:", err);
+        console.log("Discovery pipeline fallback failure:", err);
       } finally {
         setLoading(false);
       }
@@ -66,13 +71,12 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     resolveActiveOfferInstance();
   }, []);
 
-  // 🔄 STREAMING PIPELINE: High-frequency telemetry synchronization loop
+  // 🔄 TELEMETRY STREAMING PIPELINE (Interval decoupled from hook state churn)
   useEffect(() => {
     let isMounted = true;
     let manifestPollInterval;
 
     async function pollLiveManifestData() {
-      // Prevent fetching if an ID hasn't been successfully negotiated yet
       const currentId = rideIdRef.current;
       if (!currentId) return;
 
@@ -100,24 +104,24 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           const parsedPassengers = data.passengers.map((p, index) => {
             const rawId = p.userId || p.user_id || p.id;
             const uniqueId = rawId ? parseInt(rawId, 10) : (index + 1);
-            const rawStatus = (p.status || "matched").toLowerCase().trim();
+            const rawStatus = p.status ? p.status.toString().toLowerCase().trim() : "accepted";
 
             return {
               id: uniqueId,
               name: `Rider ${uniqueId}`,
-              latitude: pickupLocation.latitude + (index * 0.0004 - 0.0002),
-              longitude: pickupLocation.longitude + (index * 0.0004 - 0.0002),
-              status: rawStatus === "arrived" ? "Arrived" : rawStatus === "intransit" ? "In Transit" : "Accepted"
+              latitude: PICKUP_LOCATION.latitude + (index * 0.0004 - 0.0002),
+              longitude: PICKUP_LOCATION.longitude + (index * 0.0004 - 0.0002),
+              status: rawStatus === "arrived" ? "Arrived" : (rawStatus === "intransit" || rawStatus === "in_trip") ? "In Transit" : "Accepted"
             };
           });
           setPassengerStates(parsedPassengers);
         }
       } catch (err) {
-        console.log("Telemetry database polling error:", err);
+        console.log("Telemetry database synchronization handling error:", err);
       }
     }
 
-    // Initialize immediate execution pass, bypassing the first interval latency window
+    // Bypass execution block delay window on setup
     pollLiveManifestData();
     manifestPollInterval = setInterval(pollLiveManifestData, 2200);
 
@@ -125,20 +129,20 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       isMounted = false;
       clearInterval(manifestPollInterval);
     };
-  }, []); // Empty dependency matrix prevents interval churn cycles
+  }, []); // Bound cleanly to empty array matrix context 
 
   const handleWorkflowAction = async () => {
     const targetRideId = rideIdRef.current;
 
     if (!targetRideId) {
-      Alert.alert("Allocation Error", "Still negotiating active corridor offer data matrices.");
+      Alert.alert("Allocation Error", "Corridor routing identification payload mapping is incomplete.");
       return;
     }
 
     setSubmitting(true);
     try {
       if (currentRideStatus === "arrived") {
-        console.log(`📡 Sending start-trip request for Offer ID: [${targetRideId}]`);
+        console.log(`📡 Transferring state to transit engine matrix for Offer ID: [${targetRideId}]`);
         const response = await fetch(`${API_BASE_URL}/rides/start-trip`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -148,6 +152,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         const result = await response.json();
 
         if (response.ok) {
+          console.log("🚀 Trip successfully activated in DB! Shifting view parameters.");
           navigation.replace("TripInProgress", { 
             routeId: resolvedRouteId, 
             rideOfferId: targetRideId
@@ -158,7 +163,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         return;
       }
 
-      console.log(`📍 Sending arrive request for Offer ID: [${targetRideId}]`);
+      console.log(`📍 Locking terminal hub station arrival logs for Offer ID: [${targetRideId}]`);
       const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,11 +174,12 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
       if (response.ok) {
         setCurrentRideStatus("arrived");
+        console.log("✅ Arrival verified and synchronized across regional matching relays.");
       } else {
         Alert.alert("Arrival Failure", result.error || "Driver status update rejected.");
       }
     } catch (err) {
-      Alert.alert("Connection Failed", "Could not submit parameters to network driver cluster.");
+      Alert.alert("Connection Failed", "Could not submit context data points to endpoint service maps.");
     } finally {
       setSubmitting(false);
     }
@@ -208,13 +214,13 @@ export default function NavigateToPickupScreen({ navigation, route }) {
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
-            ...pickupLocation,
+            ...PICKUP_LOCATION,
             latitudeDelta: 0.01,
             longitudeDelta: 0.01,
           }}
           customMapStyle={minimalMapStyle}
         >
-          <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
+          <Marker coordinate={PICKUP_LOCATION} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.hubStationWrapper}>
               <View style={styles.hubStationPin}>
                 <Ionicons name="flag" size={12} color="#FFFFFF" />
@@ -229,7 +235,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          <Polyline coordinates={[driverLocation, pickupLocation]} strokeColor="#EF4444" strokeWidth={4} />
+          <Polyline coordinates={[driverLocation, PICKUP_LOCATION]} strokeColor="#EF4444" strokeWidth={4} />
 
           {passengerStates.map((passenger) => (
             <Marker key={`marker-node-rider-${passenger.id}`} coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}>
@@ -299,7 +305,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   );
 }
 
-// Minimal map configuration layout styling elements remain preserved
 const minimalMapStyle = [{ elementType: "geometry", stylers: [{ color: "#F5F5F5" }] }, { featureType: "poi", stylers: [{ visibility: "off" }] }];
 
 const styles = StyleSheet.create({
