@@ -51,7 +51,7 @@ export default function App() {
         />
 
         <Stack.Screen
-          name="TripDepartureScreen"
+          name="TripDeparture"
           component={TripDepartureScreen}
         />
 
