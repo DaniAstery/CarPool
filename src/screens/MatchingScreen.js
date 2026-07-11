@@ -243,7 +243,7 @@ export default function MatchingScreen({ navigation, route }) {
         )}
 
         <View style={styles.sheetRow}>
-          <Text style={styles.rowLabel}>Est. travel time</Text>
+          <Text style={styles.rowLabel}>Est.Travel Time</Text>
           <Text style={styles.rowValue}>{ride.time}</Text>
         </View>
       </View>
