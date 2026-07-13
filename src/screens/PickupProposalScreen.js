@@ -79,7 +79,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
     if (user1Accepted && user2Accepted) {
       if (currentUserId === 1 || currentUserId === 2) {
-        navigation.replace("LiveTrackingScreen", { 
+        navigation.replace("LiveTracking", { 
           routeId, 
           rideOfferId: activeRideOfferIdRef.current || 1,
           userId: currentUserId,
