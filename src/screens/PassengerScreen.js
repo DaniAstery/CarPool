@@ -33,59 +33,55 @@ export default function PassengerScreen({ navigation }) {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [loadingRides, setLoadingRides] = useState(false);
 
-  /* 🚪 FIRST THING ON LOAD: EXCLUSIVE INTERCEPT STATUS ROUTING GATEKEEPER */
+  /* 🚪 FIRST THING ON LOAD: STACK INTERCEPT STATUS LIFECYCLE GATEKEEPER */
   useEffect(() => {
     let isMounted = true;
 
     async function checkUserRoutingStatus() {
       try {
-        console.log(`📡 [Gatekeeper] Fetching baseline status context for User: ${STATIC_USER_ID}`);
+        console.log(`📡 [Gatekeeper] Fetching pure route_pool status for Passenger User: ${STATIC_USER_ID}`);
         
-        // 1. Fetch user's baseline status payload descriptor record
-        const statusRes = await fetch(`${API_URL}/routes/status/${STATIC_USER_ID}`);
+        // Target the dedicated passenger status layout route
+        const statusRes = await fetch(`${API_URL}/passenger/status/${STATIC_USER_ID}`);
         if (!statusRes.ok) throw new Error("Macro status query rejected.");
         const statusData = await statusRes.json();
 
-        // 2. If an active matching session footprint is found, trace specific tracking rules
-        if (statusData && statusData.status !== "idle" && statusData.matched_ride_offer_id) {
-          const offerId = statusData.matched_ride_offer_id;
+        // 🎯 EXACT STATUS-TO-SCREEN ROUTING MATRIX
+        if (statusData && statusData.status !== "idle" && statusData.status !== "completed") {
           
-          console.log(`📡 [Gatekeeper] Tracking via target: /rides/passenger-track/${offerId}/user/${STATIC_USER_ID}`);
-          const trackRes = await fetch(`${API_URL}/rides/passenger-track/${offerId}/user/${STATIC_USER_ID}`);
-          
-          if (trackRes.ok) {
-            const trackData = await trackRes.json();
-            
-            // Map the tracking state directly onto your relative stack interface screen layouts
-            let targetScreen = "MatchingScreen";
-            if (["accepted", "arrived"].includes(trackData.passengerSelfStatus)) {
-              targetScreen = "LiveTrackingScreen";
-            } else if (["in_trip", "completed"].includes(trackData.passengerSelfStatus)) {
-              targetScreen = "TripDeparture";
-            }
+          let targetScreen = null;
 
-            if (isMounted) {
-              console.log(`🚀 [Success Intercept] Status: [${trackData.passengerSelfStatus}] -> Intercepting views to ${targetScreen}`);
-              navigation.reset({
-                index: 0,
-                routes: [{ 
-                  name: targetScreen, 
-                  params: {
-                    routeId: trackData.routeId || statusData.routeId,
-                    rideOfferId: offerId,
-                    userId: STATIC_USER_ID
-                  } 
-                }],
-              });
-              return; // 🛑 EXIT EARLY: Completely break execution so dashboard layout never initiates
-            }
+          if (statusData.status === "searching") {
+            targetScreen = "MatchingScreen";
+          } else if (statusData.status === "matched") {
+            targetScreen = "PickupProposal";
+          } else if (["accepted", "arrived"].includes(statusData.status)) {
+            targetScreen = "LiveTracking";
+          } else if (statusData.status === "in_trip") {
+            targetScreen = "TripInProgress";
+          }
+
+          if (isMounted && targetScreen) {
+            console.log(`🚀 [Gatekeeper Intercept] route_pool status: [${statusData.status}] -> Redirecting to: ${targetScreen}`);
+            navigation.reset({
+              index: 0,
+              routes: [{ 
+                name: targetScreen, 
+                params: {
+                  routeId: statusData.routeId || null,
+                  rideOfferId: statusData.matched_ride_offer_id,
+                  userId: STATIC_USER_ID
+                } 
+              }],
+            });
+            return; // 🛑 EXIT EARLY: Keep gatekeeper shield up so dashboard layout doesn't mount
           }
         }
       } catch (err) {
-        console.log("❌ Gatekeeper runtime initialization failure:", err);
+        console.log("❌ Passenger gatekeeper stack engine failure:", err);
       }
 
-      // 🟢 IDLE FOOTPRINT CONFIRMED: Unlock standard dashboard layout engine safely
+      // 🟢 IDLE OR COMPLETED STATUS: Safely drop gatekeeper shield to show default search views
       if (isMounted) {
         setCheckingGatekeeper(false);
       }
@@ -260,7 +256,6 @@ export default function PassengerScreen({ navigation }) {
     }
   };
   
-  // 🛡️ SECURITY SHIELD PANEL: Blocks visual flashing of the options stack layout during validation checks
   if (checkingGatekeeper) {
     return (
       <View style={styles.gatekeeperContainer}>
