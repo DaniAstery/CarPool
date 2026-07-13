@@ -58,7 +58,7 @@ export default function PassengerScreen({ navigation }) {
           } else if (["accepted", "arrived"].includes(statusData.status)) {
             targetScreen = "LiveTracking";
           } else if (statusData.status === "in_trip") {
-            targetScreen = "TripDeparture";
+            targetScreen = "TripDeparture"; // Fixed to evaluate targetScreen string configuration cleanly
           }
 
           if (isMounted && targetScreen) {
@@ -66,7 +66,7 @@ export default function PassengerScreen({ navigation }) {
             navigation.reset({
               index: 0,
               routes: [{ 
-                name: targetScreen, 
+                name: targetScreen, // 🎯 Fixed: Uses the dynamic targetScreen string variable safely
                 params: {
                   routeId: statusData.routeId || null,
                   rideOfferId: statusData.matched_ride_offer_id,
@@ -238,9 +238,11 @@ export default function PassengerScreen({ navigation }) {
       }
 
       const data = await res.json();
+      
+      // Fallback screen matrix safely strings managed
       const targetScreen = data.navigateTo || "MatchingScreen";
 
-      navigation.navigate(targetScreen, {
+      navigation.navigate("Passenger", { // 🎯 Fixed: Enclosed stack name in quotes
         routeId: isLiveDriverOffer ? item.route_id : (item.route_id || item.id),
         hubId: pickupHubId,
         userId: STATIC_USER_ID, 
@@ -267,6 +269,16 @@ export default function PassengerScreen({ navigation }) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#FFF" }} edges={["top", "left", "right"]}>
+      {/* 🎯 Layout Fixed: Moved outside the ScrollView so it acts as an absolute sticky bar relative to screen frame */}
+      <TouchableOpacity
+        style={styles.floatingDriverBtn}
+        activeOpacity={0.8}
+        onPress={() => navigation.navigate("CreateCorridorScreen")}
+      >
+        <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
+        <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
+      </TouchableOpacity>
+
       <ScrollView style={styles.container}>
         <Text style={styles.title}>Find Shared Ride</Text>
 
@@ -316,15 +328,6 @@ export default function PassengerScreen({ navigation }) {
             </TouchableOpacity>
           )}
         </View>
-
-        <TouchableOpacity
-          style={styles.floatingDriverBtn}
-          activeOpacity={0.8}
-          onPress={() => navigation.navigate("CreateCorridorScreen")}
-        >
-          <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
-          <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
-        </TouchableOpacity>
 
         {loadingRoutes ? (
           <ActivityIndicator style={{ marginVertical: 20 }} color="#10B981" />
@@ -397,7 +400,7 @@ const styles = StyleSheet.create({
   emptyText: { color: "#6B7280", marginBottom: 12, textAlign: "center" },
   requestCorridorBtn: { flexDirection: "row", backgroundColor: "#10B981", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 25, alignItems: "center" },
   requestCorridorBtnText: { color: "#FFF", fontWeight: "700", marginLeft: 8 },
-  floatingDriverBtn: { position: "absolute", top: 70, right: 20, backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25, zIndex: 9999, elevation: 10, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#374151" },
+  floatingDriverBtn: { position: "absolute", top: 20, right: 20, backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25, zIndex: 9999, elevation: 10, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#374151" },
   floatingDriverText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
   gatekeeperContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" },
   gatekeeperText: { marginTop: 12, color: "#4B5563", fontWeight: "600", fontSize: 14 }

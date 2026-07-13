@@ -15,7 +15,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-// 📡 FIXED: Synchronized third octet base to target your live development server block (.204)
 const API_URL = "http://192.168.173.52:5000"; 
 
 export default function LiveTrackingScreen({ navigation, route }) {
@@ -29,10 +28,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
   const [passengerStates, setPassengerStates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
-
-  const [corePassengersArrived, setCorePassengersArrived] = useState(false);
-  const [countdownSeconds, setCountdownSeconds] = useState(20);
-  const [thresholdPassed, setThresholdPassed] = useState(false);
+  const [driverRecordStatus, setDriverRecordStatus] = useState("accepted"); // Tracks ride_offers status matrix
 
   const activeRideOfferIdRef = useRef(rideOfferIdFromParam);
   const [pulseAnim] = useState(new Animated.Value(0));
@@ -50,13 +46,12 @@ export default function LiveTrackingScreen({ navigation, route }) {
     ).start();
   }, []);
 
-  // 🔄 Real-Time Database Tracking Evaluation Loop
+  // 🔄 1 & 2: Real-Time Telemetry Pipeline (Co-Riders Matrix + Driver State Tracking)
   useEffect(() => {
     console.log(`📡 Streaming relational data pipeline for Ride Offer ID: [${activeRideOfferIdRef.current}]`);
 
     async function streamLiveTrackingData() {
       try {
-        // Updated with safe API_URL constant references 
         const res = await fetch(`${API_URL}/api/rides/track-live/offer/${activeRideOfferIdRef.current}`);
         
         if (!res.ok) {
@@ -74,6 +69,10 @@ export default function LiveTrackingScreen({ navigation, route }) {
 
         if (rideOfferId) activeRideOfferIdRef.current = rideOfferId;
 
+        // Sync driver's macro status state from the ride_offers table
+        const normalizedDriverStatus = rideStatus ? rideStatus.trim().toLowerCase() : "accepted";
+        setDriverRecordStatus(normalizedDriverStatus);
+
         if (incomingDriverLoc) {
           setDriverLocation({
             latitude: parseFloat(incomingDriverLoc.latitude),
@@ -81,16 +80,19 @@ export default function LiveTrackingScreen({ navigation, route }) {
           });
         }
 
+        // Map live passenger array payload matching the current database matrix state
         const parsedPassengers = data.passengers.map((p, index) => {
           const targetPassengerId = parseInt(p.userId || p.user_id || p.id, 10);
           const isMe = targetPassengerId === currentUserId;
           const mapColor = isMe ? "#1C75BC" : "#E28743";
           
-          let currentStatus = "Pending";
-          if (p.status === "Arrived" || p.status === "arrived") {
+          let currentStatus = "Accepted";
+          const rawStatus = p.status ? p.status.trim().toLowerCase() : "";
+          
+          if (rawStatus === "arrived") {
             currentStatus = "Arrived";
-          } else if (p.status === "Accepted" || p.status === "accepted" || p.status === "matched") {
-            currentStatus = "Accepted";
+          } else if (rawStatus === "matched") {
+            currentStatus = "Matched";
           }
 
           const scatterLat = pickupLocation.latitude + (index * 0.0004 - 0.0002);
@@ -109,14 +111,16 @@ export default function LiveTrackingScreen({ navigation, route }) {
         setPassengerStates(parsedPassengers);
         setLoading(false);
 
+        // Sync local action state if backend says user has arrived
         const meOnBackend = parsedPassengers.find(p => p.id === currentUserId);
         if (meOnBackend && meOnBackend.status === "Arrived") {
           setUserArrived(true);
         }
 
-        if (rideStatus === "departed" || rideStatus === "started" || rideStatus === "inprogress") {
+        // 🎯 AUTOMATIC NAVIGATION REDIRECT GATE: Triggered only when driver sets state to 'in_trip' or 'in_transit'
+        if (["in_trip", "inprogress", "in_transit", "departed", "started"].includes(normalizedDriverStatus)) {
           clearInterval(trackingInterval);
-          navigation.replace("TripInProgressScreen", { 
+          navigation.replace("TripDeparture", { 
             routeId, 
             rideOfferId: activeRideOfferIdRef.current, 
             ride: rideData,
@@ -136,50 +140,15 @@ export default function LiveTrackingScreen({ navigation, route }) {
     return () => clearInterval(trackingInterval);
   }, [navigation, currentUserId, routeId]);
 
-  // 🎯 Threshold Logic Evaluator Effect
-  useEffect(() => {
-    if (passengerStates.length === 0) return;
-
-    const totalArrived = passengerStates.filter(p => p.status === "Arrived").length;
-
-    if (totalArrived >= 2) {
-      setCorePassengersArrived(true);
-    } else {
-      setCorePassengersArrived(false);
-      setThresholdPassed(false);
-      setCountdownSeconds(20); 
-    }
-  }, [passengerStates]);
-
-  // ⏱️ Countdown Interval Clock
-  useEffect(() => {
-    let clockTimer = null;
-    if (corePassengersArrived && !thresholdPassed) {
-      clockTimer = setInterval(() => {
-        setCountdownSeconds((prev) => {
-          if (prev <= 1) {
-            clearInterval(clockTimer);
-            setThresholdPassed(true);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-
-    return () => {
-      if (clockTimer) clearInterval(clockTimer);
-    };
-  }, [corePassengersArrived, thresholdPassed]);
-
+  // 🎯 Handles clicking the confirmation state change trigger button
   const handleUserArrival = async () => {
     const resolvedRideOfferId = activeRideOfferIdRef.current;
     if (!resolvedRideOfferId) return;
 
-    setUserArrived(true); 
+    setUserArrived(true); // Instantly swap button layout into "waiting stage" view model
 
     try {
-      await fetch(`${API_URL}/api/rides/signal-arrival`, {
+      const res = await fetch(`${API_URL}/api/rides/signal-arrival`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -187,8 +156,11 @@ export default function LiveTrackingScreen({ navigation, route }) {
           user_id: currentUserId
         }),
       });
+
+      if (!res.ok) throw new Error("Network arrival packet rejected.");
+
     } catch (err) {
-      setUserArrived(false);
+      setUserArrived(false); // Rollback state layout on transaction failure
       console.log("Arrival status sync failure:", err);
     }
   };
@@ -203,6 +175,10 @@ export default function LiveTrackingScreen({ navigation, route }) {
       </View>
     );
   }
+
+  // Determine dynamic bottom banner presentation layer states based on tracking logic parameters
+  const allPassengersArrived = passengerStates.length > 0 && passengerStates.every(p => p.status === "Arrived");
+  const driverHasArrived = driverRecordStatus === "arrived";
 
   return (
     <SafeAreaView style={styles.container} edges={["bottom", "left", "right"]}>
@@ -233,7 +209,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
         >
           <Marker coordinate={pickupLocation} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.hubStationWrapper}>
-              <View style={styles.hubStationPin}>
+              <View style={[styles.hubStationPin, driverHasArrived && { backgroundColor: "#10B981" }]}>
                 <Ionicons name="flag" size={14} color="#FFFFFF" />
               </View>
               <View style={styles.hubStationPulseRing} />
@@ -268,7 +244,9 @@ export default function LiveTrackingScreen({ navigation, route }) {
               <FontAwesome5 name="clock" size={16} color="#1C75BC" />
             </View>
             <View style={styles.etaTextFrame}>
-              <Text style={styles.etaPrimaryLabel}>Driver Routing Active</Text>
+              <Text style={styles.etaPrimaryLabel}>
+                Driver Status: {driverRecordStatus.toUpperCase()}
+              </Text>
               <Text style={styles.etaSecondaryLabel}>Toyota Probox • Code 3 - A02319</Text>
             </View>
           </View>
@@ -294,7 +272,7 @@ export default function LiveTrackingScreen({ navigation, route }) {
                   </View>
                 ) : (
                   <View style={styles.statusWalkingBadge}>
-                    <MaterialCommunityIcons name="account-check" size={14} color="#D97706" />
+                    <MaterialCommunityIcons name="account-clock" size={14} color="#D97706" />
                     <Text style={styles.statusWalkingText}>ACCEPTED</Text>
                   </View>
                 )}
@@ -302,30 +280,28 @@ export default function LiveTrackingScreen({ navigation, route }) {
             ))}
           </View>
 
-          {thresholdPassed ? (
-            <View style={[styles.successStateBanner, { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" }]}>
-              <FontAwesome5 name="hourglass-half" size={14} color="#1D4ED8" style={{ marginRight: 10 }} />
-              <Text style={[styles.successBannerText, { color: "#1D4ED8" }]}>Waiting for driver to start the trip...</Text>
-            </View>
-          ) : corePassengersArrived ? (
-            <View style={[styles.successStateBanner, { backgroundColor: "#FFFBEB", borderColor: "#FDE68A" }]}>
-              <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 10 }} />
-              <Text style={[styles.successBannerText, { color: "#B45309" }]}>
-                Core threshold met. Starting lock window ({countdownSeconds}s)
-              </Text>
-            </View>
-          ) : !userArrived ? (
+          {/* DYNAMIC ACTION VIEW CONTROLLER HOOK */}
+          {!userArrived ? (
             <TouchableOpacity 
               style={styles.arrivedCallToActionButton}
               onPress={handleUserArrival}
               activeOpacity={0.8}
             >
-              <Text style={styles.arrivedCallToActionText}>CONFIRM HUB STATION PRESENCE</Text>
+              <Text style={styles.arrivedCallToActionText}>I HAVE ARRIVED AT HUB</Text>
             </TouchableOpacity>
+          ) : allPassengersArrived && driverHasArrived ? (
+            <View style={[styles.successStateBanner, { backgroundColor: "#EFF6FF", borderColor: "#BFDBFE" }]}>
+              <ActivityIndicator size="small" color="#1D4ED8" style={{ marginRight: 10 }} />
+              <Text style={[styles.successBannerText, { color: "#1D4ED8" }]}>
+                All set! Waiting for driver to initiate transit...
+              </Text>
+            </View>
           ) : (
             <View style={styles.successStateBanner}>
               <ActivityIndicator size="small" color="#10B981" style={{ marginRight: 10 }} />
-              <Text style={styles.successBannerText}>Waiting for core match presence (Need 2+ arrived)...</Text>
+              <Text style={styles.successBannerText}>
+                {driverHasArrived ? "Waiting for other co-riders to arrive..." : "Waiting for driver to arrive at hub..."}
+              </Text>
             </View>
           )}
 
@@ -351,8 +327,8 @@ const styles = StyleSheet.create({
   statusSecondaryText: { color: "#9CA3AF", fontSize: 11, marginTop: 2 },
   mapContainer: { flex: 1 },
   hubStationWrapper: { justifyContent: "center", alignItems: "center" },
-  hubStationPin: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", zIndex: 5 },
-  hubStationPulseRing: { position: "absolute", width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(16, 185, 129, 0.2)" },
+  hubStationPin: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", zIndex: 5 },
+  hubStationPulseRing: { position: "absolute", width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(239, 68, 68, 0.2)" },
   driverCarPin: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
   passengerTrackingPin: { width: 22, height: 22, borderRadius: 11, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#FFFFFF" },
   slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "50%", backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 20, paddingHorizontal: 20, paddingBottom: 24, borderWidth: 1, borderColor: "#E5E7EB", elevation: 8 },

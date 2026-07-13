@@ -17,7 +17,7 @@ import NavigateToPickupScreen from "./src/screens/Driver/NavigateToPickupScreen"
 import WaitingForPassengersScreen from "./src/screens/Driver/WaitingForPassengersScreen";
 import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
-import TripPaymentScreen from "./src/screens/Driver/TripPaymentScreen";
+import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -38,7 +38,7 @@ export default function App() {
         />
 
         <Stack.Screen 
-          name="LiveTrackingScreen" 
+          name="LiveTracking" 
           component={LivetrackingScreen} 
         />
         <Stack.Screen
@@ -47,7 +47,7 @@ export default function App() {
         />
 
         <Stack.Screen
-          name="PickupProposalScreen"
+          name="PickupProposal"
           component={PickupProposalScreen}
         />
 
