@@ -38,11 +38,11 @@ export default function RegisterScreen() {
     }
 
     let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1], // Perfect square crop for avatars
-      quality: 0.8,
-    });
+        mediaTypes: ['images'], // ✅ Modern Expo Standard
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        });
 
     if (!result.canceled) {
       setImageUri(result.assets[0].uri);
