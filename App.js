@@ -1,6 +1,7 @@
 import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import RegisterScreen from "./src/screens/RegistrationScreen";
 import PassengerJoinedPoolScreen from "./src/screens/JoinedPoolScreen";
 import PassengerScreen from "./src/screens/PassengerScreen";
 import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
@@ -27,6 +28,14 @@ export default function App() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
 
         {/* 👇 ALL YOUR SCREENS GO HERE */}
+
+         <Stack.Screen 
+          name="Register" 
+          component={RegisterScreen} 
+          options={{ headerShown: false }} // Hides the default top action header bar
+        />
+
+
         <Stack.Screen
           name="Passenger"
           component={PassengerScreen}
