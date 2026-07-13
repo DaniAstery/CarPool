@@ -12,11 +12,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
+import { useAuth } from '../AuthContext'; // 🎯 Pull inside the src/ folder matrix context
 
 const API_URL = "http://192.168.173.52:5000/api"; 
-const STATIC_USER_ID = 1; 
+const STATIC_USER_ID = 1; // 🛠️ Ready to swap with user?.id whenever you want to test dynamic syncing!
 
 export default function PassengerScreen({ navigation }) {
+  // 🔐 1. UNPACK GLOBAL AUTHENTICATION STATE PIPELINE
+  const { user, logoutSession } = useAuth();
+
   // 🛡️ GATEKEEPER RENDERING SAFETY CONTAINER
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
 
@@ -58,7 +62,7 @@ export default function PassengerScreen({ navigation }) {
           } else if (["accepted", "arrived"].includes(statusData.status)) {
             targetScreen = "LiveTracking";
           } else if (statusData.status === "in_trip") {
-            targetScreen = "TripDeparture"; // Fixed to evaluate targetScreen string configuration cleanly
+            targetScreen = "TripDeparture"; 
           }
 
           if (isMounted && targetScreen) {
@@ -66,7 +70,7 @@ export default function PassengerScreen({ navigation }) {
             navigation.reset({
               index: 0,
               routes: [{ 
-                name: targetScreen, // 🎯 Fixed: Uses the dynamic targetScreen string variable safely
+                name: targetScreen, 
                 params: {
                   routeId: statusData.routeId || null,
                   rideOfferId: statusData.matched_ride_offer_id,
@@ -74,14 +78,13 @@ export default function PassengerScreen({ navigation }) {
                 } 
               }],
             });
-            return; // 🛑 EXIT EARLY: Keep gatekeeper shield up so dashboard layout doesn't mount
+            return; 
           }
         }
       } catch (err) {
         console.log("❌ Passenger gatekeeper stack engine failure:", err);
       }
 
-      // 🟢 IDLE OR COMPLETED STATUS: Safely drop gatekeeper shield to show default search views
       if (isMounted) {
         setCheckingGatekeeper(false);
       }
@@ -238,11 +241,8 @@ export default function PassengerScreen({ navigation }) {
       }
 
       const data = await res.json();
-      
-      // Fallback screen matrix safely strings managed
-      const targetScreen = data.navigateTo || "MatchingScreen";
 
-      navigation.navigate("Passenger", { // 🎯 Fixed: Enclosed stack name in quotes
+      navigation.navigate("Passenger", { 
         routeId: isLiveDriverOffer ? item.route_id : (item.route_id || item.id),
         hubId: pickupHubId,
         userId: STATIC_USER_ID, 
@@ -269,7 +269,6 @@ export default function PassengerScreen({ navigation }) {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#FFF" }} edges={["top", "left", "right"]}>
-      {/* 🎯 Layout Fixed: Moved outside the ScrollView so it acts as an absolute sticky bar relative to screen frame */}
       <TouchableOpacity
         style={styles.floatingDriverBtn}
         activeOpacity={0.8}
@@ -281,6 +280,20 @@ export default function PassengerScreen({ navigation }) {
 
       <ScrollView style={styles.container}>
         <Text style={styles.title}>Find Shared Ride</Text>
+
+        {/* 🚪 HIGH PRIORITY DEVELOPMENT LOGOUT CONTROL PANEL CARD */}
+        <View style={styles.devBox}>
+          <Text style={styles.devWelcomeText}>Welcome back, {user?.full_name || "Passenger"}</Text>
+          <TouchableOpacity 
+            style={styles.devLogoutButton}
+            onPress={async () => {
+              console.log("🚪 Triggering local session erasure routine...");
+              await logoutSession();
+            }}
+          >
+            <Text style={styles.devLogoutText}>Test Logout / Reset Session Cache</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* HUB SEARCH */}
         <TextInput
@@ -381,6 +394,10 @@ export default function PassengerScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff", paddingHorizontal: 20, paddingTop: 10 },
   title: { fontSize: 32, fontWeight: "bold", marginBottom: 20 },
+  devBox: { backgroundColor: "#FFF", borderRadius: 12, borderWidth: 1, borderColor: "#A7F3D0", padding: 12, marginBottom: 15, alignItems: "center" },
+  devWelcomeText: { fontSize: 14, fontWeight: "600", color: "#111827", marginBottom: 6 },
+  devLogoutButton: { backgroundColor: "#FF3B30", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, width: "100%", alignItems: "center" },
+  devLogoutText: { color: "#FFF", fontWeight: "700", fontSize: 12 },
   inputBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 15, padding: 18, marginBottom: 15, fontSize: 15, backgroundColor: "#F9FAFB" },
   suggestion: { padding: 15, borderBottomWidth: 1, borderBottomColor: "#eee" },
   suggestionText: { fontSize: 15, color: "#1F2937" },

@@ -11,15 +11,20 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useAuth } from '../../AuthContext'; // 🎯 Handled relative paths deeply inside screens/Driver/
 
 // 🎯 BASE ENDPOINT CONFIGURATION
 const API_URL = "http://192.168.173.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
-  // Safe authentication fallback (Replace with your actual Global Context Hooks)
-  const currentAuthenticatedUser = route?.params?.user || { id: 1, activeVehicleId: null };
-  const currentDriverId = currentAuthenticatedUser?.id || 1;
+  // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX
+  const { user, logoutSession } = useAuth();
 
+  // 🎯 2. ROUTE TO REAL AUTHENTICATED CONTEXT DRIVER ATTRIBUTES
+  const currentDriverId = user?.id || 1;
+  const activeVehicleId = user?.activeVehicleId || null;
+
+  // Form Operational Parameters
   const [capacity, setCapacity] = useState(4);
   const [pricePerSeat, setPricePerSeat] = useState("100");
 
@@ -39,11 +44,10 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
 
-  // 🚦 UPGRADED NAVIGATION SESSION GATEKEEPER LOCK
+  // 🚦 3. NAVIGATION SESSION GATEKEEPER LOCK
   useEffect(() => {
     async function checkActiveDriverSession() {
       try {
-        // 🎯 FIX: Query the runtime profile status using currentDriverId 
         console.log(`📡 Fetching status for Driver from: ${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
         const res = await fetch(`${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
         if (!res.ok) {
@@ -84,22 +88,19 @@ export default function CreateCorridorScreen({ route, navigation }) {
               });
               break;
 
-                        // 🎯 UPDATED CASE MATRIX: Matches the new snake_case 'in_trip' database standard
-              case "in_trip":
-              case "inprogress":
-              case "in_transit": 
-                // FIX: Changed ${status} to ${normalizedStatus}
-                console.log(`🚗 Matching active state caught [${normalizedStatus}]. Routing directly to HUD.`);
-                navigation.replace("TripInProgress", {
-                  routeId: targetRouteId,
-                  rideOfferId: targetRideId,
-                  ride_offer_id: targetRideId,
-                  driverId: data.driverId || currentDriverId
-                });
-                break;
+            case "in_trip":
+            case "inprogress":
+            case "in_transit": 
+              console.log(`🚗 Matching active state caught [${normalizedStatus}]. Routing directly to HUD.`);
+              navigation.replace("TripInProgress", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              break;
 
-
-              case "completed":
+            case "completed":
               console.log(`💰 State recovery routing to [TripEarningsSummary]`);
               navigation.replace("TripEarningsSummary", {
                 rideOfferId: targetRideId,
@@ -125,7 +126,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
     }
   }, [currentDriverId]);
 
-  // Trigger hub search when driver types
+  // 🔎 4. HUB DROPDOWN INPUT SEARCH RUNTIME MONITOR
   useEffect(() => {
     if (hubSearchTerm.trim().length > 1) {
       searchStartingHubs();
@@ -196,7 +197,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           driver_id: currentDriverId,
-          vehicle_id: currentAuthenticatedUser.activeVehicleId, 
+          vehicle_id: activeVehicleId, 
           route_id: selectedRouteId,
           total_seats: capacity,
         })
@@ -235,6 +236,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
     }
   };
 
+  // 🎨 5. CONSOLIDATED MAIN VIEW RENDER COMPONENT ENTRY
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerBlock}>
@@ -242,6 +244,20 @@ export default function CreateCorridorScreen({ route, navigation }) {
       </View>
 
       <ScrollView style={styles.contentBody} keyboardShouldPersistTaps="handled">
+        {/* 🚪 HIGH PRIORITY RESET RUNTIME ACCESS UTILITY ROW */}
+        <View style={styles.devBox}>
+          <Text style={styles.devWelcomeText}>Welcome, {user?.full_name || "Driver"}</Text>
+          <TouchableOpacity 
+            style={styles.devLogoutButton}
+            onPress={async () => {
+              console.log("🚪 Triggering local session erasure routine...");
+              await logoutSession();
+            }}
+          >
+            <Text style={styles.devLogoutText}>Test Logout / Reset Session Cache</Text>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.sectionHeading}>📍 Where are you starting from?</Text>
         <View style={styles.searchSection}>
           <Ionicons name="search" size={18} color="#6B7280" style={styles.searchIcon} />
@@ -354,6 +370,10 @@ const styles = StyleSheet.create({
   headerBlock: { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB", alignItems: "center" },
   headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
   contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  devBox: { backgroundColor: "#FFF", borderRadius: 12, borderWidth: 1, borderColor: "#FEB2B2", padding: 12, marginBottom: 15, alignItems: "center" },
+  devWelcomeText: { fontSize: 14, fontWeight: "600", color: "#2D3748", marginBottom: 6 },
+  devLogoutButton: { backgroundColor: "#FF3B30", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, width: "100%", alignItems: "center" },
+  devLogoutText: { color: "#FFF", fontWeight: "700", fontSize: 12 },
   sectionHeading: { fontSize: 11, fontWeight: "800", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 },
   searchSection: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFF", borderRadius: 10, borderWidth: 1, borderColor: "#D1D5DB", paddingHorizontal: 12, marginBottom: 8 },
   searchIcon: { marginRight: 8 },
