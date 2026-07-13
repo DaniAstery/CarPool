@@ -12,7 +12,7 @@ import {
   Alert 
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { useAuth } from "./src/AuthContext"; // Ensure this path is correct based on your project structure
+import { useAuth } from "../authContext";// Ensure this path is correct based on your project structure
 
 export default function RegisterScreen() {
 // Access the loginSession function from the AuthContext
@@ -112,7 +112,7 @@ export default function RegisterScreen() {
             // 🎯 THE FIX: Save the user profile payload into the context engine!
             // This instantly triggers App.js to switch to the Passenger or Driver workflow.
             await loginSession(data.user);
-            
+
       } else {
         Alert.alert("Registration Failed", data.error || "Validation block exception.");
       }
