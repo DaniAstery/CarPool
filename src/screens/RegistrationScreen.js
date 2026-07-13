@@ -12,8 +12,11 @@ import {
   Alert 
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import { useAuth } from "./src/AuthContext"; // Ensure this path is correct based on your project structure
 
 export default function RegisterScreen() {
+// Access the loginSession function from the AuthContext
+  const { loginSession } = useAuth();
   // Common Fields
   const [phoneNumber, setPhoneNumber] = useState("");
   const [fullName, setFullName] = useState("");
@@ -106,8 +109,10 @@ export default function RegisterScreen() {
 
       if (response.ok) {
         Alert.alert("Success", data.message);
-        console.log("Registered User Data Framework:", data.user);
-        // Next step: save profile state to AsyncStorage and route to map matrix
+            // 🎯 THE FIX: Save the user profile payload into the context engine!
+            // This instantly triggers App.js to switch to the Passenger or Driver workflow.
+            await loginSession(data.user);
+            
       } else {
         Alert.alert("Registration Failed", data.error || "Validation block exception.");
       }
