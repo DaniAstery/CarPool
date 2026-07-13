@@ -58,7 +58,7 @@ export default function PassengerScreen({ navigation }) {
           } else if (["accepted", "arrived"].includes(statusData.status)) {
             targetScreen = "LiveTracking";
           } else if (statusData.status === "in_trip") {
-            targetScreen = "TripInProgress";
+            targetScreen = "TripDeparture";
           }
 
           if (isMounted && targetScreen) {
