@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 // 🎯 BASE ENDPOINT CONFIGURATION
-const API_URL = "http://192.168.204.52:5000"; 
+const API_URL = "http://192.168.173.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
   // Safe authentication fallback (Replace with your actual Global Context Hooks)
@@ -99,7 +99,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
                 break;
 
 
-               case "completed":
+              case "completed":
               console.log(`💰 State recovery routing to [TripEarningsSummary]`);
               navigation.replace("TripEarningsSummary", {
                 rideOfferId: targetRideId,

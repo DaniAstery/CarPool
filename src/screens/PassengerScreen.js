@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 
-const API_URL = "http://192.168.204.52:5000/api"; 
+const API_URL = "http://192.168.173.52:5000/api"; 
 const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {

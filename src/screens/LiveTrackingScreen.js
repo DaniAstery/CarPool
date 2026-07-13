@@ -16,7 +16,7 @@ import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-ico
 
 const { width } = Dimensions.get("window");
 // 📡 FIXED: Synchronized third octet base to target your live development server block (.204)
-const API_URL = "http://192.168.204.52:5000"; 
+const API_URL = "http://192.168.173.52:5000"; 
 
 export default function LiveTrackingScreen({ navigation, route }) {
   const routeId = route?.params?.routeId || "1";

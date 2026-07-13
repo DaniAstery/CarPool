@@ -15,7 +15,7 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.204.52:5000/api"; 
+const API_URL = "http://192.168.173.52:5000/api"; 
 
 export default function ProposalDriver({ navigation, route }) {
   const [driverAccepted, setDriverAccepted] = useState(false);

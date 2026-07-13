@@ -15,7 +15,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.204.52:5000"; 
+const API_URL = "http://192.168.173.52:5000"; 
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
