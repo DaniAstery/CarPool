@@ -12,7 +12,7 @@ import {
   Alert 
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { useAuth } from "../authContext";// Ensure this path is correct based on your project structure
+import { useAuth } from "../AuthContext";// Ensure this path is correct based on your project structure
 
 export default function RegisterScreen() {
 // Access the loginSession function from the AuthContext
