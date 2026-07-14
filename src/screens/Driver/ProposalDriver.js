@@ -13,44 +13,52 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
+import { useAuth } from '../../AuthContext'; 
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://192.168.173.52:5000/api"; 
 
 export default function ProposalDriver({ navigation, route }) {
+  // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX
+  const { user } = useAuth();
+
+  // 📍 2. CORE REACT STATE DECLARATIONS
+  const [currentLocation, setCurrentLocation] = useState({
+    latitude: 9.0105, 
+    longitude: 38.7935, 
+    latitudeDelta: 0.008, 
+    longitudeDelta: 0.008,
+  });
+  
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
-  
-  // 👥 Dynamic roster containing unified users assigned to this offer cluster
   const [poolPassengers, setPoolPassengers] = useState([]); 
-  // ⚡ Fresh array tracking explicit passenger IDs that committed to the run
   const [acceptedPassengerIds, setAcceptedPassengerIds] = useState([]); 
-  
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
 
-  const currentDriverId = route?.params?.driverId ? parseInt(route?.params?.driverId, 10) : 1;
+  // 🎯 3. SYSTEM ROOT PARAMETER COUPLING
+  const currentDriverId = user?.id || (route?.params?.driverId ? parseInt(route?.params?.driverId, 10) : null);
   const routeId = route?.params?.routeId || "1";
   const activeRideOfferIdRef = useRef(null);
-
-  const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105, longitude: 38.7935, latitudeDelta: 0.008, longitudeDelta: 0.008,
-  });
 
   // 💸 FARE CALCULATIONS
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
   const totalSeatsAllocated = offerDetails?.total_seats ? parseInt(offerDetails.total_seats, 10) : 4;
   
-  // Count how many are either accepted (or matched in pool) to calculate payout representation
+  // Count how many are either accepted (or matched in pool) to calculate potential payout representation
   const currentAcceptedCount = poolPassengers.filter(p => p.status === "accepted" || p.status === "matched").length;
   const currentDriverPayout = currentAcceptedCount * pricePerSeat;
 
-  // 🔐 CORE LOGIC CONDITIONS
-  const hasMinimumTwoPassengersAccepted = currentAcceptedCount >= 2;
+  // 🔐 STRICT ACCEPTANCE VALIDATIONS
+  const strictlyAcceptedCount = poolPassengers.filter(p => p.status === "accepted").length;
+  const hasMinimumTwoPassengersAccepted = strictlyAcceptedCount >= 2;
   
-  // Enforce validation constraints for Core Passengers (User 1 and User 2)
-  const isPassenger1Accepted = poolPassengers.some(p => p.user_id === 1 && (p.status === "accepted" || p.status === "matched"));
-  const isPassenger2Accepted = poolPassengers.some(p => p.user_id === 2 && (p.status === "accepted" || p.status === "matched"));
+  // Enforce validation constraints for Core Passengers (User 1 and User 2 must strictly be "accepted")
+  const isPassenger1Accepted = poolPassengers.some(p => p.user_id === 1 && p.status === "accepted");
+  const isPassenger2Accepted = poolPassengers.some(p => p.user_id === 2 && p.status === "accepted");
+  
+  // Button is unlocked ONLY when core locks have finalized status to "accepted" AND we hit the minimum threshold of 2
   const isDriverButtonUnlocked = isPassenger1Accepted && isPassenger2Accepted && hasMinimumTwoPassengersAccepted;
 
   const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
@@ -63,8 +71,10 @@ export default function ProposalDriver({ navigation, route }) {
         if (status === "granted") {
           let location = await Location.getCurrentPositionAsync({});
           setCurrentLocation({
-            latitude: location.coords.latitude, longitude: location.coords.longitude,
-            latitudeDelta: 0.008, longitudeDelta: 0.008,
+            latitude: location.coords.latitude, 
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.008, 
+            longitudeDelta: 0.008,
           });
         }
       } catch (err) {
@@ -96,11 +106,15 @@ export default function ProposalDriver({ navigation, route }) {
 
     const timer = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
     return () => clearTimeout(timer);
-  }, [timeLeft, hasMinimumTwoPassengersAccepted, driverAccepted, isOfferLockedIn]);
+  }, [timeLeft, hasMinimumTwoPassengersAccepted, driverAccepted, isOfferLockedIn, currentDriverId]);
 
-  // 🔄 LIVE-SYNC POLLING PIPELINE
- // 🔄 LIVE-SYNC POLLING PIPELINE WITH ACTIVE DIAGNOSTICS
+  // 🔄 LIVE-SYNC POLLING PIPELINE WITH ACTIVE DIAGNOSTICS
   useEffect(() => {
+    if (!currentDriverId) {
+      console.log("⏳ [Corridor Sync] Waiting for user session context to resolve...");
+      return;
+    }
+
     async function syncDatabaseManifestState() {
       try {
         const url = `${API_URL}/rides/driver-proposal/${currentDriverId}`;
@@ -112,17 +126,17 @@ export default function ProposalDriver({ navigation, route }) {
         }
         
         const data = await res.json(); 
-        if (!data) {
-          console.warn("⚠️ [Corridor Sync] Received empty payload from API.");
+        if (!data || (!data.hasActiveProposal && !data.id)) {
+          console.log("⚠️ [Corridor Sync] No active proposals for this driver session.");
           return;
         }
 
         console.log("📥 [Corridor Sync] Raw Payload Received:", JSON.stringify(data, null, 2));
 
         setOfferDetails(data);
-        activeRideOfferIdRef.current = data.id;
+        activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // 1️⃣ SANITIZE ACCEPTED PASSENGERS (Handles Postgres array format "{1,2}" or regular JS Arrays)
+        // 1️⃣ SANITIZE ACCEPTED PASSENGERS
         let cleanIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
@@ -137,14 +151,15 @@ export default function ProposalDriver({ navigation, route }) {
         }
         setAcceptedPassengerIds(cleanIds);
 
-        // 2️⃣ BULLETPROOF PARSING FOR ROUTE POOL PASSENGERS (Handles arrays, stringified JSON, and NULLs)
+        // 2️⃣ BULLETPROOF PARSING FOR ROUTE POOL PASSENGERS
         let rawPoolArray = [];
-        if (data.route_pool_passengers) {
+        if (data.passengers) {
+          rawPoolArray = data.passengers;
+        } else if (data.route_pool_passengers) {
           if (Array.isArray(data.route_pool_passengers)) {
             rawPoolArray = data.route_pool_passengers;
           } else if (typeof data.route_pool_passengers === "string") {
             try {
-              // Parse in case Postgres sent it back stringified
               rawPoolArray = JSON.parse(data.route_pool_passengers);
             } catch (jsonErr) {
               console.error("❌ [Corridor Sync] Failed to parse route_pool_passengers string:", jsonErr);
@@ -157,18 +172,18 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
           : [];
 
-        // 4️⃣ BUILD THE UNIQUE ROSTER (Combine confirmed + pool matching users + base targets)
+        // 4️⃣ BUILD THE UNIQUE ROSTER
         const totalUniqueUserIds = new Set([
           ...cleanIds,
           ...cleanPoolArray.map(p => parseInt(p.user_id, 10)),
-          1, 2 // Core baseline testing fallback targets
+          1, 2 
         ]);
 
         const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
           const isExplicitlyAccepted = cleanIds.includes(userId);
           const matchingPoolUser = cleanPoolArray.find(p => parseInt(p.user_id, 10) === userId);
           
-          let currentStatus = "matched"; // Default State
+          let currentStatus = "matched"; 
           if (isExplicitlyAccepted) {
             currentStatus = "accepted";
           } else if (matchingPoolUser) {
@@ -178,7 +193,7 @@ export default function ProposalDriver({ navigation, route }) {
           return {
             user_id: userId,
             status: currentStatus,
-            name: `Passenger Slot ${userId}`
+            name: matchingPoolUser?.passenger_name || `Passenger Slot ${userId}`
           };
         });
 
@@ -188,7 +203,7 @@ export default function ProposalDriver({ navigation, route }) {
         // 5️⃣ SYSTEM REDIRECTIONS
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
-          const payloadId = parseInt(data.id, 10);
+          const payloadId = parseInt(data.ride_offer_id || data.id, 10);
           navigation.replace("NavigateToPickup", { 
             routeId: data.route_id || routeId, 
             route_id: data.route_id || routeId,
@@ -334,7 +349,7 @@ export default function ProposalDriver({ navigation, route }) {
             />
             <Text style={[styles.timerText, !hasMinimumTwoPassengersAccepted ? {color: "#6B7280"} : timeLeft < 15 ? {color: "#EF4444"} : {color: "#10B981"}]}>
               {!hasMinimumTwoPassengersAccepted 
-                ? `Awaiting core thresholds (Need 2, got ${currentAcceptedCount})...` 
+                ? `Awaiting core thresholds (Need 2, got ${strictlyAcceptedCount})...` 
                 : driverAccepted 
                   ? "Locking Run..."
                   : `Remaining Window for Leftover Seats: ${timeLeft}s`}
@@ -350,7 +365,7 @@ export default function ProposalDriver({ navigation, route }) {
           </View>
 
           {/* DYNAMIC MANIFEST ROSTER RENDERING SECTION */}
-          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${currentAcceptedCount}/${totalSeatsAllocated} Filled)`}</Text>
+          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${strictlyAcceptedCount}/${totalSeatsAllocated} Accepted)`}</Text>
           <View style={styles.statusTable}>
             {poolPassengers.map((passenger) => {
               const pId = parseInt(passenger.user_id || passenger.id, 10);
