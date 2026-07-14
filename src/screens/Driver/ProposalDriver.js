@@ -125,33 +125,39 @@ export default function ProposalDriver({ navigation, route }) {
         setAcceptedPassengerIds(cleanIds);
 
         // 🎯 CRITICAL FIX: Smart Roster Union Merge Engine
-        const rawPoolArray = Array.isArray(data.route_pool_passengers) ? data.route_pool_passengers : [];
+              // 🔄 INSIDE ProposalDriver.js useEffect:
+          const rawPoolArray = Array.isArray(data.route_pool_passengers) ? data.route_pool_passengers : [];
 
-        // Gather all unique user IDs across both arrays to prevent ghosting or dropouts
-        const totalUniqueUserIds = new Set([
-          ...cleanIds,
-          ...rawPoolArray.map(p => parseInt(p.user_id || p.id, 10)).filter(id => !isNaN(id)),
-          1, 2 // Maintain structural baseline visibility for Core targets
-        ]);
+          // Filter out any entries where user_id is null or NaN
+          const cleanPoolArray = rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)));
 
-        const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
-          const isExplicitlyAccepted = cleanIds.includes(userId);
-          const matchingPoolUser = rawPoolArray.find(p => parseInt(p.user_id || p.id, 10) === userId);
-          
-          let currentStatus = "matched";
-          if (isExplicitlyAccepted || (matchingPoolUser && matchingPoolUser.status === "accepted")) {
-            currentStatus = "accepted";
-          }
+          // Gather all unique, valid user IDs across both arrays to prevent duplicates
+          const totalUniqueUserIds = new Set([
+            ...cleanIds,
+            ...cleanPoolArray.map(p => parseInt(p.user_id, 10)),
+            1, 2 // Keep Core baseline IDs visible for UI testing
+          ]);
 
-          return {
-            user_id: userId,
-            status: currentStatus,
-            name: `Passenger Slot ${userId}`
-          };
-        });
+          const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
+            // Check if this ID is in the driver's list of confirmed passengers
+            const isExplicitlyAccepted = cleanIds.includes(userId);
+            
+            // Find matching passenger status from the route pool table
+            const matchingPoolUser = cleanPoolArray.find(p => parseInt(p.user_id, 10) === userId);
+            
+            let currentStatus = "matched"; // Default
+            if (isExplicitlyAccepted || (matchingPoolUser && matchingPoolUser.status === "accepted")) {
+              currentStatus = "accepted";
+            }
 
-        setPoolPassengers(unifiedRoster);
+            return {
+              user_id: userId,
+              status: currentStatus,
+              name: `Passenger Slot ${userId}`
+            };
+          });
 
+          setPoolPassengers(unifiedRoster);
         // Handle auto-routing state migrations if another thread handles acceptance
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
