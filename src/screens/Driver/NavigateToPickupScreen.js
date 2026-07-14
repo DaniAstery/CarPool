@@ -15,8 +15,6 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const API_BASE_URL = "http://192.168.173.52:5000/api";
 
-// ⚡ OPTIMIZATION: Extracted out of the component scope to protect memory reference allocation 
-// and eliminate the layout-blocking race condition causing "0 Passengers" to display.
 const PICKUP_LOCATION = { latitude: 9.0115, longitude: 38.7945 };
 const { width } = Dimensions.get("window");
 
@@ -40,10 +38,10 @@ export default function NavigateToPickupScreen({ navigation, route }) {
   
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
 
-  // Thread safety lock reference for high-frequency asynchronous execution passes
+  // Thread safety lock reference
   const rideIdRef = useRef(activeRideOfferId);
 
-  // 🚀 FAST-PATH IDENTITY RESOLUTION (Runs strictly once on component mount)
+  // 🚀 FAST-PATH IDENTITY RESOLUTION
   useEffect(() => {
     async function resolveActiveOfferInstance() {
       if (rideIdRef.current) {
@@ -71,7 +69,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
     resolveActiveOfferInstance();
   }, []);
 
-  // 🔄 TELEMETRY STREAMING PIPELINE (Interval decoupled from hook state churn)
+  // 🔄 TELEMETRY STREAMING PIPELINE
   useEffect(() => {
     let isMounted = true;
     let manifestPollInterval;
@@ -101,7 +99,13 @@ export default function NavigateToPickupScreen({ navigation, route }) {
         }
 
         if (data.passengers && Array.isArray(data.passengers)) {
-          const parsedPassengers = data.passengers.map((p, index) => {
+          // 🎯 FILTER: Keep only passengers who have committed to the run
+          const acceptedPassengers = data.passengers.filter(p => {
+            const status = p.status ? p.status.toString().toLowerCase().trim() : "";
+            return status === "accepted" || status === "arrived" || status === "in_trip" || status === "intransit";
+          });
+
+          const parsedPassengers = acceptedPassengers.map((p, index) => {
             const rawId = p.userId || p.user_id || p.id;
             const uniqueId = rawId ? parseInt(rawId, 10) : (index + 1);
             const rawStatus = p.status ? p.status.toString().toLowerCase().trim() : "accepted";
@@ -121,7 +125,6 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       }
     }
 
-    // Bypass execution block delay window on setup
     pollLiveManifestData();
     manifestPollInterval = setInterval(pollLiveManifestData, 2200);
 
@@ -129,7 +132,7 @@ export default function NavigateToPickupScreen({ navigation, route }) {
       isMounted = false;
       clearInterval(manifestPollInterval);
     };
-  }, []); // Bound cleanly to empty array matrix context 
+  }, []);
 
   const handleWorkflowAction = async () => {
     const targetRideId = rideIdRef.current;
@@ -263,21 +266,27 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
           <Text style={styles.sectionHeadingLabel}>Co-Rider Acceptance Matrix</Text>
           <View style={styles.manifestContainer}>
-            {passengerStates.map((passenger) => (
-              <View key={`list-row-rider-${passenger.id}`} style={styles.passengerRow}>
-                <View style={styles.passengerIdentity}>
-                  <View style={styles.avatarCircle}>
-                    <Ionicons name="person" size={13} color="#4B5563" />
-                  </View>
-                  <Text style={styles.passengerName}>{passenger.name}</Text>
-                </View>
-                <View style={passenger.status === "Arrived" ? styles.statusArrivedBadge : passenger.status === "In Transit" ? styles.statusTransitBadge : styles.statusAcceptedBadge}>
-                  <Text style={passenger.status === "Arrived" ? styles.statusArrivedText : passenger.status === "In Transit" ? styles.statusTransitText : styles.statusAcceptedText}>
-                    {passenger.status.toUpperCase()}
-                  </Text>
-                </View>
+            {passengerStates.length === 0 ? (
+              <View style={{ paddingVertical: 20, alignItems: "center" }}>
+                <Text style={{ color: "#6B7280", fontSize: 13 }}>No confirmed passengers in this run.</Text>
               </View>
-            ))}
+            ) : (
+              passengerStates.map((passenger) => (
+                <View key={`list-row-rider-${passenger.id}`} style={styles.passengerRow}>
+                  <View style={styles.passengerIdentity}>
+                    <View style={styles.avatarCircle}>
+                      <Ionicons name="person" size={13} color="#4B5563" />
+                    </View>
+                    <Text style={styles.passengerName}>{passenger.name}</Text>
+                  </View>
+                  <View style={passenger.status === "Arrived" ? styles.statusArrivedBadge : passenger.status === "In Transit" ? styles.statusTransitBadge : styles.statusAcceptedBadge}>
+                    <Text style={passenger.status === "Arrived" ? styles.statusArrivedText : passenger.status === "In Transit" ? styles.statusTransitText : styles.statusAcceptedText}>
+                      {passenger.status.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+              ))
+            )}
           </View>
         </ScrollView>
       </View>
