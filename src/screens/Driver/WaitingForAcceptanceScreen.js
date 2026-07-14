@@ -32,9 +32,8 @@ export default function ProposalDriver({ navigation, route }) {
   
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
-  const [poolPassengers, setPoolPassengers] = useState([]); // Visual: Matched only
-  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // Logic: Behind-the-scenes count of accepted riders
-  const [acceptedPassengerIds, setAcceptedPassengerIds] = useState([]); 
+  const [poolPassengers, setPoolPassengers] = useState([]); // Visual manifest roster
+  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // For logic and price addition
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
 
@@ -45,9 +44,8 @@ export default function ProposalDriver({ navigation, route }) {
 
   // 💸 FARE CALCULATIONS
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
-  const totalSeatsAllocated = offerDetails?.total_seats ? parseInt(offerDetails.total_seats, 10) : 4;
   
-  // Potential payout displays dynamically based on the number of passenger seats that have actually ACCEPTED
+  // 💰 INCREMENTAL PRICE ADDITION: Starts at 0, adds up dynamically based strictly on accepted riders
   const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
 
   // 🔐 STRICT ACCEPTANCE VALIDATIONS (At least 2 riders must be "accepted" in the DB)
@@ -129,20 +127,19 @@ export default function ProposalDriver({ navigation, route }) {
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // 1️⃣ SANITIZE ACCEPTED PASSENGERS
-        let cleanIds = [];
+        // 1️⃣ SANITIZE ACCEPTED PASSENGERS LIST
+        let acceptedIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
-            cleanIds = data.accepted_passengers.map(id => parseInt(id, 10));
+            acceptedIds = data.accepted_passengers.map(id => parseInt(id, 10));
           } else if (typeof data.accepted_passengers === "string") {
-            cleanIds = data.accepted_passengers
+            acceptedIds = data.accepted_passengers
               .replace(/{|}/g, "")
               .split(",")
               .map(id => parseInt(id.trim(), 10))
               .filter(id => !isNaN(id));
           }
         }
-        setAcceptedPassengerIds(cleanIds);
 
         // 2️⃣ BULLETPROOF PARSING FOR ROUTE POOL PASSENGERS
         let rawPoolArray = [];
@@ -165,39 +162,25 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
           : [];
 
-        // 4️⃣ BUILD THE UNIQUE ROSTER
-        const totalUniqueUserIds = new Set([
-          ...cleanIds,
-          ...cleanPoolArray.map(p => parseInt(p.user_id, 10))
-        ]);
-
-        const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
-          const isExplicitlyAccepted = cleanIds.includes(userId);
-          const matchingPoolUser = cleanPoolArray.find(p => parseInt(p.user_id, 10) === userId);
+        // 4️⃣ CONSTRUCT ROSTER WITHOUT REMOVING PASSENGERS
+        // We map directly over the base pool list so they NEVER disappear from the screen.
+        // Instead, we dynamically swap their label from 'matched' to 'accepted'.
+        const visibleRoster = cleanPoolArray.map(passenger => {
+          const uId = parseInt(passenger.user_id, 10);
+          const isExplicitlyAccepted = acceptedIds.includes(uId) || passenger.status === "accepted";
           
-          let currentStatus = "matched"; 
-          if (isExplicitlyAccepted) {
-            currentStatus = "accepted";
-          } else if (matchingPoolUser) {
-            currentStatus = matchingPoolUser.status || "matched";
-          }
-
           return {
-            user_id: userId,
-            status: currentStatus,
-            name: matchingPoolUser?.passenger_name || `Passenger Slot ${userId}`
+            user_id: uId,
+            name: passenger.passenger_name || `Passenger Slot ${uId}`,
+            status: isExplicitlyAccepted ? "accepted" : "matched"
           };
         });
 
-        // 🎯 LOGICAL EVALUATION: Track total accepted count globally
-        const acceptedCount = unifiedRoster.filter(p => p.status === "accepted").length;
-        setStrictlyAcceptedCount(acceptedCount);
-
-        // 🎯 VISUAL FILTER: Only retain passengers whose status is strictly "matched" for display
-        const matchedOnlyRoster = unifiedRoster.filter(p => p.status === "matched");
-
-        console.log("⚡ [Corridor Sync] Rendered Matched Visual Roster:", matchedOnlyRoster);
-        setPoolPassengers(matchedOnlyRoster);
+        // Track how many are strictly 'accepted' (for button pricing and unlock triggers)
+        const finalAcceptedCount = visibleRoster.filter(p => p.status === "accepted").length;
+        
+        setStrictlyAcceptedCount(finalAcceptedCount);
+        setPoolPassengers(visibleRoster);
 
         // 5️⃣ SYSTEM REDIRECTIONS
         if (data.status === "accepted" || data.status === "inprogress") {
@@ -331,7 +314,7 @@ export default function ProposalDriver({ navigation, route }) {
                 {`ETB ${currentDriverPayout}.00`}
               </Text>
               <View style={styles.tierBadge}>
-                <Text style={styles.tierBadgeText}>{`${strictlyAcceptedCount} Confirmed`}</Text>
+                <Text style={styles.tierBadgeText}>{`${strictlyAcceptedCount} Accepted`}</Text>
               </View>
             </View>
             <View style={styles.priceBreakdownBox}>
@@ -363,31 +346,32 @@ export default function ProposalDriver({ navigation, route }) {
             </View>
           </View>
 
-          {/* DYNAMIC MANIFEST ROSTER RENDERING SECTION (MATCHED ONLY) */}
-          <Text style={styles.sectionHeading}>{`Available Passengers For Matching (${poolPassengers.length})`}</Text>
+          {/* MANIFEST LIST (MATCHED & ACCEPTED VISIBLE TOGETHER) */}
+          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length})`}</Text>
           <View style={styles.statusTable}>
             {poolPassengers.length === 0 ? (
               <View style={{ paddingVertical: 12, alignItems: "center" }}>
-                <Text style={{ color: "#6B7280", fontSize: 13 }}>No pending matched passengers found on route.</Text>
+                <Text style={{ color: "#6B7280", fontSize: 13 }}>No passengers found on route.</Text>
               </View>
             ) : (
               poolPassengers.map((passenger) => {
                 const pId = parseInt(passenger.user_id || passenger.id, 10);
+                const isAccepted = passenger.status === "accepted";
                 return (
                   <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
                     <View style={styles.tableUserLabelGroup}>
                       <Ionicons 
                         name="person-outline" 
                         size={14} 
-                        color="#0284C7" 
+                        color={isAccepted ? "#10B981" : "#0284C7"} 
                       />
                       <Text style={styles.tableUserText}>
                         {passenger.name || `Passenger ${pId}`}
                       </Text>
                     </View>
-                    <View style={[styles.badge, styles.badgeMatched]}>
-                      <Text style={[styles.badgeText, styles.textMatched]}>
-                        Matched
+                    <View style={[styles.badge, isAccepted ? styles.badgeAccepted : styles.badgeMatched]}>
+                      <Text style={[styles.badgeText, isAccepted ? styles.textAccepted : styles.textMatched]}>
+                        {isAccepted ? "Accepted" : "Matched"}
                       </Text>
                     </View>
                   </View>
