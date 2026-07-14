@@ -44,9 +44,8 @@ export default function CreateCorridorScreen({ route, navigation }) {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
 
-  // 🚦 3. NAVIGATION SESSION GATEKEEPER LOCK
+  // 🚦 3. NAVIGATION SESSION GATEKEEPER LOCK (Upgraded with passenger-state-driven redirection)
   useEffect(() => {
-    // Wait until the authentication state is fully resolved from AsyncStorage
     if (isAuthLoading || !currentDriverId) return;
 
     async function checkActiveDriverSession() {
@@ -65,9 +64,65 @@ export default function CreateCorridorScreen({ route, navigation }) {
           const normalizedStatus = (data.status || "").toLowerCase().trim();
           const targetRouteId = data.routeId || data.route_id;
           const targetRideId = data.rideOfferId || data.ride_offer_id || data.id;
+          const passengers = data.passengers || [];
 
-          console.log(`🗺️ Gatekeeper evaluating active state matrix for Status: [${normalizedStatus}]`);
+          console.log(`🗺️ Gatekeeper evaluating session & rider status matrix...`);
 
+          // 1. Evaluate Passenger State Matrix first (from route_pool metadata)
+          if (passengers.length > 0) {
+            // Check if ANY passenger has "accepted"
+            const hasAcceptedRider = passengers.some(p => {
+              const pStatus = (p.status || "").toLowerCase().trim();
+              return pStatus === "accepted";
+            });
+
+            // Check if there is exactly 1 rider, and they are in "matched" status
+            const hasSingleMatchedRider = passengers.length === 1 && passengers.some(p => {
+              const pStatus = (p.status || "").toLowerCase().trim();
+              return pStatus === "matched";
+            });
+
+            // Check if ANY passenger has "arrived" (at the pickup station hub context)
+            const hasArrivedRider = passengers.some(p => {
+              const pStatus = (p.status || "").toLowerCase().trim();
+              return pStatus === "arrived";
+            });
+
+            if (hasAcceptedRider) {
+              console.log("👉 Passenger accepted the proposal! Routing to ProposalDriver...");
+              navigation.replace("ProposalDriver", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              return;
+            }
+
+            if (hasSingleMatchedRider) {
+              console.log("👉 Single matched rider detected waiting on decision. Routing to WaitingForRiders...");
+              navigation.replace("WaitingForRiders", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              return;
+            }
+
+            if (hasArrivedRider) {
+              console.log("👉 Passenger has arrived! Routing directly to TripInProgress...");
+              navigation.replace("TripInProgress", {
+                routeId: targetRouteId,
+                rideOfferId: targetRideId,
+                ride_offer_id: targetRideId,
+                driverId: data.driverId || currentDriverId
+              });
+              return;
+            }
+          }
+
+          // 2. Fallback to default Master Ride Offer Status if passenger status is not explicitly matching above
           switch (normalizedStatus) {
             case "pending":
               console.log(`⏳ State recovery routing to [WaitingForRiders]`);
@@ -242,7 +297,6 @@ export default function CreateCorridorScreen({ route, navigation }) {
     }
   };
 
-  // Render loading screen if AsyncStorage hasn't finished reading on start
   if (isAuthLoading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -252,7 +306,6 @@ export default function CreateCorridorScreen({ route, navigation }) {
     );
   }
 
-  // 🎨 5. CONSOLIDATED MAIN VIEW RENDER COMPONENT ENTRY
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerBlock}>
@@ -260,7 +313,6 @@ export default function CreateCorridorScreen({ route, navigation }) {
       </View>
 
       <ScrollView style={styles.contentBody} keyboardShouldPersistTaps="handled">
-        {/* 🚪 HIGH PRIORITY RESET RUNTIME ACCESS UTILITY ROW */}
         <View style={styles.devBox}>
           <Text style={styles.devWelcomeText}>Welcome, {user?.full_name || "Driver"}</Text>
           <TouchableOpacity 

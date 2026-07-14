@@ -32,7 +32,8 @@ export default function ProposalDriver({ navigation, route }) {
   
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
-  const [poolPassengers, setPoolPassengers] = useState([]); 
+  const [poolPassengers, setPoolPassengers] = useState([]); // Visual: Matched only
+  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // Logic: Behind-the-scenes count of accepted riders
   const [acceptedPassengerIds, setAcceptedPassengerIds] = useState([]); 
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
@@ -46,20 +47,12 @@ export default function ProposalDriver({ navigation, route }) {
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
   const totalSeatsAllocated = offerDetails?.total_seats ? parseInt(offerDetails.total_seats, 10) : 4;
   
-  // Count how many are either accepted (or matched in pool) to calculate potential payout representation
-  const currentAcceptedCount = poolPassengers.filter(p => p.status === "accepted" || p.status === "matched").length;
-  const currentDriverPayout = currentAcceptedCount * pricePerSeat;
+  // Potential payout displays based on the visual matched roster seats
+  const currentDriverPayout = poolPassengers.length * pricePerSeat;
 
-  // 🔐 STRICT ACCEPTANCE VALIDATIONS
-  const strictlyAcceptedCount = poolPassengers.filter(p => p.status === "accepted").length;
+  // 🔐 STRICT ACCEPTANCE VALIDATIONS (At least 2 riders must be "accepted" in the DB)
   const hasMinimumTwoPassengersAccepted = strictlyAcceptedCount >= 2;
-  
-  // Enforce validation constraints for Core Passengers (User 1 and User 2 must strictly be "accepted")
-  const isPassenger1Accepted = poolPassengers.some(p => p.user_id === 1 && p.status === "accepted");
-  const isPassenger2Accepted = poolPassengers.some(p => p.user_id === 2 && p.status === "accepted");
-  
-  // Button is unlocked ONLY when core locks have finalized status to "accepted" AND we hit the minimum threshold of 2
-  const isDriverButtonUnlocked = isPassenger1Accepted && isPassenger2Accepted && hasMinimumTwoPassengersAccepted;
+  const isDriverButtonUnlocked = hasMinimumTwoPassengersAccepted;
 
   const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
 
@@ -175,8 +168,7 @@ export default function ProposalDriver({ navigation, route }) {
         // 4️⃣ BUILD THE UNIQUE ROSTER
         const totalUniqueUserIds = new Set([
           ...cleanIds,
-          ...cleanPoolArray.map(p => parseInt(p.user_id, 10)),
-          1, 2 
+          ...cleanPoolArray.map(p => parseInt(p.user_id, 10))
         ]);
 
         const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
@@ -197,8 +189,15 @@ export default function ProposalDriver({ navigation, route }) {
           };
         });
 
-        console.log("⚡ [Corridor Sync] Rendered Unified Roster:", unifiedRoster);
-        setPoolPassengers(unifiedRoster);
+        // 🎯 LOGICAL EVALUATION: Track accepted count before filtering
+        const acceptedCount = unifiedRoster.filter(p => p.status === "accepted").length;
+        setStrictlyAcceptedCount(acceptedCount);
+
+        // 🎯 VISUAL FILTER: Only retain passengers whose status is strictly "matched" for display
+        const matchedOnlyRoster = unifiedRoster.filter(p => p.status === "matched");
+
+        console.log("⚡ [Corridor Sync] Rendered Matched Visual Roster:", matchedOnlyRoster);
+        setPoolPassengers(matchedOnlyRoster);
 
         // 5️⃣ SYSTEM REDIRECTIONS
         if (data.status === "accepted" || data.status === "inprogress") {
@@ -332,11 +331,11 @@ export default function ProposalDriver({ navigation, route }) {
                 {`ETB ${currentDriverPayout}.00`}
               </Text>
               <View style={styles.tierBadge}>
-                <Text style={styles.tierBadgeText}>{`${currentAcceptedCount} Seats Confirmed`}</Text>
+                <Text style={styles.tierBadgeText}>{`${poolPassengers.length} Matched`}</Text>
               </View>
             </View>
             <View style={styles.priceBreakdownBox}>
-              <Text style={styles.breakdownText}>• Base Rate: <Text style={{fontWeight:'700', color: '#10B981'}}>{`ETB ${pricePerSeat}`}</Text> per committed pool user seat.</Text>
+              <Text style={styles.breakdownText}>• Base Rate: <Text style={{fontWeight:'700', color: '#10B981'}}>{`ETB ${pricePerSeat}`}</Text> per matched pool user seat.</Text>
             </View>
           </View>
 
@@ -349,10 +348,10 @@ export default function ProposalDriver({ navigation, route }) {
             />
             <Text style={[styles.timerText, !hasMinimumTwoPassengersAccepted ? {color: "#6B7280"} : timeLeft < 15 ? {color: "#EF4444"} : {color: "#10B981"}]}>
               {!hasMinimumTwoPassengersAccepted 
-                ? `Awaiting core thresholds (Need 2, got ${strictlyAcceptedCount})...` 
+                ? `Awaiting Passenger Thresholds (Need 2 accepted, got ${strictlyAcceptedCount})...` 
                 : driverAccepted 
                   ? "Locking Run..."
-                  : `Remaining Window for Leftover Seats: ${timeLeft}s`}
+                  : `Remaining Window to Accept: ${timeLeft}s`}
             </Text>
           </View>
 
@@ -365,41 +364,36 @@ export default function ProposalDriver({ navigation, route }) {
           </View>
 
           {/* DYNAMIC MANIFEST ROSTER RENDERING SECTION */}
-          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${strictlyAcceptedCount}/${totalSeatsAllocated} Accepted)`}</Text>
+          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length} Matched / ${strictlyAcceptedCount} Accepted)`}</Text>
           <View style={styles.statusTable}>
-            {poolPassengers.map((passenger) => {
-              const pId = parseInt(passenger.user_id || passenger.id, 10);
-              const isPassengerAccepted = passenger.status === 'accepted';
-              const isPassengerMatched = passenger.status === 'matched';
-              const isCoreRequirement = pId === 1 || pId === 2;
-              
-              return (
-                <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
-                  <View style={styles.tableUserLabelGroup}>
-                    <Ionicons 
-                      name="person-outline" 
-                      size={14} 
-                      color={isPassengerAccepted ? "#10B981" : isPassengerMatched ? "#3B82F6" : "#6B7280"} 
-                    />
-                    <Text style={styles.tableUserText}>
-                      {passenger.name || `Passenger ${pId}`}
-                      {isCoreRequirement && <Text style={{fontSize: 11, color: '#EF4444', fontWeight:'600'}}> *Core Lock</Text>}
-                    </Text>
+            {poolPassengers.length === 0 ? (
+              <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                <Text style={{ color: "#6B7280", fontSize: 13 }}>No matched passengers found for this run.</Text>
+              </View>
+            ) : (
+              poolPassengers.map((passenger) => {
+                const pId = parseInt(passenger.user_id || passenger.id, 10);
+                return (
+                  <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
+                    <View style={styles.tableUserLabelGroup}>
+                      <Ionicons 
+                        name="person-outline" 
+                        size={14} 
+                        color="#0284C7" 
+                      />
+                      <Text style={styles.tableUserText}>
+                        {passenger.name || `Passenger ${pId}`}
+                      </Text>
+                    </View>
+                    <View style={[styles.badge, styles.badgeMatched]}>
+                      <Text style={[styles.badgeText, styles.textMatched]}>
+                        Matched
+                      </Text>
+                    </View>
                   </View>
-                  <View style={[
-                    styles.badge, 
-                    isPassengerAccepted ? styles.badgeAccepted : isPassengerMatched ? styles.badgeMatched : styles.badgePending
-                  ]}>
-                    <Text style={[
-                      styles.badgeText, 
-                      isPassengerAccepted ? styles.textAccepted : isPassengerMatched ? styles.textMatched : styles.textPending
-                    ]}>
-                      {isPassengerAccepted ? "Accepted" : isPassengerMatched ? "Matched" : "Pending"}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
+                );
+              })
+            )}
           </View>
 
           {/* WORKFLOW DISPATCH SELECTION CONTROLS */}
@@ -428,7 +422,7 @@ export default function ProposalDriver({ navigation, route }) {
                     : (hasMinimumTwoPassengersAccepted && timeLeft <= 0) 
                       ? "DISPATCH WINDOW ELAPSED"
                       : !isDriverButtonUnlocked
-                        ? "AWAITING CORE PASSENGERS"
+                        ? `AWAITING ACCEPTANCES (${strictlyAcceptedCount}/2)`
                         : `Accept [${currentDriverPayout} ETB]`
                   }
                 </Text>
