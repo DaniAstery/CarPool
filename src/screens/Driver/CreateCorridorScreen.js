@@ -11,17 +11,17 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useAuth } from '../../AuthContext'; // 🎯 Handled relative paths deeply inside screens/Driver/
+import { useAuth } from '../../AuthContext'; // 🎯 Relative path aligned to your project structure
 
 // 🎯 BASE ENDPOINT CONFIGURATION
 const API_URL = "http://192.168.173.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX
-  const { user, logoutSession } = useAuth();
+  const { user, isLoading: isAuthLoading, logoutSession } = useAuth();
 
   // 🎯 2. ROUTE TO REAL AUTHENTICATED CONTEXT DRIVER ATTRIBUTES
-  const currentDriverId = user?.id || 1;
+  const currentDriverId = user?.id; 
   const activeVehicleId = user?.activeVehicleId || null;
 
   // Form Operational Parameters
@@ -46,6 +46,9 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
   // 🚦 3. NAVIGATION SESSION GATEKEEPER LOCK
   useEffect(() => {
+    // Wait until the authentication state is fully resolved from AsyncStorage
+    if (isAuthLoading || !currentDriverId) return;
+
     async function checkActiveDriverSession() {
       try {
         console.log(`📡 Fetching status for Driver from: ${API_URL}/api/rides/driver-active-session/${currentDriverId}`);
@@ -121,10 +124,8 @@ export default function CreateCorridorScreen({ route, navigation }) {
       }
     }
 
-    if (currentDriverId) {
-      checkActiveDriverSession();
-    }
-  }, [currentDriverId]);
+    checkActiveDriverSession();
+  }, [currentDriverId, isAuthLoading]);
 
   // 🔎 4. HUB DROPDOWN INPUT SEARCH RUNTIME MONITOR
   useEffect(() => {
@@ -185,6 +186,11 @@ export default function CreateCorridorScreen({ route, navigation }) {
   };
 
   const handleGoOnline = async () => {
+    if (!currentDriverId) {
+      Alert.alert("Authentication Required", "Please log in again to publish your route.");
+      return;
+    }
+
     if (!selectedRouteId) {
       Alert.alert("Selection Required", "Please select an active corridor route blueprint.");
       return;
@@ -210,7 +216,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
         return;
       }
 
-      Alert.alert("Live! 🚀", `Corridor Published! Matched with ${data.filled} passenger(s).`);
+      Alert.alert("Live! 🚀", `Corridor Published! Matched with ${data.filled || 0} passenger(s).`);
       
       if (navigation) {
         navigation.navigate("WaitingForRiders", { 
@@ -235,6 +241,16 @@ export default function CreateCorridorScreen({ route, navigation }) {
       setIsPublishing(false);
     }
   };
+
+  // Render loading screen if AsyncStorage hasn't finished reading on start
+  if (isAuthLoading) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#059669" />
+        <Text style={{ marginTop: 10, color: "#4B5563" }}>Recovering session...</Text>
+      </SafeAreaView>
+    );
+  }
 
   // 🎨 5. CONSOLIDATED MAIN VIEW RENDER COMPONENT ENTRY
   return (
@@ -367,6 +383,7 @@ export default function CreateCorridorScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
+  centered: { justifyContent: "center", alignItems: "center" },
   headerBlock: { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB", alignItems: "center" },
   headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
   contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },

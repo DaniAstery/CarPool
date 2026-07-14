@@ -41,15 +41,16 @@ export default function ProposalDriver({ navigation, route }) {
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
   const totalSeatsAllocated = offerDetails?.total_seats ? parseInt(offerDetails.total_seats, 10) : 4;
   
-  const currentAcceptedCount = acceptedPassengerIds.length;
+  // Count how many are either accepted (or matched in pool) to calculate payout representation
+  const currentAcceptedCount = poolPassengers.filter(p => p.status === "accepted" || p.status === "matched").length;
   const currentDriverPayout = currentAcceptedCount * pricePerSeat;
 
   // 🔐 CORE LOGIC CONDITIONS
   const hasMinimumTwoPassengersAccepted = currentAcceptedCount >= 2;
   
   // Enforce validation constraints for Core Passengers (User 1 and User 2)
-  const isPassenger1Accepted = acceptedPassengerIds.includes(1);
-  const isPassenger2Accepted = acceptedPassengerIds.includes(2);
+  const isPassenger1Accepted = poolPassengers.some(p => p.user_id === 1 && (p.status === "accepted" || p.status === "matched"));
+  const isPassenger2Accepted = poolPassengers.some(p => p.user_id === 2 && (p.status === "accepted" || p.status === "matched"));
   const isDriverButtonUnlocked = isPassenger1Accepted && isPassenger2Accepted && hasMinimumTwoPassengersAccepted;
 
   const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
@@ -98,17 +99,30 @@ export default function ProposalDriver({ navigation, route }) {
   }, [timeLeft, hasMinimumTwoPassengersAccepted, driverAccepted, isOfferLockedIn]);
 
   // 🔄 LIVE-SYNC POLLING PIPELINE
+ // 🔄 LIVE-SYNC POLLING PIPELINE WITH ACTIVE DIAGNOSTICS
   useEffect(() => {
     async function syncDatabaseManifestState() {
       try {
-        const res = await fetch(`${API_URL}/rides/driver-proposal/${currentDriverId}`);
-        if (!res.ok) return;
+        const url = `${API_URL}/rides/driver-proposal/${currentDriverId}`;
+        const res = await fetch(url);
+        
+        if (!res.ok) {
+          console.warn(`⚠️ [Corridor Sync] Non-OK response: ${res.status} from ${url}`);
+          return;
+        }
         
         const data = await res.json(); 
+        if (!data) {
+          console.warn("⚠️ [Corridor Sync] Received empty payload from API.");
+          return;
+        }
+
+        console.log("📥 [Corridor Sync] Raw Payload Received:", JSON.stringify(data, null, 2));
+
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.id;
 
-        // SANITIZE POSTGRES ARRAY STRINGS AND CONVERT TO NATIVE INTEGERS
+        // 1️⃣ SANITIZE ACCEPTED PASSENGERS (Handles Postgres array format "{1,2}" or regular JS Arrays)
         let cleanIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
@@ -121,48 +135,59 @@ export default function ProposalDriver({ navigation, route }) {
               .filter(id => !isNaN(id));
           }
         }
-
         setAcceptedPassengerIds(cleanIds);
 
-        // 🎯 CRITICAL FIX: Smart Roster Union Merge Engine
-              // 🔄 INSIDE ProposalDriver.js useEffect:
-          const rawPoolArray = Array.isArray(data.route_pool_passengers) ? data.route_pool_passengers : [];
-
-          // Filter out any entries where user_id is null or NaN
-          const cleanPoolArray = rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)));
-
-          // Gather all unique, valid user IDs across both arrays to prevent duplicates
-          const totalUniqueUserIds = new Set([
-            ...cleanIds,
-            ...cleanPoolArray.map(p => parseInt(p.user_id, 10)),
-            1, 2 // Keep Core baseline IDs visible for UI testing
-          ]);
-
-          const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
-            // Check if this ID is in the driver's list of confirmed passengers
-            const isExplicitlyAccepted = cleanIds.includes(userId);
-            
-            // Find matching passenger status from the route pool table
-            const matchingPoolUser = cleanPoolArray.find(p => parseInt(p.user_id, 10) === userId);
-            
-            let currentStatus = "matched"; // Default
-            if (isExplicitlyAccepted || (matchingPoolUser && matchingPoolUser.status === "accepted")) {
-              currentStatus = "accepted";
+        // 2️⃣ BULLETPROOF PARSING FOR ROUTE POOL PASSENGERS (Handles arrays, stringified JSON, and NULLs)
+        let rawPoolArray = [];
+        if (data.route_pool_passengers) {
+          if (Array.isArray(data.route_pool_passengers)) {
+            rawPoolArray = data.route_pool_passengers;
+          } else if (typeof data.route_pool_passengers === "string") {
+            try {
+              // Parse in case Postgres sent it back stringified
+              rawPoolArray = JSON.parse(data.route_pool_passengers);
+            } catch (jsonErr) {
+              console.error("❌ [Corridor Sync] Failed to parse route_pool_passengers string:", jsonErr);
             }
+          }
+        }
 
-            return {
-              user_id: userId,
-              status: currentStatus,
-              name: `Passenger Slot ${userId}`
-            };
-          });
+        // 3️⃣ SANITIZE AND REMOVE EMPTY/NULL DATABASE ENTRIES
+        const cleanPoolArray = Array.isArray(rawPoolArray) 
+          ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
+          : [];
 
-          setPoolPassengers(unifiedRoster);
-        // Handle auto-routing state migrations if another thread handles acceptance
+        // 4️⃣ BUILD THE UNIQUE ROSTER (Combine confirmed + pool matching users + base targets)
+        const totalUniqueUserIds = new Set([
+          ...cleanIds,
+          ...cleanPoolArray.map(p => parseInt(p.user_id, 10)),
+          1, 2 // Core baseline testing fallback targets
+        ]);
+
+        const unifiedRoster = Array.from(totalUniqueUserIds).map(userId => {
+          const isExplicitlyAccepted = cleanIds.includes(userId);
+          const matchingPoolUser = cleanPoolArray.find(p => parseInt(p.user_id, 10) === userId);
+          
+          let currentStatus = "matched"; // Default State
+          if (isExplicitlyAccepted) {
+            currentStatus = "accepted";
+          } else if (matchingPoolUser) {
+            currentStatus = matchingPoolUser.status || "matched";
+          }
+
+          return {
+            user_id: userId,
+            status: currentStatus,
+            name: `Passenger Slot ${userId}`
+          };
+        });
+
+        console.log("⚡ [Corridor Sync] Rendered Unified Roster:", unifiedRoster);
+        setPoolPassengers(unifiedRoster);
+
+        // 5️⃣ SYSTEM REDIRECTIONS
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
-          
-          // 🎯 FIX: Hardening the background auto-routing parameter package
           const payloadId = parseInt(data.id, 10);
           navigation.replace("NavigateToPickup", { 
             routeId: data.route_id || routeId, 
@@ -175,7 +200,7 @@ export default function ProposalDriver({ navigation, route }) {
         }
 
       } catch (err) {
-        console.log("Corridor Manifest Sync Failure:", err);
+        console.error("❌ [Corridor Sync] Manifest Sync Execution Failure:", err);
       }
     }
 
@@ -204,8 +229,6 @@ export default function ProposalDriver({ navigation, route }) {
       const responseData = await res.json();
 
       if (res.ok && responseData.success) {
-        // 🎯 FIX: Flattening the object to provide absolute key compatibility redundancy.
-        // This makes sure both snake_case and camelCase receivers parse the ID instantly on mount.
         const finalId = parseInt(responseData.rideOfferId || activeRideOfferIdRef.current || 1, 10);
         
         navigation.replace("NavigateToPickup", { 
@@ -332,6 +355,7 @@ export default function ProposalDriver({ navigation, route }) {
             {poolPassengers.map((passenger) => {
               const pId = parseInt(passenger.user_id || passenger.id, 10);
               const isPassengerAccepted = passenger.status === 'accepted';
+              const isPassengerMatched = passenger.status === 'matched';
               const isCoreRequirement = pId === 1 || pId === 2;
               
               return (
@@ -340,16 +364,22 @@ export default function ProposalDriver({ navigation, route }) {
                     <Ionicons 
                       name="person-outline" 
                       size={14} 
-                      color={isPassengerAccepted ? "#10B981" : "#6B7280"} 
+                      color={isPassengerAccepted ? "#10B981" : isPassengerMatched ? "#3B82F6" : "#6B7280"} 
                     />
                     <Text style={styles.tableUserText}>
                       {passenger.name || `Passenger ${pId}`}
                       {isCoreRequirement && <Text style={{fontSize: 11, color: '#EF4444', fontWeight:'600'}}> *Core Lock</Text>}
                     </Text>
                   </View>
-                  <View style={[styles.badge, isPassengerAccepted ? styles.badgeAccepted : styles.badgePending]}>
-                    <Text style={[styles.badgeText, isPassengerAccepted ? styles.textAccepted : styles.textPending]}>
-                      {isPassengerAccepted ? "Accepted" : "Matched / Pending"}
+                  <View style={[
+                    styles.badge, 
+                    isPassengerAccepted ? styles.badgeAccepted : isPassengerMatched ? styles.badgeMatched : styles.badgePending
+                  ]}>
+                    <Text style={[
+                      styles.badgeText, 
+                      isPassengerAccepted ? styles.textAccepted : isPassengerMatched ? styles.textMatched : styles.textPending
+                    ]}>
+                      {isPassengerAccepted ? "Accepted" : isPassengerMatched ? "Matched" : "Pending"}
                     </Text>
                   </View>
                 </View>
@@ -436,9 +466,11 @@ const styles = StyleSheet.create({
   tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500" },
   badge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, minWidth: 95, alignItems: "center" },
   badgePending: { backgroundColor: "#EFF6FF" },
+  badgeMatched: { backgroundColor: "#E0F2FE" },
   badgeAccepted: { backgroundColor: "#ECFDF5" },
   badgeText: { fontSize: 12, fontWeight: "600" },
   textPending: { color: "#3B82F6" },
+  textMatched: { color: "#0284C7" },
   textAccepted: { color: "#10B981" },
   actionButtonContainer: { marginTop: 4 },
   buttonButtonGroup: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
