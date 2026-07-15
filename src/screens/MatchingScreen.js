@@ -13,7 +13,7 @@ import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.173.52:5000/api"; // 🚀 Match your PassengerScreen IP configuration!
+const API_URL = "http://192.168.163.52:5000/api"; // 🚀 Match your PassengerScreen IP configuration!
 
 export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);

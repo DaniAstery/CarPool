@@ -13,7 +13,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-const API_BASE_URL = "http://192.168.173.52:5000/api";
+const API_BASE_URL = "http://192.168.163.52:5000/api";
 
 const PICKUP_LOCATION = { latitude: 9.0115, longitude: 38.7945 };
 const { width } = Dimensions.get("window");

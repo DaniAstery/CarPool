@@ -30,7 +30,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
     async function checkCorridorStatus() {
       try {
         const response = await fetch(
-          `http://192.168.173.52:5000/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
+          `http://192.168.163.52:5000/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
         );
         
         if (!response.ok) {

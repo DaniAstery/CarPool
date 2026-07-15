@@ -15,13 +15,14 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.173.52:5000"; 
+const API_URL = "http://192.168.163.52:5000"; 
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
   const [coRiders, setCoRiders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
+  const [driverState, setDriverState] = useState("pending"); 
 
   const currentUserId = route?.params?.userId ? parseInt(route?.params?.userId, 10) : 1;
   const routeId = route?.params?.routeId || "1";
@@ -59,7 +60,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     })();
   }, []);
 
-  // Window acceptance countdown countdown ticking
+  // Window acceptance countdown ticking
   useEffect(() => {
     if (!isBaselinePairReady) return; 
 
@@ -77,7 +78,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     const user1Accepted = currentUserId === 1 ? userAccepted : coRiders.find(r => r.id === 1)?.status === "Accepted" || coRiders.find(r => r.id === 1)?.status === "Arrived";
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted" || coRiders.find(r => r.id === 2)?.status === "Arrived";
 
-    if (user1Accepted && user2Accepted) {
+    if (user1Accepted && user2Accepted && driverState === "accepted") {
       if (currentUserId === 1 || currentUserId === 2) {
         navigation.replace("LiveTracking", { 
           routeId, 
@@ -95,7 +96,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   };
 
-  // 📡 Real-Time Status Synchronization Pipeline
+  // 📡 Real-Time Status Synchronization Pipeline (Auto-Navigation Optimized)
   useEffect(() => {
     let pollInterval;
 
@@ -106,37 +107,43 @@ export default function PickupProposalScreen({ navigation, route }) {
         
         const data = await res.json();
 
-        // Safe Intercept: If server flags the active profile state as arrived, short-circuit onward
-        if (data.currentUserPoolStatus === "arrived") {
-          clearInterval(pollInterval);
-          navigation.replace("LiveTrackingScreen", { 
-            routeId: data.routeId || routeId, 
-            rideOfferId: data.rideOfferId || 1, 
-            userId: currentUserId,
-            initialUserArrived: true 
-          });
-          return;
-        }
+        // Safe Intercept: Parse driver status directly from backend response
+        const parsedDriverStatus = (data.ride_offer_status || data.rideOfferStatus || "pending").toLowerCase().trim();
+        setDriverState(parsedDriverStatus);
 
         const rideOfferId = data.rideOfferId || data.ride_offer_id;
         activeRideOfferIdRef.current = rideOfferId;
 
+        // Extract raw and formatted accepted passenger IDs
         const rawAccepted = data.acceptedPassengers || [];
         const cleanAcceptedIds = rawAccepted.map(id => typeof id === 'object' ? parseInt(id.user_id || id.id, 10) : parseInt(id, 10));
-        const fullRosterIds = data.manifestPassengers || [1, 2]; // Defaults to core duo vector to clear checks safely
+        const fullRosterIds = data.manifestPassengers || [1, 2];
 
-        if (cleanAcceptedIds.includes(currentUserId)) {
+        // 1. Calculate active user state from database response locally to prevent stale state blocking
+        const dbUserPoolStatus = (data.currentUserPoolStatus || "").toLowerCase().trim();
+        const localUserAccepted = cleanAcceptedIds.includes(currentUserId) || 
+                                  dbUserPoolStatus === "accepted" || 
+                                  dbUserPoolStatus === "arrived" || 
+                                  userAccepted;
+
+        if (localUserAccepted && !userAccepted) {
           setUserAccepted(true);
         }
 
+        // 2. Compute co-rider state with immediate status overrides
         const parsedCoRiders = fullRosterIds
           .filter((id) => id !== currentUserId)
           .map((id, index) => {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
             const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId || p.user_id, 10) === id);
+            
             let mappedStatus = cleanAcceptedIds.includes(id) ? "Accepted" : "Pending";
             
-            if (serverPassengerRecord?.status === "arrived" || serverPassengerRecord?.status === "Arrived") {
+            const passengerStatus = (serverPassengerRecord?.status || "").toLowerCase().trim();
+            if (passengerStatus === "accepted" || passengerStatus === "arrived") {
+              mappedStatus = "Accepted";
+            }
+            if (passengerStatus === "arrived") {
               mappedStatus = "Arrived";
             }
 
@@ -150,32 +157,35 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         setCoRiders(parsedCoRiders);
 
-        // 🎯 BULLETPROOF NAVIGATION INTERCEPT MATRIX:
-        // Parse states strictly for the absolute baseline core partners (Riders 1 & 2)
-        const r1Ready = currentUserId === 1 ? userAccepted : (cleanAcceptedIds.includes(1) || parsedCoRiders.find(r => r.id === 1)?.status === "Arrived");
-        const r2Ready = currentUserId === 2 ? userAccepted : (cleanAcceptedIds.includes(2) || parsedCoRiders.find(r => r.id === 2)?.status === "Arrived");
-        const corePairAccepted = r1Ready && r2Ready;
+        // 3. Evaluate matching metrics via pure calculated variables
+        const allPassengersAccepted = fullRosterIds.every(id => {
+          if (id === currentUserId) {
+            return localUserAccepted;
+          }
+          const riderRecord = parsedCoRiders.find(r => r.id === id);
+          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
+        });
+        
+        const driverAccepted = parsedDriverStatus === "accepted";
 
-        // Check if any additional burst-joiners (Riders 3+) matched on this run have cleared verification
-        const secondaryRosterIds = fullRosterIds.filter(id => id > 2);
-        const secondariesAllAccepted = secondaryRosterIds.length === 0 || secondaryRosterIds.every(id => {
-          if (id === currentUserId) return userAccepted;
-          const record = parsedCoRiders.find(r => r.id === id);
-          return record?.status === "Accepted" || record?.status === "Arrived";
+        const isCorePairReadyInDb = fullRosterIds.slice(0, 2).every(id => {
+          if (id === currentUserId) return localUserAccepted;
+          const riderRecord = parsedCoRiders.find(r => r.id === id);
+          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
         });
 
-        // 🚀 FAST-TRACK FORWARD CONDITION
-        if (corePairAccepted) {
-          if (secondariesAllAccepted || timeLeft === 0) {
-            console.log("🎉 Core pairing ready and verified! Routing straight to LiveTrackingScreen.");
-            clearInterval(pollInterval);
-            navigation.replace("LiveTrackingScreen", { 
-              routeId, 
-              rideOfferId: rideOfferId || 1, 
-              userId: currentUserId 
-            });
-            return;
-          }
+        // 🎯 RELIABLE AUTO-LAUNCH INTERCEPT
+        // Fast-tracks the navigation immediately when the db updates inside route_pool and ride_offers!
+        if (driverAccepted && (allPassengersAccepted || (isCorePairReadyInDb && timeLeft === 0) || dbUserPoolStatus === "arrived")) {
+          console.log("🎉 ALL CRITERIA MET (State changes synchronized perfectly). Launching LiveTracking immediately.");
+          clearInterval(pollInterval);
+          navigation.replace("LiveTracking", { 
+            routeId, 
+            rideOfferId: rideOfferId || 1, 
+            userId: currentUserId,
+            initialUserArrived: dbUserPoolStatus === "arrived"
+          });
+          return;
         }
 
       } catch (err) {
@@ -184,9 +194,9 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
 
     checkProposalStatus();
-    pollInterval = setInterval(checkProposalStatus, 2200); // 2.2s latency polling footprint
+    pollInterval = setInterval(checkProposalStatus, 2200); 
     return () => clearInterval(pollInterval);
-  }, [navigation, currentUserId, userAccepted, timeLeft]);
+  }, [navigation, currentUserId, userAccepted, timeLeft, driverState]);
 
   const handleAccept = async () => {
     setUserAccepted(true);
@@ -204,7 +214,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   const handleDecline = async () => {
     Alert.alert(
       "Decline Corridor Pool?",
-      "Are you sure you want to reject this proposal? You will return to the hub station queue line.",
+      "Are you sure you want to reject this proposal?",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -277,6 +287,18 @@ export default function PickupProposalScreen({ navigation, route }) {
             </View>
           </View>
 
+          {/* DRIVER ASSIGNMENT BADGE STATUS */}
+          <View style={[styles.driverStatusBox, driverState === "accepted" ? styles.driverAccepted : styles.driverPending]}>
+            <Ionicons 
+              name={driverState === "accepted" ? "checkmark-circle" : "time-outline"} 
+              size={16} 
+              color={driverState === "accepted" ? "#065F46" : "#854D0E"} 
+            />
+            <Text style={[styles.driverStatusText, driverState === "accepted" ? {color: "#065F46"} : {color: "#854D0E"}]}>
+              {driverState === "accepted" ? "Driver Claimed & Scheduled" : "Waiting for driver to claim pool reservation..."}
+            </Text>
+          </View>
+
           <View style={[styles.timerBanner, !isBaselinePairReady ? styles.timerWaiting : timeLeft < 15 ? styles.timerUrgent : null]}>
             <MaterialCommunityIcons 
               name={isBaselinePairReady ? "clock-fast" : "clock-alert-outline"} 
@@ -347,7 +369,7 @@ export default function PickupProposalScreen({ navigation, route }) {
                 <View style={styles.waitingBanner}>
                   <ActivityIndicator size="small" color="#1C75BC" style={{ marginRight: 8 }} />
                   <Text style={styles.waitingBannerText}>
-                    {timeLeft > 0 ? "Accepted! Waiting for group..." : "Launching transit views..."}
+                    {driverState !== "accepted" ? "Waiting on driver claim..." : "Waiting for group to finalize..."}
                   </Text>
                 </View>
               )}
@@ -383,6 +405,10 @@ const styles = StyleSheet.create({
   tierBadgeText: { fontSize: 11, color: "#1C75BC", fontWeight: "700" },
   priceBreakdownBox: { marginTop: 10, borderTopWidth: 1, borderTopColor: "#E5E7EB", paddingTop: 8 },
   breakdownText: { fontSize: 12, color: "#4B5563", marginVertical: 2 },
+  driverStatusBox: { flexDirection: "row", alignItems: "center", padding: 10, borderRadius: 8, marginBottom: 12, borderWidth: 1 },
+  driverPending: { backgroundColor: "#FEF9C3", borderColor: "#FEF08A" },
+  driverAccepted: { backgroundColor: "#D1FAE5", borderColor: "#A7F3D0" },
+  driverStatusText: { fontSize: 12, fontWeight: "600", marginLeft: 6 },
   timerBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#EBF5FF", paddingVertical: 10, borderRadius: 10, marginBottom: 16 },
   timerWaiting: { backgroundColor: "#F3F4F6", borderWidth: 0.5, borderColor: "#D1D5DB" },
   timerUrgent: { backgroundColor: "#FEE2E2" },
