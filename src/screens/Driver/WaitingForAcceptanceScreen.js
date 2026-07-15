@@ -33,7 +33,7 @@ export default function ProposalDriver({ navigation, route }) {
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
   const [poolPassengers, setPoolPassengers] = useState([]); // Visual manifest roster
-  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // For logic and price addition
+  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // Dynamic price adder
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
 
@@ -45,7 +45,7 @@ export default function ProposalDriver({ navigation, route }) {
   // 💸 FARE CALCULATIONS
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
   
-  // 💰 INCREMENTAL PRICE ADDITION: Starts at 0, adds up dynamically based strictly on accepted riders
+  // 💰 DYNAMIC ADDITION: Price increases on button only when passengers accept
   const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
 
   // 🔐 STRICT ACCEPTANCE VALIDATIONS (At least 2 riders must be "accepted" in the DB)
@@ -127,12 +127,13 @@ export default function ProposalDriver({ navigation, route }) {
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // 1️⃣ SANITIZE ACCEPTED PASSENGERS LIST
+        // 1️⃣ PARSE ACCEPTED PASSENGERS LIST
         let acceptedIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
             acceptedIds = data.accepted_passengers.map(id => parseInt(id, 10));
           } else if (typeof data.accepted_passengers === "string") {
+            // Clean up database representation e.g. "{1, 2}" or "1,2"
             acceptedIds = data.accepted_passengers
               .replace(/{|}/g, "")
               .split(",")
@@ -141,7 +142,7 @@ export default function ProposalDriver({ navigation, route }) {
           }
         }
 
-        // 2️⃣ BULLETPROOF PARSING FOR ROUTE POOL PASSENGERS
+        // 2️⃣ PARSE ROUTE POOL PASSENGERS
         let rawPoolArray = [];
         if (data.passengers) {
           rawPoolArray = data.passengers;
@@ -157,16 +158,16 @@ export default function ProposalDriver({ navigation, route }) {
           }
         }
 
-        // 3️⃣ SANITIZE AND REMOVE EMPTY/NULL DATABASE ENTRIES
         const cleanPoolArray = Array.isArray(rawPoolArray) 
           ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
           : [];
 
-        // 4️⃣ CONSTRUCT ROSTER WITHOUT REMOVING PASSENGERS
-        // We map directly over the base pool list so they NEVER disappear from the screen.
-        // Instead, we dynamically swap their label from 'matched' to 'accepted'.
+        // 3️⃣ MAP POOL MEMBERS DIRECTLY WITHOUT FILTERING
+        // Compare user_id to the accepted list, and update status dynamically
         const visibleRoster = cleanPoolArray.map(passenger => {
           const uId = parseInt(passenger.user_id, 10);
+          
+          // Verify if they exist in acceptedIds array OR if status is already flagged in the object
           const isExplicitlyAccepted = acceptedIds.includes(uId) || passenger.status === "accepted";
           
           return {
@@ -176,13 +177,13 @@ export default function ProposalDriver({ navigation, route }) {
           };
         });
 
-        // Track how many are strictly 'accepted' (for button pricing and unlock triggers)
+        // 4️⃣ TRACK ACCEPTED COUNT (For button state triggers and pricing logic)
         const finalAcceptedCount = visibleRoster.filter(p => p.status === "accepted").length;
         
         setStrictlyAcceptedCount(finalAcceptedCount);
         setPoolPassengers(visibleRoster);
 
-        // 5️⃣ SYSTEM REDIRECTIONS
+        // 5️⃣ REDIRECT TO ACTIVE RUN ON ACCEPTS
         if (data.status === "accepted" || data.status === "inprogress") {
           setDriverAccepted(true);
           const payloadId = parseInt(data.ride_offer_id || data.id, 10);
@@ -365,7 +366,7 @@ export default function ProposalDriver({ navigation, route }) {
                         size={14} 
                         color={isAccepted ? "#10B981" : "#0284C7"} 
                       />
-                      <Text style={styles.tableUserText}>
+                      <Text style={[styles.tableUserText, isAccepted && { color: "#10B981", fontWeight: "700" }]}>
                         {passenger.name || `Passenger ${pId}`}
                       </Text>
                     </View>
