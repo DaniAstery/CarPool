@@ -13,10 +13,11 @@ import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 
 const { width } = Dimensions.get("window");
+const API_URL = "http://192.168.173.52:5000/api"; // 🚀 Match your PassengerScreen IP configuration!
 
 export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);
-  const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 80");
+  const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 150");
   const [currentLocation, setCurrentLocation] = useState({
     latitude: 9.0105, longitude: 38.7935, latitudeDelta: 0.015, longitudeDelta: 0.015,
   });
@@ -24,11 +25,11 @@ export default function MatchingScreen({ navigation, route }) {
   const radarAnim = useRef(new Animated.Value(0)).current;
   
   // Destructure routing parameter sets safely
-  const routeId = route?.params?.routeId || "3";
+  const routeId = route?.params?.routeId || "1";
   const hubId = route?.params?.hubId || "1";
   const userId = route?.params?.userId || "1"; 
   const currentUserId = parseInt(userId, 10);
-  const ride = route?.params?.ride || { corridor: "Megenagna → Bole", time: "25 min" };
+  const ride = route?.params?.ride || { corridor: "Evaluating Corridor...", time: "Calculating..." };
 
   // Track user hardware location
   useEffect(() => {
@@ -53,15 +54,15 @@ export default function MatchingScreen({ navigation, route }) {
   }, [radarAnim]);
 
 
- // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
+  // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
   useEffect(() => {
     let pollingInterval;
     let isMounted = true;
 
     const checkMyPoolStatus = async () => {
       try {
-        // Query the dedicated, isolated GET endpoint by userId
-        const response = await fetch(`http://192.168.204.52:5000/api/routes/status/${userId}`);
+        console.log(`📡 Polling status for User ID: ${currentUserId} on ${API_URL}/routes/status/${currentUserId}`);
+        const response = await fetch(`${API_URL}/routes/status/${currentUserId}`);
         
         if (!response.ok) {
           const errorHtml = await response.text();
@@ -72,92 +73,76 @@ export default function MatchingScreen({ navigation, route }) {
         const data = await response.json();
         if (!isMounted) return;
 
-        // 🎯 Fallback matrix parser designed for structural recovery payload traces
-        const rideStatus = data.rideStatus || data.pool?.rideStatus || data.match_pipeline?.rideStatus || "";
+        console.log("📥 [Match Sync Received]:", JSON.stringify(data, null, 2));
 
-        // 🚀 INTERCEPT PATH 1: The trip has already left/started while backgrounded
-        if (rideStatus === "departed" || rideStatus === "started" || rideStatus === "inprogress") {
-          console.log("🏁 Active ride detected in production. Fast-tracking to TripInProgressScreen.");
+        // 🎯 1. Extract status parameters safely from the payload structure
+        const currentPoolStatus = (data.status || data.pool?.status || data.match_pipeline?.status || "searching").toLowerCase().trim();
+        const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
+        const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
+        const finalPriceValue = data.finalPrice || data.pool?.finalPrice || data.pool?.base_price || 150;
+
+        setMatchedCount(currentCount);
+        setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
+
+        // 🎯 2. check if the ride has departed or started
+        const rideStatus = (data.rideStatus || data.pool?.rideStatus || "").toLowerCase();
+        if (["departed", "started", "inprogress", "in_trip"].includes(rideStatus)) {
+          console.log("🏁 Active ride departed. Fast-tracking to TripInProgressScreen.");
           if (pollingInterval) clearInterval(pollingInterval);
-          
-          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || 1;
-          
           navigation.replace("TripInProgressScreen", {
             routeId,
             rideOfferId: targetRideOfferId,
-            ride: { ...ride },
+            ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}` },
             userId: currentUserId
           });
           return;
         }
 
-        // 🎯 Normalized Status Check (catches root status, data.pool.status, or pipeline status flags)
-        const currentPoolStatus = data.status || data.pool?.status || data.match_pipeline?.status || "";
-
-        // 🚀 PATH EVALUATION: Handle recovery for both 'matched', 'recovered', AND 'arrived' states
-        if (currentPoolStatus === "matched" || currentPoolStatus === "arrived" || currentPoolStatus === "recovered") {
-          setMatchedCount(2); // Instantly update counter to core fulfillment threshold
-          
-          const finalPriceValue = data.finalPrice || data.pool?.finalPrice || 80;
-          // 🎯 Safely maps both snake_case and camelCase parameters from your logs
-          const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || 1;
-
-          setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
-
+        // 🎯 3. IF A DRIVER HAS ACCEPTED (matched_ride_offer_id is not null) -> ROUTE TO PROPOSAL
+        if (targetRideOfferId !== null) {
+          console.log(`🚗 [Driver Assigned] Ride Offer Detected: ${targetRideOfferId}. Forwarding to Proposal.`);
           if (pollingInterval) clearInterval(pollingInterval);
 
-          // Deep scan passenger table manifest arrays across root or sub-nodes
           const passengersList = data.passengers || data.pool?.passengers || [];
           const myRow = passengersList.find(p => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId);
-          
-          // Verify arrival flag across the parent table block or individual profile metrics
-          // 🎯 Explicitly checks if your main recovery status payload block states "arrived"
-          const alreadyArrived = currentPoolStatus === "arrived" || data.pool?.status === "arrived" || myRow?.status === "arrived" || myRow?.status === "Arrived";
+          const alreadyArrived = currentPoolStatus === "arrived" || data.pool?.status === "arrived" || myRow?.status?.toLowerCase() === "arrived";
 
-          // 🔧 Wrapped inside macro-task delay to protect against navigation race states
           setTimeout(() => {
-            if (isMounted && navigation) {
+            if (isMounted) {
               if (alreadyArrived) {
-                // 🚀 INTERCEPT PATH 2: Matched AND already arrived -> bypass proposal view layer
-                console.log("🎯 User status verified as 'arrived'. Forwarding directly to LiveTrackingScreen.");
+                console.log("🎯 User already at hub. Forwarding directly to LiveTracking.");
                 navigation.replace("LiveTrackingScreen", {
                   routeId,
                   rideOfferId: targetRideOfferId,
-                  ride: { 
-                    ...ride, 
-                    price: `ETB ${parseInt(finalPriceValue, 10)}`, 
-                    finalCount: 2 
-                  },
+                  ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
                   userId: currentUserId,
-                  initialUserArrived: true // Locks interface elements to green state instantly
+                  initialUserArrived: true
                 });
               } else {
-                // 🚀 INTERCEPT PATH 3: Matched but still walking -> proceed to proposal deck
-                console.log("🚶 Match verified but status is walking. Moving to PickupProposalScreen.");
-                navigation.replace("PickupProposalScreen", { 
+                console.log("🚶 Moving to PickupProposalScreen to meet driver.");
+                navigation.replace("PickupProposal", { 
                   routeId, 
                   rideOfferId: targetRideOfferId, 
-                  ride: { 
-                    ...ride, 
-                    price: `ETB ${parseInt(finalPriceValue, 10)}`, 
-                    finalCount: 2 
-                  },
+                  ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
                   userId: currentUserId
                 });
               }
             }
           }, 1000);
-        } else {
-          // Fallback to active searching count layout
-          const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
-          setMatchedCount(currentCount);
+          return;
         }
+
+        // 🎯 4. passenger-to-passenger matched state (2/2 threshold reached, waiting on driver)
+        if (currentPoolStatus === "matched" || currentCount >= 2) {
+          console.log("👥 Core match threshold reached! (2/2). Still waiting on a driver offer assignment.");
+          setMatchedCount(2); // Ensure UI displays 2/2 visually
+        }
+
       } catch (err) {
         console.log("Status lookup connection failure:", err);
       }
     };
 
-    // Run verification immediately on mount to process connection drop restorations instantly
     checkMyPoolStatus();
     pollingInterval = setInterval(checkMyPoolStatus, 2500);
 
@@ -211,7 +196,7 @@ export default function MatchingScreen({ navigation, route }) {
 
         <Text style={styles.cardTitle}>
           <Text>{`Pooling Core Partners\non `}</Text>
-          <Text>{ride.corridor}</Text>
+          <Text style={{ color: "#10B981" }}>{ride.corridor}</Text>
         </Text>
 
         <Text style={styles.matchCountText}>{`${matchedCount} / 2`}</Text>
@@ -223,7 +208,10 @@ export default function MatchingScreen({ navigation, route }) {
             <ActivityIndicator size="small" color="#111" style={{ marginLeft: 8 }} />
           </View>
         ) : (
-          <Text style={styles.successRouteText}>🎉 Core matched! Catching bonus riders...</Text>
+          <View style={styles.loaderInlineRow}>
+            <Text style={styles.successRouteText}>🎉 Core matched! Waiting for driver...</Text>
+            <ActivityIndicator size="small" color="#10B981" style={{ marginLeft: 8 }} />
+          </View>
         )}
       </View>
 
@@ -236,14 +224,14 @@ export default function MatchingScreen({ navigation, route }) {
           <Text style={styles.rowValue}>{displayedPrice}</Text>
         </View>
         
-        {matchedCount > 2 && (
+        {matchedCount >= 2 && (
           <View style={styles.bonusBadge}>
-            <Text style={styles.bonusBadgeText}>🎁 Bonus Joiners active! Discount locked in.</Text>
+            <Text style={styles.bonusBadgeText}>🎁 Core Threshold Met! Base discount locked in.</Text>
           </View>
         )}
 
         <View style={styles.sheetRow}>
-          <Text style={styles.rowLabel}>Est.Travel Time</Text>
+          <Text style={styles.rowLabel}>Est. Travel Time</Text>
           <Text style={styles.rowValue}>{ride.time}</Text>
         </View>
       </View>

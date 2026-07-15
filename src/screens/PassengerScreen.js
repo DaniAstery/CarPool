@@ -18,7 +18,10 @@ const API_URL = "http://192.168.173.52:5000/api";
 const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {
+  // 🔐 1. UNPACK GLOBAL AUTHENTICATION STATE PIPELINE
   const { user, logoutSession } = useAuth();
+
+  // 🛡️ GATEKEEPER RENDERING SAFETY CONTAINER
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
 
   // App Workspace Layout States
@@ -34,18 +37,22 @@ export default function PassengerScreen({ navigation }) {
   const [loadingRoutes, setLoadingRoutes] = useState(false);
   const [loadingRides, setLoadingRides] = useState(false);
 
-  /* 🚪 FIRST THING ON LOAD: LIFE-CYCLE GATEKEEPER CHECK */
+  /* 🚪 FIRST THING ON LOAD: STACK INTERCEPT STATUS LIFECYCLE GATEKEEPER */
   useEffect(() => {
     let isMounted = true;
 
     async function checkUserRoutingStatus() {
       try {
-        console.log(`📡 [Gatekeeper] Fetching status for Passenger: ${STATIC_USER_ID}`);
+        console.log(`📡 [Gatekeeper] Fetching pure route_pool status for Passenger User: ${STATIC_USER_ID}`);
+        
+        // Target the dedicated passenger status layout route
         const statusRes = await fetch(`${API_URL}/passenger/status/${STATIC_USER_ID}`);
         if (!statusRes.ok) throw new Error("Macro status query rejected.");
         const statusData = await statusRes.json();
 
+        // 🎯 EXACT STATUS-TO-SCREEN ROUTING MATRIX
         if (statusData && statusData.status !== "idle" && statusData.status !== "completed") {
+          
           let targetScreen = null;
 
           if (statusData.status === "searching") {
@@ -59,7 +66,7 @@ export default function PassengerScreen({ navigation }) {
           }
 
           if (isMounted && targetScreen) {
-            console.log(`🚀 [Gatekeeper Intercept] Status [${statusData.status}] -> Re-routing to: ${targetScreen}`);
+            console.log(`🚀 [Gatekeeper Intercept] route_pool status: [${statusData.status}] -> Redirecting to: ${targetScreen}`);
             navigation.reset({
               index: 0,
               routes: [{ 
@@ -75,7 +82,7 @@ export default function PassengerScreen({ navigation }) {
           }
         }
       } catch (err) {
-        console.log("❌ Passenger gatekeeper failed:", err);
+        console.log("❌ Passenger gatekeeper stack engine failure:", err);
       }
 
       if (isMounted) {
@@ -128,10 +135,11 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
-  /* ---------------- OPTIONAL: VIEW EXISTING DRIVE OPTIONS ---------------- */
+  /* ---------------- SELECT CORRIDOR → GET RIDES ---------------- */
   const handleRouteSelect = async (routeId) => {
     const parsedRouteId = parseInt(routeId, 10);
     if (!parsedRouteId || isNaN(parsedRouteId)) {
+      console.log("⚠️ Aborting fetch: routeId is invalid or NaN:", routeId);
       setSelectedRoutes([]);
       return;
     }
@@ -149,7 +157,7 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
-  /* ---------------- REQUEST NEW CORRIDOR ---------------- */
+  /* ---------------- 🚀 REQUEST NEW CORRIDOR ---------------- */
   const handleRequestCorridor = async () => {
     if (!selectedPickupHub) {
       Alert.alert("Error", "Please select a starting hub first.");
@@ -191,8 +199,19 @@ export default function PassengerScreen({ navigation }) {
   const joinPool = async (item) => {
     try {
       const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
-      const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
       
+      // Determine if it's a live driver offer object
+      const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || 
+                                Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
+      
+      // Resolve Route ID cleanly to ensure it never passes undefined/NaN
+      const targetRouteId = parseInt(item.route_id || item.id, 10);
+      if (!targetRouteId || isNaN(targetRouteId)) {
+        console.error("❌ [Join Pool Error] Failed to resolve a valid Route ID from item:", item);
+        Alert.alert("Payload Error", "Could not resolve a valid corridor route ID.");
+        return;
+      }
+
       let endpoint = isLiveDriverOffer ? `${API_URL}/rides/join-pool` : `${API_URL}/routes/join`;
       let payload = {};
       let corridorLabel = "Selected Corridor";
@@ -210,7 +229,7 @@ export default function PassengerScreen({ navigation }) {
       } else {
         endpoint = `${API_URL}/routes/join`;
         payload = {
-          route_id: item.route_id || item.id,
+          route_id: targetRouteId,
           user_id: STATIC_USER_ID,
           pickup_hub_id: pickupHubId,
           dropoff_hub_id: null,
@@ -220,6 +239,7 @@ export default function PassengerScreen({ navigation }) {
       }
 
       console.log(`📡 Dispatching payload to endpoint: ${endpoint}`);
+      console.log("📦 Payload contents:", JSON.stringify(payload, null, 2));
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -227,37 +247,60 @@ export default function PassengerScreen({ navigation }) {
         body: JSON.stringify(payload),
       });
 
+      const responseText = await res.text();
+      console.log(`📥 Raw Server Response:`, responseText);
+
       if (!res.ok) {
-        Alert.alert("Router Disconnect", "Verification processing failed. Check parameter layout mappings.");
+        Alert.alert("Router Disconnect", `Verification processing failed. Server status: ${res.status}`);
         return;
       }
 
-      const data = await res.json();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.error("❌ Failed to parse JSON response:", e);
+        Alert.alert("Data Error", "Received an invalid format from server processing.");
+        return;
+      }
 
       // Extract state parameters returned by backend pipeline
       const isRecovered = data.alreadyActive === true;
-      const targetRideOfferId = data.pool?.matched_ride_offer_id || data.pool?.id || null;
+      const targetRideOfferId = data.pool?.matched_ride_offer_id || null;
+      const targetPoolId = data.pool?.id || null;
       
       // Target screen is MatchingScreen so they can wait in the lobby
       const targetScreen = isRecovered ? (data.navigateTo || "MatchingScreen") : "MatchingScreen";
 
-      console.log(`🧭 [Navigation Dispatch] Routing to: ${targetScreen} | Active Ride Offer ID: ${targetRideOfferId}`);
+      console.log(`🧭 [Navigation Dispatch] Directly routing to: ${targetScreen} | Pool ID: ${targetPoolId} | Ride Offer ID: ${targetRideOfferId}`);
 
-      navigation.navigate("Passenger", { 
-        screen: targetScreen, 
-        params: {
-          routeId: isLiveDriverOffer ? item.route_id : (item.route_id || item.id),
-          hubId: pickupHubId,
-          userId: STATIC_USER_ID, 
-          rideOfferId: targetRideOfferId,
-          poolStatus: data.pool?.status || "searching",
-          ride: {
-            corridor: corridorLabel,
-            time: isLiveDriverOffer ? "Driver waiting" : "Evaluating Hub Options...",
-            price: isLiveDriverOffer ? `ETB ${parseInt(item.price_per_seat, 10)}` : `ETB ${item.base_price || 150}`,
-          }
+      const navigationParams = {
+        routeId: targetRouteId,
+        hubId: pickupHubId,
+        userId: STATIC_USER_ID, 
+        poolId: targetPoolId,
+        rideOfferId: targetRideOfferId,
+        poolStatus: data.pool?.status || "searching",
+        ride: {
+          corridor: corridorLabel,
+          time: isLiveDriverOffer ? "Driver waiting" : "Evaluating Hub Options...",
+          price: isLiveDriverOffer ? `ETB ${parseInt(item.price_per_seat, 10)}` : `ETB ${item.base_price || 150}`,
         }
-      });
+      };
+
+      // 🚀 DIRECT NAVIGATION DISPATCH (With emergency stack reset fallback)
+      try {
+        navigation.navigate(targetScreen, navigationParams);
+      } catch (navErr) {
+        console.warn("⚠️ Direct navigation failed, executing emergency stack reset...");
+        navigation.reset({
+          index: 0,
+          routes: [{ 
+            name: targetScreen, 
+            params: navigationParams
+          }],
+        });
+      }
 
     } catch (err) {
       console.error("Join Pool Error:", err);
@@ -288,7 +331,7 @@ export default function PassengerScreen({ navigation }) {
       <ScrollView style={styles.container}>
         <Text style={styles.title}>Find Shared Ride</Text>
 
-        {/* HIGH PRIORITY LOGOUT CONTROL */}
+        {/* 🚪 HIGH PRIORITY DEVELOPMENT LOGOUT CONTROL PANEL CARD */}
         <View style={styles.devBox}>
           <Text style={styles.devWelcomeText}>Welcome back, {user?.full_name || "Passenger"}</Text>
           <TouchableOpacity 
@@ -365,7 +408,7 @@ export default function PassengerScreen({ navigation }) {
               key={route.route_id || route.id}
               style={styles.routeCard}
               onPress={() => {
-                // 🚀 FIXED: Tapping the corridor immediately joins the pool and routes to MatchingScreen
+                // 🚀 Tapping a corridor immediately joins route_pool and triggers transition
                 joinPool(route);
               }} 
             >
@@ -377,7 +420,7 @@ export default function PassengerScreen({ navigation }) {
           ))
         )}
 
-        {/* RIDES OPTIONS LIST (Optional for viewing pre-existing live driver runs) */}
+        {/* RIDES OPTIONS LIST */}
         <Text style={styles.label}>Live Drivers Nearby</Text>
 
         {loadingRides ? (
