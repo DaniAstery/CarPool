@@ -16,7 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://192.168.163.52:5000"; 
-const POLL_INTERVAL_MS = 1500; // ⚡ Fast-polling speed: 1.5 seconds for instant feel
+const POLL_INTERVAL_MS = 1500; // ⚡ 1.5s High-frequency poll rate
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
@@ -38,6 +38,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     longitudeDelta: 0.008,
   });
 
+  // Derived state calculations
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted" || r.status === "Arrived").length;
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
@@ -65,7 +66,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => { active = false; };
   }, []);
 
-  // Acceptance window countdown timer
+  // Countdown timer for cluster window
   useEffect(() => {
     if (!isBaselinePairReady) return; 
 
@@ -83,7 +84,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     const user1Accepted = currentUserId === 1 ? userAccepted : coRiders.find(r => r.id === 1)?.status === "Accepted" || coRiders.find(r => r.id === 1)?.status === "Arrived";
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted" || coRiders.find(r => r.id === 2)?.status === "Arrived";
 
-    if (user1Accepted && user2Accepted && driverState === "accepted") {
+    if (user1Accepted && user2Accepted && (driverState === "accepted" || driverState === "arrived")) {
       if ((currentUserId === 1 || currentUserId === 2) && !isNavigatingRef.current) {
         isNavigatingRef.current = true;
         navigation.replace("LiveTracking", { 
@@ -92,20 +93,20 @@ export default function PickupProposalScreen({ navigation, route }) {
           userId: currentUserId,
           forcedLaunchPrice: 120 
         });
-      } else if (currentUserId > 2) {
-        Alert.alert("Window Closed", "The acceptance window for this pool closed. Returning to hub station.");
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "HubDashboardScreen", params: { userId: currentUserId } }],
-        });
       }
+    } else if (currentUserId > 2) {
+      Alert.alert("Window Closed", "The acceptance window for this pool closed. Returning to hub station.");
+      navigation.reset({
+        index: 0,
+        routes: [{ name: "HubDashboardScreen", params: { userId: currentUserId } }],
+      });
     }
   };
 
   // 📡 Optimized High-Frequency Sync Loop
   useEffect(() => {
     let pollInterval;
-    isNavigatingRef.current = false; // Clear lock when the component mounts
+    isNavigatingRef.current = false; // Reset lock on mount
 
     async function evaluateRideStatus() {
       try {
@@ -128,24 +129,28 @@ export default function PickupProposalScreen({ navigation, route }) {
         activeRideOfferIdRef.current = rideOfferId;
         setDriverState(parsedDriverStatus);
 
-        // Update current user acceptance from DB ledger status
-        const rawAccepted = data.acceptedPassengers || [];
-        const cleanAcceptedIds = rawAccepted.map(id => parseInt(id, 10));
-        const localUserAccepted = cleanAcceptedIds.includes(currentUserId);
+        // Normalize accepted passengers to exact integers for precise comparison
+        const cleanAcceptedIds = (data.acceptedPassengers || []).map(id => parseInt(id, 10));
+        const localUserAccepted = cleanAcceptedIds.includes(currentUserId) || dbUserPoolStatus === "accepted" || dbUserPoolStatus === "arrived";
 
+        // Sync local React state with DB state safely
         if (localUserAccepted && !userAccepted) {
           setUserAccepted(true);
         }
 
-        // Map co-riders statuses
-        const rawManifest = data.manifestPassengers || [1, 2];
+        // Map co-riders statuses perfectly without matching key traps
+        const rawManifest = data.manifestPassengers || [];
         const fullRosterIds = rawManifest.map(id => parseInt(id, 10));
 
         const parsedCoRiders = fullRosterIds
           .filter((id) => id !== currentUserId)
           .map((id, index) => {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-            const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId, 10) === id);
+            // Normalize userId keys to snake_case and camelCase to avoid mapping issues
+            const serverPassengerRecord = data.passengers?.find(p => {
+              const matchedId = p.userId ?? p.user_id;
+              return parseInt(matchedId, 10) === id;
+            });
             
             let mappedStatus = "Pending";
             if (cleanAcceptedIds.includes(id)) {
@@ -168,11 +173,14 @@ export default function PickupProposalScreen({ navigation, route }) {
         setCoRiders(parsedCoRiders);
 
         // 🎯 INSTANT AUTO-NAVIGATION CRITERIA
-        // Triggered the instant driver has accepted, checking the lock first
-        if (parsedDriverStatus === "accepted" || parsedDriverStatus === "arrived") {
+        // Both conditions must be met: The driver has accepted, AND the local passenger has accepted.
+        const driverIsReady = parsedDriverStatus === "accepted" || parsedDriverStatus === "arrived";
+        const youHaveAccepted = localUserAccepted;
+
+        if (driverIsReady && youHaveAccepted) {
           if (!isNavigatingRef.current) {
-            isNavigatingRef.current = true; // Lock execution path
-            console.log("🚀 Driver accepted! Navigating cleanly to LiveTracking.");
+            isNavigatingRef.current = true; // Lock route transitions
+            console.log("🚀 Driver accepted and you have accepted! Navigating cleanly to LiveTracking.");
             clearInterval(pollInterval);
             navigation.replace("LiveTracking", { 
               routeId, 
@@ -198,9 +206,10 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, [navigation, currentUserId, userAccepted]);
 
   const handleAccept = async () => {
+    // Optimistic UI Update to feel instantaneous
     setUserAccepted(true);
     try {
-      await fetch(`${API_URL}/api/rides/accept-proposal`, {
+      const res = await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -208,8 +217,13 @@ export default function PickupProposalScreen({ navigation, route }) {
           user_id: currentUserId 
         }),
       });
+
+      if (!res.ok) {
+        throw new Error("Reverting optimistic accept; request failed.");
+      }
     } catch (err) {
       console.log("Handshake optimization failure:", err);
+      setUserAccepted(false); // Rollback state on error
     }
   };
 
