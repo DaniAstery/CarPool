@@ -14,7 +14,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext'; // 🎯 Relative path aligned to your project structure
 
 // 🎯 BASE ENDPOINT CONFIGURATION
-const API_URL = "http://192.168.163.52:5000"; 
+const API_URL = "http://192.168.123.52:5000"; 
 
 export default function CreateCorridorScreen({ route, navigation }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX

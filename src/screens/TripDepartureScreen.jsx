@@ -16,7 +16,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.163.52:5000/api";
+const API_URL = "http://192.168.123.52:5000/api";
 
 export default function TripInProgressScreen({ navigation, route }) {
   // Extract parameters passed safely from our core routing gatekeeper layer

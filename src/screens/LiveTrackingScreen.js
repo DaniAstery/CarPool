@@ -15,7 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.163.52:5000"; 
+const API_URL = "http://192.168.123.52:5000"; 
 
 export default function LiveTrackingScreen({ navigation, route }) {
   const routeId = route?.params?.routeId || "1";

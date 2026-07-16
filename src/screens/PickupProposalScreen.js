@@ -16,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://192.168.163.52:5000"; 
+const POLL_INTERVAL_MS = 1500; // ⚡ Fast-polling speed: 1.5 seconds for instant feel
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
@@ -26,7 +27,9 @@ export default function PickupProposalScreen({ navigation, route }) {
 
   const currentUserId = route?.params?.userId ? parseInt(route?.params?.userId, 10) : 1;
   const routeId = route?.params?.routeId || "1";
+  
   const activeRideOfferIdRef = useRef(null);
+  const isNavigatingRef = useRef(false);
 
   const [currentLocation, setCurrentLocation] = useState({
     latitude: 9.0105, 
@@ -38,12 +41,13 @@ export default function PickupProposalScreen({ navigation, route }) {
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted" || r.status === "Arrived").length;
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
-  // Track hardware location tracking
+  // Track location on startup
   useEffect(() => {
+    let active = true;
     (async () => {
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
+        if (status === "granted" && active) {
           let location = await Location.getCurrentPositionAsync({});
           setCurrentLocation({
             latitude: location.coords.latitude,
@@ -55,12 +59,13 @@ export default function PickupProposalScreen({ navigation, route }) {
       } catch (err) {
         console.log("Location permissions exception:", err);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
+    return () => { active = false; };
   }, []);
 
-  // Window acceptance countdown ticking
+  // Acceptance window countdown timer
   useEffect(() => {
     if (!isBaselinePairReady) return; 
 
@@ -79,7 +84,8 @@ export default function PickupProposalScreen({ navigation, route }) {
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted" || coRiders.find(r => r.id === 2)?.status === "Arrived";
 
     if (user1Accepted && user2Accepted && driverState === "accepted") {
-      if (currentUserId === 1 || currentUserId === 2) {
+      if ((currentUserId === 1 || currentUserId === 2) && !isNavigatingRef.current) {
+        isNavigatingRef.current = true;
         navigation.replace("LiveTracking", { 
           routeId, 
           rideOfferId: activeRideOfferIdRef.current || 1,
@@ -96,53 +102,57 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   };
 
-  // 📡 Real-Time Status Synchronization Pipeline (Auto-Navigation Optimized)
+  // 📡 Optimized High-Frequency Sync Loop
   useEffect(() => {
     let pollInterval;
+    isNavigatingRef.current = false; // Clear lock when the component mounts
 
-    async function checkProposalStatus() {
+    async function evaluateRideStatus() {
       try {
-        const res = await fetch(`${API_URL}/api/rides/active-proposal/${currentUserId}`);
+        const res = await fetch(`${API_URL}/api/rides/proposal-flow/${currentUserId}?t=${Date.now()}`, {
+          method: "GET",
+          headers: {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+          }
+        });
+        
         if (!res.ok) return;
         
         const data = await res.json();
-
-        // Safe Intercept: Parse driver status directly from backend response
-        const parsedDriverStatus = (data.ride_offer_status || data.rideOfferStatus || "pending").toLowerCase().trim();
+        const parsedDriverStatus = String(data.rideOfferStatus || "pending").toLowerCase().trim();
+        const rideOfferId = data.rideOfferId || 1;
+        const dbUserPoolStatus = String(data.currentUserPoolStatus || "").toLowerCase().trim();
+        
+        activeRideOfferIdRef.current = rideOfferId;
         setDriverState(parsedDriverStatus);
 
-        const rideOfferId = data.rideOfferId || data.ride_offer_id;
-        activeRideOfferIdRef.current = rideOfferId;
-
-        // Extract raw and formatted accepted passenger IDs
+        // Update current user acceptance from DB ledger status
         const rawAccepted = data.acceptedPassengers || [];
-        const cleanAcceptedIds = rawAccepted.map(id => typeof id === 'object' ? parseInt(id.user_id || id.id, 10) : parseInt(id, 10));
-        const fullRosterIds = data.manifestPassengers || [1, 2];
-
-        // 1. Calculate active user state from database response locally to prevent stale state blocking
-        const dbUserPoolStatus = (data.currentUserPoolStatus || "").toLowerCase().trim();
-        const localUserAccepted = cleanAcceptedIds.includes(currentUserId) || 
-                                  dbUserPoolStatus === "accepted" || 
-                                  dbUserPoolStatus === "arrived" || 
-                                  userAccepted;
+        const cleanAcceptedIds = rawAccepted.map(id => parseInt(id, 10));
+        const localUserAccepted = cleanAcceptedIds.includes(currentUserId);
 
         if (localUserAccepted && !userAccepted) {
           setUserAccepted(true);
         }
 
-        // 2. Compute co-rider state with immediate status overrides
+        // Map co-riders statuses
+        const rawManifest = data.manifestPassengers || [1, 2];
+        const fullRosterIds = rawManifest.map(id => parseInt(id, 10));
+
         const parsedCoRiders = fullRosterIds
           .filter((id) => id !== currentUserId)
           .map((id, index) => {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-            const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId || p.user_id, 10) === id);
+            const serverPassengerRecord = data.passengers?.find(p => parseInt(p.userId, 10) === id);
             
-            let mappedStatus = cleanAcceptedIds.includes(id) ? "Accepted" : "Pending";
-            
-            const passengerStatus = (serverPassengerRecord?.status || "").toLowerCase().trim();
-            if (passengerStatus === "accepted" || passengerStatus === "arrived") {
+            let mappedStatus = "Pending";
+            if (cleanAcceptedIds.includes(id)) {
               mappedStatus = "Accepted";
             }
+            
+            const passengerStatus = String(serverPassengerRecord?.status || "").toLowerCase().trim();
             if (passengerStatus === "arrived") {
               mappedStatus = "Arrived";
             }
@@ -157,46 +167,35 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         setCoRiders(parsedCoRiders);
 
-        // 3. Evaluate matching metrics via pure calculated variables
-        const allPassengersAccepted = fullRosterIds.every(id => {
-          if (id === currentUserId) {
-            return localUserAccepted;
+        // 🎯 INSTANT AUTO-NAVIGATION CRITERIA
+        // Triggered the instant driver has accepted, checking the lock first
+        if (parsedDriverStatus === "accepted" || parsedDriverStatus === "arrived") {
+          if (!isNavigatingRef.current) {
+            isNavigatingRef.current = true; // Lock execution path
+            console.log("🚀 Driver accepted! Navigating cleanly to LiveTracking.");
+            clearInterval(pollInterval);
+            navigation.replace("LiveTracking", { 
+              routeId, 
+              rideOfferId: rideOfferId, 
+              userId: currentUserId,
+              initialUserArrived: dbUserPoolStatus === "arrived"
+            });
           }
-          const riderRecord = parsedCoRiders.find(r => r.id === id);
-          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
-        });
-        
-        const driverAccepted = parsedDriverStatus === "accepted";
-
-        const isCorePairReadyInDb = fullRosterIds.slice(0, 2).every(id => {
-          if (id === currentUserId) return localUserAccepted;
-          const riderRecord = parsedCoRiders.find(r => r.id === id);
-          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
-        });
-
-        // 🎯 RELIABLE AUTO-LAUNCH INTERCEPT
-        // Fast-tracks the navigation immediately when the db updates inside route_pool and ride_offers!
-        if (driverAccepted && (allPassengersAccepted || (isCorePairReadyInDb && timeLeft === 0) || dbUserPoolStatus === "arrived")) {
-          console.log("🎉 ALL CRITERIA MET (State changes synchronized perfectly). Launching LiveTracking immediately.");
-          clearInterval(pollInterval);
-          navigation.replace("LiveTracking", { 
-            routeId, 
-            rideOfferId: rideOfferId || 1, 
-            userId: currentUserId,
-            initialUserArrived: dbUserPoolStatus === "arrived"
-          });
-          return;
         }
 
       } catch (err) {
-        console.log("Sync pooling connection error:", err);
+        console.log("Interval synchronization failure:", err);
       }
     }
 
-    checkProposalStatus();
-    pollInterval = setInterval(checkProposalStatus, 2200); 
+    // Run initial fetch immediately
+    evaluateRideStatus();
+
+    // Establish optimized high-frequency polling
+    pollInterval = setInterval(evaluateRideStatus, POLL_INTERVAL_MS);
+
     return () => clearInterval(pollInterval);
-  }, [navigation, currentUserId, userAccepted, timeLeft, driverState]);
+  }, [navigation, currentUserId, userAccepted]);
 
   const handleAccept = async () => {
     setUserAccepted(true);
@@ -204,11 +203,27 @@ export default function PickupProposalScreen({ navigation, route }) {
       await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: activeRideOfferIdRef.current || 1, user_id: currentUserId }),
+        body: JSON.stringify({ 
+          ride_offer_id: activeRideOfferIdRef.current || 1, 
+          user_id: currentUserId 
+        }),
       });
     } catch (err) {
       console.log("Handshake optimization failure:", err);
     }
+  };
+
+  const handleProceedToRide = () => {
+    if (isNavigatingRef.current) return;
+    isNavigatingRef.current = true;
+    
+    console.log("🚀 Proceeding to LiveTracking manually");
+    navigation.replace("LiveTracking", { 
+      routeId, 
+      rideOfferId: activeRideOfferIdRef.current || 1, 
+      userId: currentUserId,
+      initialUserArrived: false
+    });
   };
 
   const handleDecline = async () => {
@@ -225,7 +240,10 @@ export default function PickupProposalScreen({ navigation, route }) {
               await fetch(`${API_URL}/api/routes/decline-proposal`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ user_id: currentUserId, ride_offer_id: activeRideOfferIdRef.current || 1 }),
+                body: JSON.stringify({ 
+                  user_id: currentUserId, 
+                  ride_offer_id: activeRideOfferIdRef.current || 1 
+                }),
               });
             } catch (err) {
               console.log("Decline processing failure:", err);
@@ -288,14 +306,14 @@ export default function PickupProposalScreen({ navigation, route }) {
           </View>
 
           {/* DRIVER ASSIGNMENT BADGE STATUS */}
-          <View style={[styles.driverStatusBox, driverState === "accepted" ? styles.driverAccepted : styles.driverPending]}>
+          <View style={[styles.driverStatusBox, driverState === "accepted" || driverState === "arrived" ? styles.driverAccepted : styles.driverPending]}>
             <Ionicons 
-              name={driverState === "accepted" ? "checkmark-circle" : "time-outline"} 
+              name={driverState === "accepted" || driverState === "arrived" ? "checkmark-circle" : "time-outline"} 
               size={16} 
-              color={driverState === "accepted" ? "#065F46" : "#854D0E"} 
+              color={driverState === "accepted" || driverState === "arrived" ? "#065F46" : "#854D0E"} 
             />
-            <Text style={[styles.driverStatusText, driverState === "accepted" ? {color: "#065F46"} : {color: "#854D0E"}]}>
-              {driverState === "accepted" ? "Driver Claimed & Scheduled" : "Waiting for driver to claim pool reservation..."}
+            <Text style={[styles.driverStatusText, driverState === "accepted" || driverState === "arrived" ? {color: "#065F46"} : {color: "#854D0E"}]}>
+              {driverState === "accepted" || driverState === "arrived" ? "Driver Claimed & Scheduled" : "Waiting for driver to claim pool reservation..."}
             </Text>
           </View>
 
@@ -365,12 +383,14 @@ export default function PickupProposalScreen({ navigation, route }) {
                 <TouchableOpacity style={styles.acceptButton} onPress={handleAccept} activeOpacity={0.8}>
                   <Text style={styles.acceptButtonText}>ACCEPT PROPOSAL</Text>
                 </TouchableOpacity>
+              ) : driverState === "accepted" || driverState === "arrived" ? (
+                <TouchableOpacity style={styles.proceedButton} onPress={handleProceedToRide} activeOpacity={0.8}>
+                  <Text style={styles.proceedButtonText}>PROCEED TO RIDE</Text>
+                </TouchableOpacity>
               ) : (
                 <View style={styles.waitingBanner}>
                   <ActivityIndicator size="small" color="#1C75BC" style={{ marginRight: 8 }} />
-                  <Text style={styles.waitingBannerText}>
-                    {driverState !== "accepted" ? "Waiting on driver claim..." : "Waiting for group to finalize..."}
-                  </Text>
+                  <Text style={styles.waitingBannerText}>Waiting on driver claim...</Text>
                 </View>
               )}
             </View>
@@ -435,6 +455,8 @@ const styles = StyleSheet.create({
   declineButtonText: { color: "#EF4444", fontWeight: "700" },
   acceptButton: { width: "66%", backgroundColor: "#1C75BC", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
+  proceedButton: { width: "66%", backgroundColor: "#10B981", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
+  proceedButtonText: { color: "#FFFFFF", fontWeight: "700" },
   waitingBanner: { width: "66%", flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#F9FAFB", paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB" },
   waitingBannerText: { color: "#4B5563", fontSize: 13, fontWeight: "600" },
 });

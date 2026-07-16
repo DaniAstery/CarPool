@@ -16,7 +16,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext'; 
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.163.52:5000/api"; 
+const API_URL = "http://192.168.123.52:5000/api"; 
 
 export default function ProposalDriver({ navigation, route }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX

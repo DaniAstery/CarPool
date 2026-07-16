@@ -14,7 +14,7 @@ import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 
-const API_URL = "http://192.168.163.52:5000/api"; 
+const API_URL = "http://192.168.123.52:5000/api"; 
 const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {
