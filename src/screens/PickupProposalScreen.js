@@ -10,15 +10,22 @@ import {
   Alert,
   Platform,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+
 
 const { width } = Dimensions.get("window");
 
 // 🌐 Production Local Area Network IP Configuration
 const API_URL = "http://192.168.123.52:5000"; 
+
+// 📍 Exact Geographic Target: Megenagna Blue Taxi Stop, Addis Ababa
+const MEETUP_LOCATION = {
+  latitude: 9.0192,
+  longitude: 38.8015,
+};
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
@@ -26,6 +33,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
   const [driverState, setDriverState] = useState("pending"); 
+  const mapRef = useRef(null);
 
   const currentUserId = route?.params?.userId ? parseInt(route?.params?.userId, 10) : 1;
   const routeId = route?.params?.routeId || "1";
@@ -33,28 +41,53 @@ export default function PickupProposalScreen({ navigation, route }) {
   const activeRideOfferIdRef = useRef(null);
 
   const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105, 
-    longitude: 38.7935,
-    latitudeDelta: 0.008,
-    longitudeDelta: 0.008,
+    latitude: 9.0115, 
+    longitude: 38.7915,
+    latitudeDelta: 0.015,
+    longitudeDelta: 0.015,
   });
 
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted" || r.status === "Arrived").length;
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
-  // Request Location Permissions
+  // Generates a clean street-following simulated route to Megenagna
+  const getRouteCoordinates = () => {
+    return [
+      { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
+      // Turning points to match layout grid mapping
+      { latitude: currentLocation.latitude + 0.002, longitude: currentLocation.longitude + 0.001 },
+      { latitude: currentLocation.latitude + 0.004, longitude: currentLocation.longitude + 0.005 },
+      { latitude: MEETUP_LOCATION.latitude - 0.001, longitude: MEETUP_LOCATION.longitude - 0.002 },
+      { latitude: MEETUP_LOCATION.latitude, longitude: MEETUP_LOCATION.longitude },
+    ];
+  };
+
+  // Request Location Permissions & Frame Viewport
   useEffect(() => {
     (async () => {
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted") {
           let location = await Location.getCurrentPositionAsync({});
-          setCurrentLocation({
+          const userCoords = {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
-            latitudeDelta: 0.008,
-            longitudeDelta: 0.008,
-          });
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          };
+          setCurrentLocation(userCoords);
+          
+          // Fit map boundaries beautifully to hold both the user and meetup targets
+          mapRef.current?.fitToCoordinates(
+            [
+              { latitude: location.coords.latitude, longitude: location.coords.longitude },
+              MEETUP_LOCATION
+            ],
+            {
+              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+              animated: true,
+            }
+          );
         }
       } catch (err) {
         console.log("Location configuration skipped:", err);
@@ -140,7 +173,7 @@ export default function PickupProposalScreen({ navigation, route }) {
             const serverPassengerRecord = passengersList.find(p => parseInt(p.userId || p.user_id, 10) === id);
             
             const passengerStatus = (serverPassengerRecord?.status || "").toLowerCase().trim();
-            let mappedStatus = "Matched"; // Default starting status (Awaiting Acceptance)
+            let mappedStatus = "Matched"; 
 
             if (passengerStatus === "accepted") {
               mappedStatus = "Accepted";
@@ -197,7 +230,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   // ⚡ One-Step Acceptance Handshake Action
   const handleAccept = async () => {
     console.log(`🚀 [UI Action] Accepting active matching proposal for User: ${currentUserId}`);
-    setUserAccepted(true); // Optimistic UI local transition
+    setUserAccepted(true);
 
     try {
       const url = `${API_URL}/api/rides/accept-active-proposal`;
@@ -217,7 +250,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         throw new Error(data.error || `HTTP error returned with code ${res.status}`);
       }
 
-      console.log("✅ [Handshake Success] Proposal accepted and database logs updated:", data);
+      console.log("✅ [Handshake Success] Proposal accepted:", data);
 
       if (data.matched_ride_offer_id) {
         activeRideOfferIdRef.current = parseInt(data.matched_ride_offer_id, 10);
@@ -225,7 +258,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
     } catch (err) {
       console.log("❌ Single-handshake acceptance failure:", err.message);
-      setUserAccepted(false); // Revert UI switch state
+      setUserAccepted(false);
       Alert.alert(
         "Acceptance Failed", 
         `Server could not record acceptance update:\n\n${err.message}`
@@ -275,18 +308,47 @@ export default function PickupProposalScreen({ navigation, route }) {
 
       <View style={styles.mapContainer}>
         <MapView
+          ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           region={currentLocation}
-          showsUserLocation={true}
+          showsUserLocation={false}
           customMapStyle={cleanMinimalMapStyle}
         >
-          <Marker coordinate={{ latitude: currentLocation.latitude + 0.0004, longitude: currentLocation.longitude + 0.0004 }}>
-            <View style={styles.hubMarkerContainer}>
-              <View style={styles.hubMarkerPin}>
-                <Ionicons name="location" size={18} color="#FFFFFF" />
+          {/* Real-time walking route: Beautiful crimson-red corridor line matching high-end ride apps */}
+          <Polyline
+            coordinates={getRouteCoordinates()}
+            strokeColor="#DC2626"
+            strokeWidth={4}
+            geodesic={true}
+          />
+
+          {/* User Location Pin */}
+          <Marker 
+            coordinate={{ 
+              latitude: currentLocation.latitude, 
+              longitude: currentLocation.longitude 
+            }}
+          >
+            <View style={styles.proMarkerContainer}>
+              <View style={styles.proMarkerPulse} />
+              <View style={styles.proMarkerRing}>
+                <View style={styles.proMarkerCore}>
+                  <Ionicons name="navigate" size={12} color="#FFFFFF" />
+                </View>
               </View>
-              <View style={styles.hubMarkerPulse} />
+            </View>
+          </Marker>
+
+          {/* Meetup / Hub Destination Pin */}
+          <Marker coordinate={MEETUP_LOCATION}>
+            <View style={styles.meetupMarkerContainer}>
+              <View style={styles.meetupMarkerPulse} />
+              <View style={styles.meetupMarkerRing}>
+                <View style={styles.meetupMarkerCore}>
+                  <Ionicons name="pin" size={12} color="#FFFFFF" />
+                </View>
+              </View>
             </View>
           </Marker>
         </MapView>
@@ -425,9 +487,20 @@ export default function PickupProposalScreen({ navigation, route }) {
   );
 }
 
+// 🗺️ Desaturated professional map config layout
 const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
+  { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#f5f5f5" }] },
+  { featureType: "administrative.land_parcel", elementType: "labels.text.fill", stylers: [{ color: "#bdbdbd" }] },
   { featureType: "poi", stylers: [{ visibility: "off" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
+  { featureType: "road.arterial", elementType: "geometry", stylers: [{ color: "#efefef" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#e0e0e0" }] },
+  { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#d6d6d6" }] },
+  { featureType: "transit", stylers: [{ visibility: "off" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#c9e2ff" }] }
 ];
 
 const styles = StyleSheet.create({
@@ -436,9 +509,19 @@ const styles = StyleSheet.create({
   backButton: { fontSize: 24, fontWeight: "600" },
   headerTitle: { fontSize: 16, fontWeight: "700" },
   mapContainer: { flex: 1 },
-  hubMarkerContainer: { alignItems: "center", justifyContent: "center" },
-  hubMarkerPin: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#10B981", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#FFFFFF" },
-  hubMarkerPulse: { position: "absolute", width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(16, 185, 129, 0.2)" },
+
+  // 📍 User Marker (Brand Blue Theme)
+  proMarkerContainer: { alignItems: "center", justifyContent: "center", width: 40, height: 40 },
+  proMarkerPulse: { position: "absolute", width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(28, 117, 188, 0.15)", transform: [{ scale: 1.25 }] },
+  proMarkerRing: { width: 22, height: 22, borderRadius: 11, backgroundColor: "rgba(255, 255, 255, 0.95)", alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 3, elevation: 3 },
+  proMarkerCore: { width: 14, height: 14, borderRadius: 7, backgroundColor: "#1C75BC", alignItems: "center", justifyContent: "center" },
+
+  // 🎯 Meetup Marker (Vibrant Red-Orange Theme)
+  meetupMarkerContainer: { alignItems: "center", justifyContent: "center", width: 40, height: 40 },
+  meetupMarkerPulse: { position: "absolute", width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(220, 38, 38, 0.2)", transform: [{ scale: 1.35 }] },
+  meetupMarkerRing: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 4, borderWidth: 1.5, borderColor: "#DC2626" },
+  meetupMarkerCore: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#DC2626", alignItems: "center", justifyContent: "center" },
+
   proposalCard: { position: "absolute", bottom: 0, width: width, maxHeight: "75%", backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 20, paddingBottom: 24, elevation: 10 },
   priceTierCard: { backgroundColor: "#F9FAFB", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, padding: 14, marginBottom: 12 },
   priceTierHeading: { fontSize: 11, fontWeight: "700", color: "#6B7280", letterSpacing: 0.5 },
