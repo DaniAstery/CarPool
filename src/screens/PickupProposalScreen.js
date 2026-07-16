@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  Platform,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
 import * as Location from "expo-location";
@@ -15,8 +16,9 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.163.52:5000"; 
-const POLL_INTERVAL_MS = 1500; // ⚡ 1.5s High-frequency poll rate
+
+// 🌐 Production Local Area Network IP Configuration
+const API_URL = "http://192.168.123.52:5000"; 
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
@@ -29,7 +31,6 @@ export default function PickupProposalScreen({ navigation, route }) {
   const routeId = route?.params?.routeId || "1";
   
   const activeRideOfferIdRef = useRef(null);
-  const isNavigatingRef = useRef(false);
 
   const [currentLocation, setCurrentLocation] = useState({
     latitude: 9.0105, 
@@ -38,17 +39,15 @@ export default function PickupProposalScreen({ navigation, route }) {
     longitudeDelta: 0.008,
   });
 
-  // Derived state calculations
   const totalAcceptedCount = (userAccepted ? 1 : 0) + coRiders.filter(r => r.status === "Accepted" || r.status === "Arrived").length;
   const isBaselinePairReady = totalAcceptedCount >= 2;
 
-  // Track location on startup
+  // Request Location Permissions
   useEffect(() => {
-    let active = true;
     (async () => {
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted" && active) {
+        if (status === "granted") {
           let location = await Location.getCurrentPositionAsync({});
           setCurrentLocation({
             latitude: location.coords.latitude,
@@ -58,15 +57,14 @@ export default function PickupProposalScreen({ navigation, route }) {
           });
         }
       } catch (err) {
-        console.log("Location permissions exception:", err);
+        console.log("Location configuration skipped:", err);
       } finally {
-        if (active) setLoading(false);
+        setLoading(false);
       }
     })();
-    return () => { active = false; };
   }, []);
 
-  // Countdown timer for cluster window
+  // Window acceptance countdown
   useEffect(() => {
     if (!isBaselinePairReady) return; 
 
@@ -79,86 +77,74 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, [timeLeft, isBaselinePairReady]);
 
   const handleWindowExpiry = () => {
-    console.log("⏰ Pool acceptance window expired. Processing launch parameters.");
-    
+    console.log("⏰ Pool acceptance window expired.");
     const user1Accepted = currentUserId === 1 ? userAccepted : coRiders.find(r => r.id === 1)?.status === "Accepted" || coRiders.find(r => r.id === 1)?.status === "Arrived";
     const user2Accepted = currentUserId === 2 ? userAccepted : coRiders.find(r => r.id === 2)?.status === "Accepted" || coRiders.find(r => r.id === 2)?.status === "Arrived";
 
-    if (user1Accepted && user2Accepted && (driverState === "accepted" || driverState === "arrived")) {
-      if ((currentUserId === 1 || currentUserId === 2) && !isNavigatingRef.current) {
-        isNavigatingRef.current = true;
-        navigation.replace("LiveTracking", { 
-          routeId, 
-          rideOfferId: activeRideOfferIdRef.current || 1,
-          userId: currentUserId,
-          forcedLaunchPrice: 120 
-        });
-      }
-    } else if (currentUserId > 2) {
-      Alert.alert("Window Closed", "The acceptance window for this pool closed. Returning to hub station.");
-      navigation.reset({
-        index: 0,
-        routes: [{ name: "HubDashboardScreen", params: { userId: currentUserId } }],
+    if (user1Accepted && user2Accepted && driverState === "accepted") {
+      navigation.replace("LiveTracking", { 
+        routeId, 
+        rideOfferId: activeRideOfferIdRef.current || 1,
+        userId: currentUserId,
+        forcedLaunchPrice: 120 
       });
     }
   };
 
-  // 📡 Optimized High-Frequency Sync Loop
+  // 📡 Real-Time Status Check
   useEffect(() => {
     let pollInterval;
-    isNavigatingRef.current = false; // Reset lock on mount
 
-    async function evaluateRideStatus() {
+    async function checkProposalStatus() {
       try {
-        const res = await fetch(`${API_URL}/api/rides/proposal-flow/${currentUserId}?t=${Date.now()}`, {
-          method: "GET",
-          headers: {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
-          }
-        });
+        const cleanUserId = parseInt(currentUserId, 10);
+        if (isNaN(cleanUserId)) return;
+
+        const url = `${API_URL}/api/rides/status/${cleanUserId}`;
+        const res = await fetch(url);
         
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn(`⚠️ Poll failed with status code: ${res.status}`);
+          return;
+        }
         
         const data = await res.json();
-        const parsedDriverStatus = String(data.rideOfferStatus || "pending").toLowerCase().trim();
-        const rideOfferId = data.rideOfferId || 1;
-        const dbUserPoolStatus = String(data.currentUserPoolStatus || "").toLowerCase().trim();
-        
-        activeRideOfferIdRef.current = rideOfferId;
+
+        // Safe extraction of the active match ID
+        const rideOfferId = data.matched_ride_offer_id;
+        if (rideOfferId) {
+          activeRideOfferIdRef.current = parseInt(rideOfferId, 10);
+        }
+
+        // Parse driver claim status
+        const parsedDriverStatus = (data.rideStatus || "pending").toLowerCase().trim();
         setDriverState(parsedDriverStatus);
 
-        // Normalize accepted passengers to exact integers for precise comparison
-        const cleanAcceptedIds = (data.acceptedPassengers || []).map(id => parseInt(id, 10));
-        const localUserAccepted = cleanAcceptedIds.includes(currentUserId) || dbUserPoolStatus === "accepted" || dbUserPoolStatus === "arrived";
+        const passengersList = data.passengers || [];
+        const fullRosterIds = passengersList.map(p => parseInt(p.userId || p.user_id, 10));
 
-        // Sync local React state with DB state safely
+        // Sync current user local acceptance state with backend ledger status
+        const currentUserRecord = passengersList.find(p => parseInt(p.userId || p.user_id, 10) === currentUserId);
+        const dbUserPoolStatus = (currentUserRecord?.status || "").toLowerCase().trim();
+        const localUserAccepted = dbUserPoolStatus === "accepted" || dbUserPoolStatus === "arrived";
+
         if (localUserAccepted && !userAccepted) {
           setUserAccepted(true);
         }
 
-        // Map co-riders statuses perfectly without matching key traps
-        const rawManifest = data.manifestPassengers || [];
-        const fullRosterIds = rawManifest.map(id => parseInt(id, 10));
-
+        // Map co-rider updates dynamically with matched -> accepted states
         const parsedCoRiders = fullRosterIds
           .filter((id) => id !== currentUserId)
           .map((id, index) => {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-            // Normalize userId keys to snake_case and camelCase to avoid mapping issues
-            const serverPassengerRecord = data.passengers?.find(p => {
-              const matchedId = p.userId ?? p.user_id;
-              return parseInt(matchedId, 10) === id;
-            });
+            const serverPassengerRecord = passengersList.find(p => parseInt(p.userId || p.user_id, 10) === id);
             
-            let mappedStatus = "Pending";
-            if (cleanAcceptedIds.includes(id)) {
+            const passengerStatus = (serverPassengerRecord?.status || "").toLowerCase().trim();
+            let mappedStatus = "Matched"; // Default starting status (Awaiting Acceptance)
+
+            if (passengerStatus === "accepted") {
               mappedStatus = "Accepted";
-            }
-            
-            const passengerStatus = String(serverPassengerRecord?.status || "").toLowerCase().trim();
-            if (passengerStatus === "arrived") {
+            } else if (passengerStatus === "arrived") {
               mappedStatus = "Arrived";
             }
 
@@ -172,72 +158,79 @@ export default function PickupProposalScreen({ navigation, route }) {
 
         setCoRiders(parsedCoRiders);
 
-        // 🎯 INSTANT AUTO-NAVIGATION CRITERIA
-        // Both conditions must be met: The driver has accepted, AND the local passenger has accepted.
-        const driverIsReady = parsedDriverStatus === "accepted" || parsedDriverStatus === "arrived";
-        const youHaveAccepted = localUserAccepted;
+        // Auto-launch evaluation triggers
+        const allPassengersAccepted = fullRosterIds.every(id => {
+          if (id === currentUserId) return localUserAccepted || userAccepted;
+          const riderRecord = parsedCoRiders.find(r => r.id === id);
+          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
+        });
+        
+        const driverAccepted = parsedDriverStatus === "accepted";
+        const isCorePairReadyInDb = fullRosterIds.slice(0, 2).every(id => {
+          if (id === currentUserId) return localUserAccepted || userAccepted;
+          const riderRecord = parsedCoRiders.find(r => r.id === id);
+          return riderRecord?.status === "Accepted" || riderRecord?.status === "Arrived";
+        });
 
-        if (driverIsReady && youHaveAccepted) {
-          if (!isNavigatingRef.current) {
-            isNavigatingRef.current = true; // Lock route transitions
-            console.log("🚀 Driver accepted and you have accepted! Navigating cleanly to LiveTracking.");
-            clearInterval(pollInterval);
-            navigation.replace("LiveTracking", { 
-              routeId, 
-              rideOfferId: rideOfferId, 
-              userId: currentUserId,
-              initialUserArrived: dbUserPoolStatus === "arrived"
-            });
-          }
+        if (driverAccepted && (allPassengersAccepted || (isCorePairReadyInDb && timeLeft === 0) || dbUserPoolStatus === "arrived")) {
+          console.log("🎉 All metrics cleared. Proceeding to live route map tracking.");
+          clearInterval(pollInterval);
+          navigation.replace("LiveTracking", { 
+            routeId, 
+            rideOfferId: rideOfferId || 1, 
+            userId: currentUserId,
+            initialUserArrived: dbUserPoolStatus === "arrived"
+          });
+          return;
         }
 
       } catch (err) {
-        console.log("Interval synchronization failure:", err);
+        console.log("Sync pooling connection error:", err.message);
       }
     }
 
-    // Run initial fetch immediately
-    evaluateRideStatus();
-
-    // Establish optimized high-frequency polling
-    pollInterval = setInterval(evaluateRideStatus, POLL_INTERVAL_MS);
-
+    checkProposalStatus();
+    pollInterval = setInterval(checkProposalStatus, 3000); 
     return () => clearInterval(pollInterval);
-  }, [navigation, currentUserId, userAccepted]);
+  }, [navigation, currentUserId, userAccepted, timeLeft, driverState]);
 
+  // ⚡ One-Step Acceptance Handshake Action
   const handleAccept = async () => {
-    // Optimistic UI Update to feel instantaneous
-    setUserAccepted(true);
+    console.log(`🚀 [UI Action] Accepting active matching proposal for User: ${currentUserId}`);
+    setUserAccepted(true); // Optimistic UI local transition
+
     try {
-      const res = await fetch(`${API_URL}/api/rides/accept-proposal`, {
+      const url = `${API_URL}/api/rides/accept-active-proposal`;
+      console.log(`📡 Sending single-handshake POST to: ${url}`);
+
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          ride_offer_id: activeRideOfferIdRef.current || 1, 
-          user_id: currentUserId 
+        body: JSON.stringify({
+          user_id: parseInt(currentUserId, 10)
         }),
       });
 
-      if (!res.ok) {
-        throw new Error("Reverting optimistic accept; request failed.");
-      }
-    } catch (err) {
-      console.log("Handshake optimization failure:", err);
-      setUserAccepted(false); // Rollback state on error
-    }
-  };
+      const data = await res.json();
 
-  const handleProceedToRide = () => {
-    if (isNavigatingRef.current) return;
-    isNavigatingRef.current = true;
-    
-    console.log("🚀 Proceeding to LiveTracking manually");
-    navigation.replace("LiveTracking", { 
-      routeId, 
-      rideOfferId: activeRideOfferIdRef.current || 1, 
-      userId: currentUserId,
-      initialUserArrived: false
-    });
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP error returned with code ${res.status}`);
+      }
+
+      console.log("✅ [Handshake Success] Proposal accepted and database logs updated:", data);
+
+      if (data.matched_ride_offer_id) {
+        activeRideOfferIdRef.current = parseInt(data.matched_ride_offer_id, 10);
+      }
+
+    } catch (err) {
+      console.log("❌ Single-handshake acceptance failure:", err.message);
+      setUserAccepted(false); // Revert UI switch state
+      Alert.alert(
+        "Acceptance Failed", 
+        `Server could not record acceptance update:\n\n${err.message}`
+      );
+    }
   };
 
   const handleDecline = async () => {
@@ -251,13 +244,10 @@ export default function PickupProposalScreen({ navigation, route }) {
           style: "destructive",
           onPress: async () => {
             try {
-              await fetch(`${API_URL}/api/routes/decline-proposal`, {
+              await fetch(`${API_URL}/api/rides/decline-proposal`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                  user_id: currentUserId, 
-                  ride_offer_id: activeRideOfferIdRef.current || 1 
-                }),
+                body: JSON.stringify({ user_id: currentUserId, ride_offer_id: activeRideOfferIdRef.current || 1 }),
               });
             } catch (err) {
               console.log("Decline processing failure:", err);
@@ -293,7 +283,9 @@ export default function PickupProposalScreen({ navigation, route }) {
         >
           <Marker coordinate={{ latitude: currentLocation.latitude + 0.0004, longitude: currentLocation.longitude + 0.0004 }}>
             <View style={styles.hubMarkerContainer}>
-              <View style={styles.hubMarkerPin}><Ionicons name="location" size={18} color="#FFFFFF" /></View>
+              <View style={styles.hubMarkerPin}>
+                <Ionicons name="location" size={18} color="#FFFFFF" />
+              </View>
               <View style={styles.hubMarkerPulse} />
             </View>
           </Marker>
@@ -319,15 +311,15 @@ export default function PickupProposalScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* DRIVER ASSIGNMENT BADGE STATUS */}
-          <View style={[styles.driverStatusBox, driverState === "accepted" || driverState === "arrived" ? styles.driverAccepted : styles.driverPending]}>
+          {/* DRIVER STATUS */}
+          <View style={[styles.driverStatusBox, driverState === "accepted" ? styles.driverAccepted : styles.driverPending]}>
             <Ionicons 
-              name={driverState === "accepted" || driverState === "arrived" ? "checkmark-circle" : "time-outline"} 
+              name={driverState === "accepted" ? "checkmark-circle" : "time-outline"} 
               size={16} 
-              color={driverState === "accepted" || driverState === "arrived" ? "#065F46" : "#854D0E"} 
+              color={driverState === "accepted" ? "#065F46" : "#854D0E"} 
             />
-            <Text style={[styles.driverStatusText, driverState === "accepted" || driverState === "arrived" ? {color: "#065F46"} : {color: "#854D0E"}]}>
-              {driverState === "accepted" || driverState === "arrived" ? "Driver Claimed & Scheduled" : "Waiting for driver to claim pool reservation..."}
+            <Text style={[styles.driverStatusText, driverState === "accepted" ? {color: "#065F46"} : {color: "#854D0E"}]}>
+              {driverState === "accepted" ? "Driver Claimed & Scheduled" : "Waiting for driver to claim pool reservation..."}
             </Text>
           </View>
 
@@ -355,6 +347,7 @@ export default function PickupProposalScreen({ navigation, route }) {
           <Text style={styles.sectionHeading}>Co-Rider Matrix Check</Text>
           
           <View style={styles.statusTable}>
+            {/* YOU (CURRENT USER) */}
             <View style={styles.tableRow}>
               <View style={styles.tableUserLabelGroup}>
                 <Ionicons name="person" size={14} color="#3A82F6" />
@@ -362,11 +355,12 @@ export default function PickupProposalScreen({ navigation, route }) {
               </View>
               <View style={[styles.badge, userAccepted ? styles.badgeAccepted : styles.badgePending]}>
                 <Text style={[styles.badgeText, userAccepted ? styles.textAccepted : styles.textPending]}>
-                  {userAccepted ? "Accepted" : "Pending"}
+                  {userAccepted ? "Accepted" : "Matched"}
                 </Text>
               </View>
             </View>
 
+            {/* CO-RIDERS */}
             {coRiders.map((rider) => (
               <View key={`rider-row-${rider.id}`} style={styles.tableRow}>
                 <View style={styles.tableUserLabelGroup}>
@@ -378,8 +372,22 @@ export default function PickupProposalScreen({ navigation, route }) {
                     )}
                   </Text>
                 </View>
-                <View style={[styles.badge, rider.status === "Accepted" || rider.status === "Arrived" ? styles.badgeAccepted : styles.badgePending]}>
-                  <Text style={[styles.badgeText, rider.status === "Accepted" || rider.status === "Arrived" ? styles.textAccepted : styles.textPending]}>
+                <View 
+                  style={[
+                    styles.badge, 
+                    rider.status === "Accepted" || rider.status === "Arrived" 
+                      ? styles.badgeAccepted 
+                      : styles.badgePending
+                  ]}
+                >
+                  <Text 
+                    style={[
+                      styles.badgeText, 
+                      rider.status === "Accepted" || rider.status === "Arrived" 
+                        ? styles.textAccepted 
+                        : styles.textPending
+                    ]}
+                  >
                     {rider.status}
                   </Text>
                 </View>
@@ -394,22 +402,23 @@ export default function PickupProposalScreen({ navigation, route }) {
               </TouchableOpacity>
               
               {!userAccepted ? (
-                <TouchableOpacity style={styles.acceptButton} onPress={handleAccept} activeOpacity={0.8}>
+                <TouchableOpacity 
+                  style={styles.acceptButton} 
+                  onPress={handleAccept} 
+                  activeOpacity={0.8}
+                >
                   <Text style={styles.acceptButtonText}>ACCEPT PROPOSAL</Text>
-                </TouchableOpacity>
-              ) : driverState === "accepted" || driverState === "arrived" ? (
-                <TouchableOpacity style={styles.proceedButton} onPress={handleProceedToRide} activeOpacity={0.8}>
-                  <Text style={styles.proceedButtonText}>PROCEED TO RIDE</Text>
                 </TouchableOpacity>
               ) : (
                 <View style={styles.waitingBanner}>
                   <ActivityIndicator size="small" color="#1C75BC" style={{ marginRight: 8 }} />
-                  <Text style={styles.waitingBannerText}>Waiting on driver claim...</Text>
+                  <Text style={styles.waitingBannerText}>
+                    {driverState !== "accepted" ? "Waiting on driver claim..." : "Waiting for group to finalize..."}
+                  </Text>
                 </View>
               )}
             </View>
           </View>
-
         </ScrollView>
       </View>
     </SafeAreaView>
@@ -469,8 +478,6 @@ const styles = StyleSheet.create({
   declineButtonText: { color: "#EF4444", fontWeight: "700" },
   acceptButton: { width: "66%", backgroundColor: "#1C75BC", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
-  proceedButton: { width: "66%", backgroundColor: "#10B981", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
-  proceedButtonText: { color: "#FFFFFF", fontWeight: "700" },
   waitingBanner: { width: "66%", flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#F9FAFB", paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB" },
   waitingBannerText: { color: "#4B5563", fontSize: 13, fontWeight: "600" },
 });
