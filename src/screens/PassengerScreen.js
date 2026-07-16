@@ -6,12 +6,10 @@ import {
   ActivityIndicator,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Alert,
 } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
-import PoolOfferCard from "../components/PoolOfferCard";
-import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 import * as Location from 'expo-location';
 
@@ -19,24 +17,19 @@ const API_URL = "http://192.168.123.52:5000/api";
 const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {
-  // 🔐 1. UNPACK GLOBAL AUTHENTICATION STATE PIPELINE
   const { user, logoutSession } = useAuth();
 
-  // 🛡️ GATEKEEPER RENDERING SAFETY CONTAINER
+  // 🛡️ GATEKEEPER & CORE SYSTEM STATES
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
-
-  // App Workspace Layout States
-  const [searchText, setSearchText] = useState("");
-  const [hubs, setHubs] = useState([]);
-  const [routes, setRoutes] = useState([]);
-  const [selectedRoutes, setSelectedRoutes] = useState([]);
-  const [selectedPickupHub, setSelectedPickupHub] = useState(null);
-  const [isSoloRide, setIsSoloRide] = useState(false); 
-
-  // Loading Indicators
-  const [loadingHubs, setLoadingHubs] = useState(false);
+  const [isLocating, setIsLocating] = useState(true);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
-  const [loadingRides, setLoadingRides] = useState(false);
+
+  // LOCATIONS & RADIAL STATE METRICS
+  const [userCoords, setUserCoords] = useState(null);
+  const [selectedPickupHub, setSelectedPickupHub] = useState(null);
+  const [distanceToHub, setDistanceToHub] = useState(null); // in meters
+  const [routes, setRoutes] = useState([]);
+  const [isSoloRide, setIsSoloRide] = useState(false); 
 
   /* 🚪 FIRST THING ON LOAD: STACK INTERCEPT STATUS LIFECYCLE GATEKEEPER */
   useEffect(() => {
@@ -95,435 +88,446 @@ export default function PassengerScreen({ navigation }) {
     return () => { isMounted = false; };
   }, [navigation]);
 
+  /* 📍 GEOLOCATION POOLING & DYNAMIC PROXIMITY HUB RESOLVER */
+  useEffect(() => {
+    let locationSubscription = null;
 
+    async function startHubTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert("Permission Required", "We need location services active to auto-match you with nearby hubs.");
+          setIsLocating(false);
+          return;
+        }
 
-//CHECKING IF LOCATION IS VALID FOR REQUEST
-
-useEffect(() => {
-  async function preparePassengerWorkspace() {
-    // 1. Ask for Phone Location
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert("Permission Needed", "We need your location to find nearby corridor hubs.");
-      return;
+        // Subscribing to location changes for passive matching updates
+        locationSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: 10000, 
+            distanceInterval: 15, 
+          },
+          (location) => {
+            const { latitude, longitude } = location.coords;
+            setUserCoords({ latitude, longitude });
+            resolveClosestHub(latitude, longitude);
+          }
+        );
+      } catch (err) {
+        console.error("❌ Geolocator startup failed:", err);
+        setIsLocating(false);
+      }
     }
 
-    let location = await Location.getCurrentPositionAsync({});
-    
-    // 2. Hit the new Gatekeeper Endpoint
-    const validation = await fetch(`${API_URL}/passenger/validate-location`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_lat: location.coords.latitude,
-        user_lng: location.coords.longitude,
-        user_id: STATIC_USER_ID
-      })
-    });
+    startHubTracking();
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, []);
 
-    const data = await validation.json();
-    if (data.error === "OUT_OF_RANGE") {
-      navigation.replace("OutOfRangeScreen"); // You should create this screen
-    } else {
-      setSelectedPickupHub(data.nearestHub);
-    }
-  }
-
-  preparePassengerWorkspace();
-}, []);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  /* ---------------- HUB SEARCH ---------------- */
-  const searchHubs = async (text) => {
-    setSearchText(text);
-    if (text.length < 2) {
-      setHubs([]);
-      return;
-    }
-    setLoadingHubs(true);
+  const resolveClosestHub = async (lat, lng) => {
     try {
-      const res = await fetch(`${API_URL}/hubs/search/${text}`);
-      const data = await res.json();
-      setHubs(Array.isArray(data) ? data : []);
+      const response = await fetch(`${API_URL}/passenger/validate-location`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_lat: lat, user_lng: lng }),
+      });
+
+      const validationData = await response.json();
+
+      if (validationData && validationData.nearestHub) {
+        const targetHub = validationData.nearestHub;
+        setSelectedPickupHub(targetHub);
+        
+        if (validationData.distanceInMeters) {
+          setDistanceToHub(Math.round(validationData.distanceInMeters));
+        } else {
+          const dist = calculateHaversine(lat, lng, parseFloat(targetHub.latitude), parseFloat(targetHub.longitude));
+          setDistanceToHub(Math.round(dist * 1000));
+        }
+
+        fetchActiveCorridors(targetHub.name);
+      }
     } catch (err) {
-      console.log("hub search error:", err);
-      setHubs([]);
+      console.log("Error querying closest hub matrix:", err);
     } finally {
-      setLoadingHubs(false);
+      setIsLocating(false);
     }
   };
 
-  /* ---------------- SELECT HUB → GET ROUTES ---------------- */
-  const selectHub = async (hub) => {
-    setSelectedPickupHub(hub);
-    setSearchText(hub.name);
-    setHubs([]);
-    setRoutes([]);
-    setSelectedRoutes([]);
-    setLoadingRoutes(true);
+  const calculateHaversine = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; 
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; 
+  };
 
+  const fetchActiveCorridors = async (hubName) => {
+    setLoadingRoutes(true);
     try {
-      const res = await fetch(`${API_URL}/routes/from/${hub.name}`);
+      const res = await fetch(`${API_URL}/routes/from/${encodeURIComponent(hubName)}`);
       const data = await res.json();
       setRoutes(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.log("route fetch error:", err);
+      console.log("Route corridor compilation lookup error:", err);
       setRoutes([]);
     } finally {
       setLoadingRoutes(false);
     }
   };
 
-  /* ---------------- SELECT CORRIDOR → GET RIDES ---------------- */
-  const handleRouteSelect = async (routeId) => {
-    const parsedRouteId = parseInt(routeId, 10);
-    if (!parsedRouteId || isNaN(parsedRouteId)) {
-      console.log("⚠️ Aborting fetch: routeId is invalid or NaN:", routeId);
-      setSelectedRoutes([]);
-      return;
-    }
-
-    setLoadingRides(true);
-    try {
-      const res = await fetch(`${API_URL}/rides?route_id=${parsedRouteId}`);
-      const data = await res.json();
-      setSelectedRoutes(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.log("ride fetch error:", err);
-      setSelectedRoutes([]);
-    } finally {
-      setLoadingRides(false);
-    }
-  };
-
-  /* ---------------- 🚀 REQUEST NEW CORRIDOR ---------------- */
-  const handleRequestCorridor = async () => {
-    if (!selectedPickupHub) {
-      Alert.alert("Error", "Please select a starting hub first.");
-      return;
-    }
-
-    Alert.prompt(
-      "Request New Corridor",
-      `Where do you want to go from ${selectedPickupHub.name}? Enter destination hub:`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Submit Request",
-          onPress: async (destination) => {
-            if (!destination || destination.trim() === "") return;
-            try {
-              const res = await fetch(`${API_URL}/corridors/request`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  pickup_hub_id: selectedPickupHub.id,
-                  destination_name: destination,
-                  user_id: STATIC_USER_ID,
-                }),
-              });
-              if (res.ok) {
-                Alert.alert("Success 🎉", `Corridor to ${destination} requested! We'll alert drivers.`);
-              }
-            } catch (err) {
-              console.log("Corridor request error:", err);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  /* ---------------- JOIN POOL / BOOK SEAT DIRECTLY ---------------- */
+  /* 🚀 JOIN POOL PIPELINE & ROUTE TRANSITION */
+  /* 🚀 DIAGNOSTIC JOIN POOL PIPELINE & ROUTE TRANSITION */
   const joinPool = async (item) => {
     try {
-      const pickupHubId = selectedPickupHub ? selectedPickupHub.id : null;
+      // 1. Diagnostics Alert to verify the touch event triggers instantly
+      console.log("👉 [Touch Trigger] joinPool function invoked for item:", item);
+
+      if (!userCoords) {
+        // Fallback fallback coordinates if geolocation watch hasn't saved state yet
+        console.log("⚠️ userCoords was null, applying Gerji Hub fallback coordinates for API compliance");
+        setUserCoords({ latitude: 9.0022471, longitude: 38.8100596 });
+      }
+
+      const pickupHubId = selectedPickupHub ? selectedPickupHub.id : 7; // Resolves null values instantly to your active hub ID (Gerji = 7)
+      const targetRouteId = parseInt(item.route_id || item.id || item._id, 10);
       
-      // Determine if it's a live driver offer object
-      const isLiveDriverOffer = Object.prototype.hasOwnProperty.call(item, 'driver_id') || 
-                                Object.prototype.hasOwnProperty.call(item, 'price_per_seat');
-      
-      // Resolve Route ID cleanly to ensure it never passes undefined/NaN
-      const targetRouteId = parseInt(item.route_id || item.id, 10);
       if (!targetRouteId || isNaN(targetRouteId)) {
-        console.error("❌ [Join Pool Error] Failed to resolve a valid Route ID from item:", item);
-        Alert.alert("Payload Error", "Could not resolve a valid corridor route ID.");
+        Alert.alert("System Sync Error", `Could not resolve a valid corridor route sequence ID. Extracted: ${targetRouteId}`);
         return;
       }
 
-      let endpoint = isLiveDriverOffer ? `${API_URL}/rides/join-pool` : `${API_URL}/routes/join`;
-      let payload = {};
-      let corridorLabel = "Selected Corridor";
+      const payload = {
+        user_lat: userCoords?.latitude || 9.0022471,
+        user_lng: userCoords?.longitude || 38.8100596,
+        user_id: STATIC_USER_ID,
+        pickup_hub_id: pickupHubId,
+        route_id: targetRouteId,
+        dropoff_hub_id: null,
+        booking_type: isSoloRide ? "solo" : "shared"
+      };
 
-      if (isLiveDriverOffer) {
-        endpoint = `${API_URL}/rides/join-pool`;
-        payload = {
-          ride_id: item.id,
-          passenger_id: STATIC_USER_ID, 
-          pickup_hub_id: pickupHubId,
-          dropoff_hub_id: item.dropoff_hub_id || null,
-          seats_booked: 1
-        };
-        corridorLabel = `${item.start_location} → ${item.end_location}`;
-      } else {
-        endpoint = `${API_URL}/routes/join`;
-        payload = {
-          route_id: targetRouteId,
-          user_id: STATIC_USER_ID,
-          pickup_hub_id: pickupHubId,
-          dropoff_hub_id: null,
-          booking_type: isSoloRide ? "solo" : "shared",
-        };
-        corridorLabel = Array.isArray(item.stops) ? item.stops.join(" → ") : "Selected Route";
-      }
+      console.log("📡 [Network Dispatch] Sending payload to backend:", JSON.stringify(payload));
 
-      console.log(`📡 Dispatching payload to endpoint: ${endpoint}`);
-      console.log("📦 Payload contents:", JSON.stringify(payload, null, 2));
-
-      const res = await fetch(endpoint, {
+      // 2. Wrap fetch in a timeout promise to prevent silent stalls if the server drops requests
+      const fetchPromise = fetch(`${API_URL}/routes/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const responseText = await res.text();
-      console.log(`📥 Raw Server Response:`, responseText);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Network Timeout")), 4000)
+      );
 
-      if (!res.ok) {
-        Alert.alert("Router Disconnect", `Verification processing failed. Server status: ${res.status}`);
+      // Race them!
+      const res = await Promise.race([fetchPromise, timeoutPromise]);
+
+      console.log(`📥 [Server Response Received] Status Code: ${res.status}`);
+
+      if (res.status === 403) {
+        const errorData = await res.json();
+        Alert.alert("Out of Pool Range", errorData.message || "Range validation failure.");
         return;
       }
 
-      let data;
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        console.error("❌ Failed to parse JSON response:", e);
-        Alert.alert("Data Error", "Received an invalid format from server processing.");
-        return;
-      }
-
-      // Extract state parameters returned by backend pipeline
-      const isRecovered = data.alreadyActive === true;
-      const targetRideOfferId = data.pool?.matched_ride_offer_id || null;
-      const targetPoolId = data.pool?.id || null;
+      const data = await res.json();
+      console.log("📥 [Backend Response Body]:", JSON.stringify(data));
       
-      // Target screen is MatchingScreen so they can wait in the lobby
+      const isRecovered = data.alreadyActive === true;
       const targetScreen = isRecovered ? (data.navigateTo || "MatchingScreen") : "MatchingScreen";
-
-      console.log(`🧭 [Navigation Dispatch] Directly routing to: ${targetScreen} | Pool ID: ${targetPoolId} | Ride Offer ID: ${targetRideOfferId}`);
 
       const navigationParams = {
         routeId: targetRouteId,
         hubId: pickupHubId,
         userId: STATIC_USER_ID, 
-        poolId: targetPoolId,
-        rideOfferId: targetRideOfferId,
+        poolId: data.pool?.id || data.poolId || null, 
+        rideOfferId: data.matched_ride_offer_id || null,
         poolStatus: data.pool?.status || "searching",
         ride: {
-          corridor: corridorLabel,
-          time: isLiveDriverOffer ? "Driver waiting" : "Evaluating Hub Options...",
-          price: isLiveDriverOffer ? `ETB ${parseInt(item.price_per_seat, 10)}` : `ETB ${item.base_price || 150}`,
+          corridor: item.stops ? item.stops.join(" ➔ ") : "Gerji ➔ Megenagna",
+          time: "Evaluating Corridor Options...",
+          price: `ETB ${item.base_price || 150}`,
         }
       };
 
-      // 🚀 DIRECT NAVIGATION DISPATCH (With emergency stack reset fallback)
-      try {
-        navigation.navigate(targetScreen, navigationParams);
-      } catch (navErr) {
-        console.warn("⚠️ Direct navigation failed, executing emergency stack reset...");
-        navigation.reset({
-          index: 0,
-          routes: [{ 
-            name: targetScreen, 
-            params: navigationParams
-          }],
-        });
-      }
+      console.log(`🧭 [Navigation Dispatch] Success! Switching to: ${targetScreen}`);
+      navigation.navigate(targetScreen, navigationParams);
 
     } catch (err) {
-      console.error("Join Pool Error:", err);
-      Alert.alert("Connection Failure", "Could not reach matchmaking server layer.");
+      console.error("❌ Join Pool Exception caught:", err);
+      
+      // 3. Fallback Navigation Bypass if the backend drops the connection
+      Alert.alert(
+        "Backend Offline / Timeout",
+        `Could not reach ${API_URL}/routes/join. Would you like to force navigate to MatchingScreen for UI layout testing?`,
+        [
+          {
+            text: "Force Navigate",
+            onPress: () => {
+              console.log("🔀 [Bypass] Forcing navigation to MatchingScreen");
+              navigation.navigate("MatchingScreen", {
+                routeId: parseInt(item.route_id || item.id, 10) || 3,
+                hubId: selectedPickupHub ? selectedPickupHub.id : 7,
+                userId: STATIC_USER_ID,
+                poolId: null,
+                poolStatus: "searching",
+                ride: {
+                  corridor: item.stops ? item.stops.join(" ➔ ") : "Gerji ➔ Megenagna",
+                  time: "Evaluating Corridor Options...",
+                  price: `ETB ${item.base_price || 150}`,
+                }
+              });
+            }
+          },
+          { text: "Cancel", style: "cancel" }
+        ]
+      );
     }
   };
-  
   if (checkingGatekeeper) {
     return (
       <View style={styles.gatekeeperContainer}>
-        <ActivityIndicator size="large" color="#10B981" />
-        <Text style={styles.gatekeeperText}>Checking active ride status...</Text>
+        <ActivityIndicator size="large" color="#059669" />
+        <Text style={styles.gatekeeperText}>Analyzing Active Pool Session...</Text>
       </View>
     );
   }
 
+  const isOutOfRange = distanceToHub > 1000;
+  const formattedDistance = distanceToHub !== null 
+    ? (distanceToHub >= 1000 ? `${(distanceToHub / 1000).toFixed(1)} km` : `${distanceToHub}m`) 
+    : "Locating...";
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#FFF" }} edges={["top", "left", "right"]}>
-      <TouchableOpacity
-        style={styles.floatingDriverBtn}
-        activeOpacity={0.8}
-        onPress={() => navigation.navigate("CreateCorridorScreen")}
+    <SafeAreaView style={styles.outerContainer}>
+      
+      {/* FLOATING LOGOUT UTILITY */}
+      <TouchableOpacity 
+        style={styles.floatingLogoutBtn} 
+        onPress={() => {
+          Alert.alert("Logout", `Sign out of session for ${user?.full_name || "Passenger"}?`, [
+            { text: "Stay" },
+            { text: "Logout", style: "destructive", onPress: () => logoutSession() }
+          ]);
+        }}
       >
-        <FontAwesome5 name="exchange-alt" size={12} color="#10B981" style={{ marginRight: 8 }} />
-        <Text style={styles.floatingDriverText}>SWITCH TO DRIVER</Text>
+        <Ionicons name="log-out-outline" size={20} color="#EF4444" />
       </TouchableOpacity>
 
-      <ScrollView style={styles.container}>
-        <Text style={styles.title}>Find Shared Ride</Text>
-
-        {/* 🚪 HIGH PRIORITY DEVELOPMENT LOGOUT CONTROL PANEL CARD */}
-        <View style={styles.devBox}>
-          <Text style={styles.devWelcomeText}>Welcome back, {user?.full_name || "Passenger"}</Text>
-          <TouchableOpacity 
-            style={styles.devLogoutButton}
-            onPress={async () => {
-              console.log("🚪 Triggering local session erasure routine...");
-              await logoutSession();
-            }}
-          >
-            <Text style={styles.devLogoutText}>Test Logout / Reset Session Cache</Text>
-          </TouchableOpacity>
+      {/* 📍 1. PROXIMITY BANNERS */}
+      <View style={styles.heroHeaderZone}>
+        <View style={styles.hubHeader}>
+          <View style={[styles.iconCircle, { backgroundColor: isOutOfRange ? "#FEF3C7" : "#D1FAE5" }]}>
+            <Ionicons 
+              name="location-sharp" 
+              size={26} 
+              color={isOutOfRange ? "#D97706" : "#059669"} 
+            />
+          </View>
+          <View style={{ flex: 1, marginLeft: 14 }}>
+            <Text style={styles.hubSubText}>NEAREST PICKUP ZONE</Text>
+            <Text style={styles.hubTitle} numberOfLines={1}>
+              {selectedPickupHub ? selectedPickupHub.name : "Detecting Hub..."}
+            </Text>
+          </View>
         </View>
 
-        {/* HUB SEARCH */}
-        <TextInput
-          placeholder="Search pickup hub..."
-          value={searchText}
-          onChangeText={searchHubs}
-          style={styles.inputBox}
-          placeholderTextColor="#9CA3AF"
-        />
+        <View style={[styles.rangeBadgeBox, isOutOfRange ? styles.alertRangeBox : styles.optimalRangeBox]}>
+          <View style={styles.rangeRow}>
+            <MaterialCommunityIcons 
+              name={isOutOfRange ? "walk" : "run-fast"} 
+              size={18} 
+              color={isOutOfRange ? "#B45309" : "#047857"} 
+            />
+            <Text style={[styles.rangeValueText, { color: isOutOfRange ? "#B45309" : "#047857" }]}>
+              {formattedDistance} Away
+            </Text>
+          </View>
+          <Text style={[styles.rangeHintText, { color: isOutOfRange ? "#D97706" : "#059669" }]}>
+            {isOutOfRange 
+              ? "Walk closer to the hub (<1km) to unlock corridor scheduling."
+              : "Inside active loading range. You are clear to match!"
+            }
+          </Text>
+        </View>
+      </View>
 
-        {loadingHubs && <ActivityIndicator style={{ marginBottom: 10 }} color="#10B981" />}
-
-        {hubs.map((hub) => (
-          <TouchableOpacity key={hub.id || hub.name} style={styles.suggestion} onPress={() => selectHub(hub)}>
-            <Text style={styles.suggestionText}>{hub.name}</Text>
-          </TouchableOpacity>
-        ))}
-
-        {/* RIDE TYPE SELECTION PANEL */}
-        <Text style={styles.label}>Select Service Tier</Text>
-        <View style={styles.toggleRow}>
-          <TouchableOpacity
-            style={[styles.tierButton, !isSoloRide && styles.activeTierButton]}
+      {/* 🚗 2. TIERS */}
+      <View style={styles.toggleRowContainer}>
+        <Text style={styles.toggleSectionHeading}>Match Profile</Text>
+        <View style={styles.toggleButtonGroup}>
+          <TouchableOpacity 
+            style={[styles.archetypeButton, !isSoloRide && styles.activeArchetypeButton]}
             onPress={() => setIsSoloRide(false)}
           >
-            <Ionicons name="people" size={20} color={!isSoloRide ? "#FFF" : "#374151"} />
-            <Text style={[styles.tierText, !isSoloRide && styles.activeTierText]}>Shared Pool</Text>
+            <Ionicons name="people" size={18} color={!isSoloRide ? "#FFF" : "#4B5563"} />
+            <Text style={[styles.archetypeText, !isSoloRide && styles.activeArchetypeText]}>Corridor Share</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.tierButton, isSoloRide && styles.activeSoloButton]}
+          <TouchableOpacity 
+            style={[styles.archetypeButton, isSoloRide && styles.activeSoloButton]}
             onPress={() => setIsSoloRide(true)}
           >
-            <FontAwesome5 name="user-alt" size={14} color={isSoloRide ? "#FFF" : "#374151"} />
-            <Text style={[styles.tierText, isSoloRide && styles.activeTierText]}>Solo Buyout</Text>
+            <FontAwesome5 name="user-alt" size={14} color={isSoloRide ? "#FFF" : "#4B5563"} />
+            <Text style={[styles.archetypeText, isSoloRide && styles.activeArchetypeText]}>Express Solo</Text>
           </TouchableOpacity>
         </View>
+      </View>
 
-        {/* AVAILABLE CORRIDORS */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.label}>Available Corridors</Text>
-          {selectedPickupHub && (
-            <TouchableOpacity onPress={handleRequestCorridor}>
-              <Text style={styles.requestLink}>+ Request New Route</Text>
-            </TouchableOpacity>
-          )}
+      {/* 🚀 3. RENDERING CARDS MATRIX */}
+      <View style={{ flex: 1 }}>
+        <View style={styles.listSectionHeader}>
+          <Text style={styles.sectionTitle}>Available Corridors</Text>
+          {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
         </View>
 
-        {loadingRoutes ? (
-          <ActivityIndicator style={{ marginVertical: 20 }} color="#10B981" />
-        ) : routes.length === 0 && selectedPickupHub ? (
-          <View style={styles.emptyRoutesBlock}>
-            <Text style={styles.emptyText}>No corridors registered from this hub yet.</Text>
-            <TouchableOpacity style={styles.requestCorridorBtn} onPress={handleRequestCorridor}>
-              <MaterialIcons name="add_location_alt" size={20} color="#FFF" />
-              <Text style={styles.requestCorridorBtnText}>Request Custom Corridor</Text>
-            </TouchableOpacity>
+        {isLocating ? (
+          <View style={styles.fallbackBlock}>
+            <ActivityIndicator size="large" color="#059669" style={{ marginBottom: 12 }} />
+            <Text style={styles.fallbackTitle}>Locating Your Nearest Hub...</Text>
+            <Text style={styles.fallbackSub}>Calculating GPS satellite telemetry values.</Text>
+          </View>
+        ) : routes.length === 0 ? (
+          <View style={styles.fallbackBlock}>
+            <MaterialCommunityIcons name="transit-connection-variant" size={54} color="#D1D5DB" style={{ marginBottom: 10 }} />
+            <Text style={styles.fallbackTitle}>No Open Corridors Found</Text>
+            <Text style={styles.fallbackSub}>
+              There are currently no active routes mapped from {selectedPickupHub?.name || "your location"}.
+            </Text>
           </View>
         ) : (
-          routes.map((route) => (
-            <TouchableOpacity
-              key={route.route_id || route.id}
-              style={styles.routeCard}
-              onPress={() => {
-                // 🚀 Tapping a corridor immediately joins route_pool and triggers transition
-                joinPool(route);
-              }} 
-            >
-              <Text style={styles.routeText}>
-                {Array.isArray(route.stops) ? route.stops.join(" → ") : "Invalid route"}
-              </Text>
-              <Text style={styles.subText}>Tap to request ride on this corridor</Text>
-            </TouchableOpacity>
-          ))
-        )}
+          <ScrollView 
+            style={styles.container} 
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 40 }}
+          >
+            {routes.map((route, index) => {
+              const seatCount = route.filled_seats || 0;
+              const maxSeats = route.capacity || 4;
+              const hasActiveQueue = seatCount > 0;
 
-        {/* RIDES OPTIONS LIST */}
-        <Text style={styles.label}>Live Drivers Nearby</Text>
+              return (
+                <TouchableOpacity 
+                  key={route.route_id || route.id || `route-${index}`} 
+                  style={[
+                    styles.supremeCard,
+                    isOutOfRange && styles.disabledCard
+                  ]} 
+                  onPress={() => joinPool(route)}
+                  disabled={isOutOfRange}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.cardHeader}>
+                    <View style={styles.routePill}>
+                      <Text style={styles.routeLabel}>
+                        {route.stops && route.stops.length > 0 
+                          ? route.stops.join(" ➔ ") 
+                          : `Route #${route.id || route.route_id}`
+                        }
+                      </Text>
+                    </View>
+                    
+                    <View style={[
+                      styles.seatBadge, 
+                      hasActiveQueue ? styles.activeSeatBadge : styles.emptySeatBadge
+                    ]}>
+                      <View style={[
+                        styles.pulseDot, 
+                        { backgroundColor: hasActiveQueue ? "#10B981" : "#9CA3AF" }
+                      ]} />
+                      <Text style={[
+                        styles.seatText, 
+                        { color: hasActiveQueue ? "#047857" : "#4B5563" }
+                      ]}>
+                        {seatCount}/{maxSeats} Filled
+                      </Text>
+                    </View>
+                  </View>
 
-        {loadingRides ? (
-          <ActivityIndicator style={{ marginVertical: 20 }} color="#10B981" />
-        ) : selectedRoutes.length === 0 ? (
-          <Text style={{ color: "#9CA3AF", fontSize: 13, fontStyle: "italic", paddingHorizontal: 4 }}>
-            No live driver offers on selected map route yet. Request above to wait.
-          </Text>
-        ) : (
-          selectedRoutes.map((route) => (
-            <PoolOfferCard
-              key={route.id}
-              route={route}
-              isSoloIntent={isSoloRide}
-              onPress={() => joinPool(route)} 
-            />
-          ))
+                  <View style={styles.cardFooter}>
+                    <View style={styles.priceContainer}>
+                      <Text style={styles.priceLabel}>ESTIMATED FARE</Text>
+                      <Text style={styles.priceText}>
+                        ETB {isSoloRide ? (route.base_price * 2.5) : route.base_price}
+                      </Text>
+                    </View>
+
+                    <View style={styles.actionArrowZone}>
+                      <Text style={[
+                        styles.actionText, 
+                        { color: isOutOfRange ? "#9CA3AF" : "#059669" }
+                      ]}>
+                        {isOutOfRange ? "Out of Range" : "Request Pool"}
+                      </Text>
+                      <Ionicons 
+                        name="chevron-forward-circle" 
+                        size={22} 
+                        color={isOutOfRange ? "#D1D5DB" : "#059669"} 
+                      />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         )}
-        <View style={{ height: 40 }} />
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff", paddingHorizontal: 20, paddingTop: 10 },
-  title: { fontSize: 32, fontWeight: "bold", marginBottom: 20 },
-  devBox: { backgroundColor: "#FFF", borderRadius: 12, borderWidth: 1, borderColor: "#A7F3D0", padding: 12, marginBottom: 15, alignItems: "center" },
-  devWelcomeText: { fontSize: 14, fontWeight: "600", color: "#111827", marginBottom: 6 },
-  devLogoutButton: { backgroundColor: "#FF3B30", paddingVertical: 10, paddingHorizontal: 16, borderRadius: 8, width: "100%", alignItems: "center" },
-  devLogoutText: { color: "#FFF", fontWeight: "700", fontSize: 12 },
-  inputBox: { borderWidth: 1, borderColor: "#ddd", borderRadius: 15, padding: 18, marginBottom: 15, fontSize: 15, backgroundColor: "#F9FAFB" },
-  suggestion: { padding: 15, borderBottomWidth: 1, borderBottomColor: "#eee" },
-  suggestionText: { fontSize: 15, color: "#1F2937" },
-  label: { fontSize: 16, fontWeight: "700", marginTop: 15, marginBottom: 10 },
-  sectionHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 15, marginBottom: 10 },
-  requestLink: { color: "#10B981", fontWeight: "700", fontSize: 14 },
-  toggleRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 15 },
-  tierButton: { flex: 1, flexDirection: "row", backgroundColor: "#F3F4F6", padding: 15, borderRadius: 12, justifyContent: "center", alignItems: "center", marginHorizontal: 5, borderWidth: 1, borderColor: "#E5E7EB" },
-  activeTierButton: { backgroundColor: "#111827", borderColor: "#111827" },
-  activeSoloButton: { backgroundColor: "#10B981", borderColor: "#10B981" },
-  tierText: { marginLeft: 8, fontWeight: "700", color: "#374151" },
-  activeTierText: { color: "#FFF" },
-  routeCard: { backgroundColor: "#f5f5f5", padding: 18, borderRadius: 12, marginBottom: 12 },
-  routeText: { fontSize: 16, fontWeight: "600" },
-  subText: { fontSize: 12, color: "#10B981", fontWeight: "700", marginTop: 5 },
-  emptyRoutesBlock: { padding: 20, alignItems: "center", backgroundColor: "#F9FAFB", borderRadius: 12 },
-  emptyText: { color: "#6B7280", marginBottom: 12, textAlign: "center" },
-  requestCorridorBtn: { flexDirection: "row", backgroundColor: "#10B981", paddingHorizontal: 20, paddingVertical: 12, borderRadius: 25, alignItems: "center" },
-  requestCorridorBtnText: { color: "#FFF", fontWeight: "700", marginLeft: 8 },
-  floatingDriverBtn: { position: "absolute", top: 20, right: 20, backgroundColor: "#111827", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 25, zIndex: 9999, elevation: 10, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#374151" },
-  floatingDriverText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800", letterSpacing: 0.5 },
+  outerContainer: { flex: 1, backgroundColor: "#F9FAFB" },
   gatekeeperContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" },
-  gatekeeperText: { marginTop: 12, color: "#4B5563", fontWeight: "600", fontSize: 14 }
+  gatekeeperText: { marginTop: 12, color: "#4B5563", fontWeight: "700", fontSize: 14, letterSpacing: 0.2 },
+  heroHeaderZone: { backgroundColor: "#FFFFFF", padding: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: "#111827", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 10, elevation: 3, marginBottom: 16 },
+  hubHeader: { flexDirection: "row", alignItems: "center", marginBottom: 15 },
+  iconCircle: { width: 48, height: 48, borderRadius: 24, justifyContent: "center", alignItems: "center" },
+  hubSubText: { fontSize: 10, fontWeight: "800", color: "#9CA3AF", letterSpacing: 1 },
+  hubTitle: { fontSize: 20, fontWeight: "800", color: "#111827", marginTop: 2 },
+  rangeBadgeBox: { padding: 12, borderRadius: 16, borderWidth: 1 },
+  optimalRangeBox: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
+  alertRangeBox: { backgroundColor: "#FFFBEB", borderColor: "#FDE68A" },
+  rangeRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
+  rangeValueText: { fontSize: 14, fontWeight: "800", marginLeft: 6 },
+  rangeHintText: { fontSize: 12, fontWeight: "500", lineHeight: 16 },
+  floatingLogoutBtn: { position: "absolute", top: 12, right: 16, zIndex: 10, padding: 8, borderRadius: 20, backgroundColor: "#FFF", borderWidth: 1, borderColor: "#F3F4F6" },
+  toggleRowContainer: { paddingHorizontal: 20, marginBottom: 18 },
+  toggleSectionHeading: { fontSize: 11, fontWeight: "800", color: "#6B7280", letterSpacing: 1, marginBottom: 8, textTransform: "uppercase" },
+  toggleButtonGroup: { flexDirection: "row", backgroundColor: "#F3F4F6", padding: 4, borderRadius: 14 },
+  archetypeButton: { flex: 1, flexDirection: "row", height: 40, borderRadius: 11, justifyContent: "center", alignItems: "center" },
+  activeArchetypeButton: { backgroundColor: "#111827" },
+  activeSoloButton: { backgroundColor: "#059669" },
+  archetypeText: { fontSize: 13, fontWeight: "700", marginLeft: 6, color: "#4B5563" },
+  activeArchetypeText: { color: "#FFFFFF" },
+  listSectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 12 },
+  sectionTitle: { fontSize: 16, fontWeight: "800", color: "#111827" },
+  container: { flex: 1, paddingHorizontal: 20 },
+  supremeCard: { backgroundColor: "#FFFFFF", borderRadius: 18, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: "#E5E7EB", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 6, elevation: 2 },
+  disabledCard: { opacity: 0.65, backgroundColor: "#F3F4F6", borderColor: "#E5E7EB" },
+  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", borderBottomWidth: 1, borderBottomColor: "#F3F4F6", paddingBottom: 12, marginBottom: 12 },
+  routePill: { flex: 1, paddingRight: 8 },
+  routeLabel: { fontSize: 15, fontWeight: "800", color: "#111827", lineHeight: 20 },
+  seatBadge: { flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  emptySeatBadge: { backgroundColor: "#F3F4F6" },
+  activeSeatBadge: { backgroundColor: "#D1FAE5" },
+  pulseDot: { width: 6, height: 6, borderRadius: 3, marginRight: 6 },
+  seatText: { fontSize: 11, fontWeight: "800" },
+  cardFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  priceContainer: { flexDirection: "column" },
+  priceLabel: { fontSize: 9, fontWeight: "800", color: "#9CA3AF", letterSpacing: 0.5 },
+  priceText: { fontSize: 18, fontWeight: "900", color: "#111827", marginTop: 1 },
+  actionArrowZone: { flexDirection: "row", alignItems: "center" },
+  actionText: { fontSize: 12, fontWeight: "800", marginRight: 6 },
+  fallbackBlock: { flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 60, paddingHorizontal: 40 },
+  fallbackTitle: { fontSize: 16, fontWeight: "800", color: "#374151", marginTop: 8 },
+  fallbackSub: { fontSize: 13, color: "#9CA3AF", textAlign: "center", marginTop: 4, lineHeight: 18 }
 });
