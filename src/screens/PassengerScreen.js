@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import PoolOfferCard from "../components/PoolOfferCard";
 import { Ionicons, FontAwesome5, MaterialIcons } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
+import * as Location from 'expo-location';
 
 const API_URL = "http://192.168.123.52:5000/api"; 
 const STATIC_USER_ID = 1; 
@@ -93,6 +94,56 @@ export default function PassengerScreen({ navigation }) {
     checkUserRoutingStatus();
     return () => { isMounted = false; };
   }, [navigation]);
+
+
+
+//CHECKING IF LOCATION IS VALID FOR REQUEST
+
+useEffect(() => {
+  async function preparePassengerWorkspace() {
+    // 1. Ask for Phone Location
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert("Permission Needed", "We need your location to find nearby corridor hubs.");
+      return;
+    }
+
+    let location = await Location.getCurrentPositionAsync({});
+    
+    // 2. Hit the new Gatekeeper Endpoint
+    const validation = await fetch(`${API_URL}/passenger/validate-location`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_lat: location.coords.latitude,
+        user_lng: location.coords.longitude,
+        user_id: STATIC_USER_ID
+      })
+    });
+
+    const data = await validation.json();
+    if (data.error === "OUT_OF_RANGE") {
+      navigation.replace("OutOfRangeScreen"); // You should create this screen
+    } else {
+      setSelectedPickupHub(data.nearestHub);
+    }
+  }
+
+  preparePassengerWorkspace();
+}, []);
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   /* ---------------- HUB SEARCH ---------------- */
   const searchHubs = async (text) => {
