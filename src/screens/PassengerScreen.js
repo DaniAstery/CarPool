@@ -13,7 +13,7 @@ import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-ico
 import { useAuth } from '../AuthContext'; 
 import * as Location from 'expo-location';
 
-const API_URL = "http://192.168.123.52:5000/api"; 
+const API_URL = "http://192.168.112.52:5000/api"; 
 const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {

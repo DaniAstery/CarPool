@@ -14,9 +14,12 @@ import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext'; 
-
+import AsyncStorage from "@react-native-async-storage/async-storage";
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.123.52:5000/api"; 
+
+
+// 🌐 NETWORK HOST CONFIGURATION
+const API_URL = "http://192.168.112.52:5000/api"; 
 
 export default function ProposalDriver({ navigation, route }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE MATRIX
@@ -32,11 +35,12 @@ export default function ProposalDriver({ navigation, route }) {
   
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
-  const [poolPassengers, setPoolPassengers] = useState([]); // Visual: Matched only
+  const [poolPassengers, setPoolPassengers] = useState([]); // Visual: Holds full unified roster
   const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0); // Logic: Behind-the-scenes count of accepted riders
   const [acceptedPassengerIds, setAcceptedPassengerIds] = useState([]); 
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45); 
+  const [networkError, setNetworkError] = useState(null); // Diagnostic visual error state
 
   // 🎯 3. SYSTEM ROOT PARAMETER COUPLING
   const currentDriverId = user?.id || (route?.params?.driverId ? parseInt(route?.params?.driverId, 10) : null);
@@ -45,9 +49,8 @@ export default function ProposalDriver({ navigation, route }) {
 
   // 💸 FARE CALCULATIONS
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
-  const totalSeatsAllocated = offerDetails?.total_seats ? parseInt(offerDetails.total_seats, 10) : 4;
   
-  // Potential payout displays based on the visual matched roster seats
+  // Base payout on the actual total number of passengers joined in the cluster
   const currentDriverPayout = poolPassengers.length * pricePerSeat;
 
   // 🔐 STRICT ACCEPTANCE VALIDATIONS (At least 2 riders must be "accepted" in the DB)
@@ -55,6 +58,46 @@ export default function ProposalDriver({ navigation, route }) {
   const isDriverButtonUnlocked = hasMinimumTwoPassengersAccepted;
 
   const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
+
+// 🩺 TEMPORARY DIAGNOSTIC SYSTEM LOG
+useEffect(() => {
+  const diagnoseStorage = async () => {
+    try {
+      // 1. Grab every single key currently saved in storage
+      const allKeys = await AsyncStorage.getAllKeys();
+      
+      if (allKeys.length === 0) {
+        console.log("🔍 [AsyncStorage Diagnostic] Storage is completely empty.");
+        return;
+      }
+
+      // 2. Fetch all key-value pairs at once
+      const stores = await AsyncStorage.multiGet(allKeys);
+      
+      console.log("=== 🔍 START ASYNCSTORAGE DUMP ===");
+      stores.forEach(([key, value]) => {
+        try {
+          // Attempt to parse JSON so it prints beautifully in your console
+          const parsedValue = JSON.parse(value);
+          console.log(`🔑 Key: "${key}"\n📄 Value (JSON):`, parsedValue);
+        } catch {
+          // Fallback if the value is just a raw string
+          console.log(`🔑 Key: "${key}"\n📄 Value (String): "${value}"`);
+        }
+        console.log("-----------------------------------");
+      });
+      console.log("=== 🔍 END ASYNCSTORAGE DUMP ===");
+
+    } catch (error) {
+      console.error("❌ Failed to read AsyncStorage keys:", error);
+    }
+  };
+
+  diagnoseStorage();
+}, []);
+
+
+
 
   // Initialize Location Engine Frame
   useEffect(() => {
@@ -119,6 +162,8 @@ export default function ProposalDriver({ navigation, route }) {
         }
         
         const data = await res.json(); 
+        setNetworkError(null); // Clear active network flags on successful contact
+
         if (!data || (!data.hasActiveProposal && !data.id)) {
           console.log("⚠️ [Corridor Sync] No active proposals for this driver session.");
           return;
@@ -189,15 +234,13 @@ export default function ProposalDriver({ navigation, route }) {
           };
         });
 
-        // 🎯 LOGICAL EVALUATION: Track accepted count before filtering
+        // 🎯 LOGICAL EVALUATION: Track accepted count
         const acceptedCount = unifiedRoster.filter(p => p.status === "accepted").length;
         setStrictlyAcceptedCount(acceptedCount);
 
-        // 🎯 VISUAL FILTER: Only retain passengers whose status is strictly "matched" for display
-        const matchedOnlyRoster = unifiedRoster.filter(p => p.status === "matched");
-
-        console.log("⚡ [Corridor Sync] Rendered Matched Visual Roster:", matchedOnlyRoster);
-        setPoolPassengers(matchedOnlyRoster);
+        // 🎯 FIX: Do not filter out accepted passengers. Show the complete roster!
+        console.log("⚡ [Corridor Sync] Rendered Roster Unified Registry:", unifiedRoster);
+        setPoolPassengers(unifiedRoster);
 
         // 5️⃣ SYSTEM REDIRECTIONS
         if (data.status === "accepted" || data.status === "inprogress") {
@@ -214,12 +257,13 @@ export default function ProposalDriver({ navigation, route }) {
         }
 
       } catch (err) {
-        console.error("❌ [Corridor Sync] Manifest Sync Execution Failure:", err);
+        console.error("❌ [Corridor Sync] Connection Route Fault:", err.message);
+        setNetworkError(`Cannot connect to host: ${API_URL}. Check development server setup.`);
       }
     }
 
     syncDatabaseManifestState();
-    const pollInterval = setInterval(syncDatabaseManifestState, 2000); 
+    const pollInterval = setInterval(syncDatabaseManifestState, 3000);
     
     return () => clearInterval(pollInterval);
   }, [currentDriverId, routeId, navigation]);
@@ -303,6 +347,14 @@ export default function ProposalDriver({ navigation, route }) {
         <View style={{ width: 24 }} />
       </View>
 
+      {/* Network Offline Status Warning Banner */}
+      {networkError && (
+        <View style={styles.errorBanner}>
+          <MaterialCommunityIcons name="wifi-off" size={16} color="#FFFFFF" />
+          <Text style={styles.errorBannerText}>{networkError}</Text>
+        </View>
+      )}
+
       <View style={styles.mapContainer}>
         <MapView
           provider={PROVIDER_GOOGLE}
@@ -331,7 +383,7 @@ export default function ProposalDriver({ navigation, route }) {
                 {`ETB ${currentDriverPayout}.00`}
               </Text>
               <View style={styles.tierBadge}>
-                <Text style={styles.tierBadgeText}>{`${poolPassengers.length} Matched`}</Text>
+                <Text style={styles.tierBadgeText}>{`${poolPassengers.length} Total`}</Text>
               </View>
             </View>
             <View style={styles.priceBreakdownBox}>
@@ -364,30 +416,40 @@ export default function ProposalDriver({ navigation, route }) {
           </View>
 
           {/* DYNAMIC MANIFEST ROSTER RENDERING SECTION */}
-          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length} Matched / ${strictlyAcceptedCount} Accepted)`}</Text>
+          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length} Matched & Accepted)`}</Text>
           <View style={styles.statusTable}>
             {poolPassengers.length === 0 ? (
               <View style={{ paddingVertical: 12, alignItems: "center" }}>
-                <Text style={{ color: "#6B7280", fontSize: 13 }}>No matched passengers found for this run.</Text>
+                <Text style={{ color: "#6B7280", fontSize: 13 }}>No passengers assigned to this run yet.</Text>
               </View>
             ) : (
               poolPassengers.map((passenger) => {
                 const pId = parseInt(passenger.user_id || passenger.id, 10);
+                const isAccepted = passenger.status === "accepted";
+                
                 return (
                   <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
                     <View style={styles.tableUserLabelGroup}>
                       <Ionicons 
                         name="person-outline" 
                         size={14} 
-                        color="#0284C7" 
+                        color={isAccepted ? "#10B981" : "#0284C7"} 
                       />
                       <Text style={styles.tableUserText}>
                         {passenger.name || `Passenger ${pId}`}
                       </Text>
                     </View>
-                    <View style={[styles.badge, styles.badgeMatched]}>
-                      <Text style={[styles.badgeText, styles.textMatched]}>
-                        Matched
+                    
+                    {/* 💡 FIX: Dynamically apply correct styles and text based on DB Status */}
+                    <View style={[
+                      styles.badge, 
+                      isAccepted ? styles.badgeAccepted : styles.badgeMatched
+                    ]}>
+                      <Text style={[
+                        styles.badgeText, 
+                        isAccepted ? styles.textAccepted : styles.textMatched
+                      ]}>
+                        {isAccepted ? "Accepted" : "Matched"}
                       </Text>
                     </View>
                   </View>
@@ -446,6 +508,8 @@ const styles = StyleSheet.create({
   header: { height: 56, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, backgroundColor: "#FFFFFF" },
   backButton: { fontSize: 24, fontWeight: "600", color: "#111111" },
   headerTitle: { fontSize: 16, fontWeight: "700", color: "#111111" },
+  errorBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#EF4444", paddingVertical: 6, paddingHorizontal: 12 },
+  errorBannerText: { color: "#FFFFFF", fontSize: 11, fontWeight: "600", marginLeft: 6, textAlign: "center" },
   mapContainer: { flex: 1 },
   hubMarkerContainer: { alignItems: "center", justifyContent: "center" },
   hubMarkerPin: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#10B981", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#FFFFFF" },

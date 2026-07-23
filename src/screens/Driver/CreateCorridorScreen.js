@@ -13,12 +13,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 
-const API_URL = "http://192.168.123.52:5000"; 
+const API_URL = "http://192.168.112.52:5000"; 
 
 export default function CreateCorridorScreen({ navigation }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE
   const { user, isLoading: isAuthLoading, logoutSession } = useAuth();
-  const currentDriverId = 10; 
+  const currentDriverId = user?.id || null;   
   const activeVehicleId = 2; // 🛠️ Hardcoded to Vehicle ID #2 for streamlined development testing
 
   // Operational Settings

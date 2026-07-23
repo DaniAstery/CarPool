@@ -19,7 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const { width } = Dimensions.get("window");
 
 // 🌐 Production Local Area Network IP Configuration
-const API_URL = "http://192.168.123.52:5000"; 
+const API_URL = "http://192.168.112.52:5000"; 
 
 // 📍 Exact Geographic Target: Megenagna Blue Taxi Stop, Addis Ababa
 const MEETUP_LOCATION = {
