@@ -158,6 +158,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, [timeLeft]);
 
   // 4. NON-OVERLAPPING ASYNC POLLING LOOP
+  // 4. NON-OVERLAPPING ASYNC POLLING LOOP
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -183,12 +184,26 @@ export default function PickupProposalScreen({ navigation, route }) {
               activeRideOfferIdRef.current = data.ride_offer_id || data.id;
             }
 
-            // Sync driver match state
+            // --- NEW: INSTANT YEET LOGIC ---
+            // Find the current user in the passengers array
+            const myRow = data.passengers?.find(p => parseInt(p.userId || p.user_id || p.id, 10) === cleanUserId);
+            const myStatus = myRow?.status?.toLowerCase();
+
+            // If the DB already says they are arrived/in-trip, or the pool is fully ready, route instantly.
+            if (
+              myStatus === "arrived" || 
+              myStatus === "in_trip" || 
+              (data.driver_status === "accepted" && data.pool_status === "ready")
+            ) {
+              navigateToTracking();
+              return; // Kill the loop, we are leaving the screen
+            }
+            // --------------------------------
+
             if (data.driver_status) {
               setDriverState(data.driver_status);
             }
 
-            // Parse Co-Riders
             if (data.passengers && Array.isArray(data.passengers)) {
               const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
               const parsedCoRiders = data.passengers
@@ -202,19 +217,13 @@ export default function PickupProposalScreen({ navigation, route }) {
 
               setCoRiders(parsedCoRiders);
             }
-
-            // Auto transition to tracking if accepted by driver and group
-            if (data.driver_status === "accepted" && data.pool_status === "ready") {
-              navigateToTracking();
-              return;
-            }
           }
         }
       } catch (err) {
-        // Silently capture timeout aborts or temporary packet drops
+        // Silently capture timeout aborts
       } finally {
         if (isSubscribed) {
-          timerId = setTimeout(checkProposalStatus, 3000);
+          timerId = setTimeout(checkProposalStatus, 3000); // Only queue next poll if we didn't navigate away
         }
       }
     }
@@ -225,7 +234,7 @@ export default function PickupProposalScreen({ navigation, route }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId]);
+  }, [currentUserId, navigateToTracking]); // added navigateToTracking to dependencies
 
   // Handle transition logic
   const navigateToTracking = useCallback(() => {
@@ -253,15 +262,6 @@ export default function PickupProposalScreen({ navigation, route }) {
       }),
     }).catch(() => {});
   };
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2F4F4F" />
-        <Text style={styles.loadingText}>Preparing Pickup Spot...</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
