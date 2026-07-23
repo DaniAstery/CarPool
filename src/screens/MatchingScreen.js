@@ -19,27 +19,38 @@ export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);
   const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 150");
   const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105, longitude: 38.7935, latitudeDelta: 0.015, longitudeDelta: 0.015,
+    latitude: 9.0105, 
+    longitude: 38.7935, 
+    latitudeDelta: 0.015, 
+    longitudeDelta: 0.015,
   });
 
   const radarAnim = useRef(new Animated.Value(0)).current;
   
   // 🛡️ SAFE CONFIGURATION UNPACKING MATRIX
-  const routeId = route?.params?.routeId || null;
-  const hubId = route?.params?.hubId || null;
-  const userId = route?.params?.userId || "1"; 
+  const routeId = route?.params?.routeId || route?.params?.route_id || null;
+  const hubId = route?.params?.hubId || route?.params?.hub_id || null;
+  const userId = route?.params?.userId || route?.params?.user_id || "1"; 
   const currentUserId = parseInt(userId, 10) || 1;
   const ride = route?.params?.ride || { corridor: "Evaluating Corridor...", time: "Calculating..." };
 
-  // Track user hardware location
+  // 1. NON-BLOCKING GPS RESOLUTION WITH TIMEOUT FALLBACK
   useEffect(() => {
     let isMounted = true;
     (async () => {
       try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== "granted") return;
-        let location = await Location.getCurrentPositionAsync({});
-        if (isMounted) {
+
+        // Force maximum 2s wait for hardware location before falling back
+        const locationPromise = Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 2000));
+
+        const location = await Promise.race([locationPromise, timeoutPromise]);
+
+        if (location && isMounted) {
           setCurrentLocation({
             latitude: location.coords.latitude, 
             longitude: location.coords.longitude,
@@ -48,43 +59,51 @@ export default function MatchingScreen({ navigation, route }) {
           });
         }
       } catch (err) {
-        console.log("Error resolving map current hardware location:", err);
+        console.log("📍 Hardware location fallback applied:", err.message);
       }
     })();
     return () => { isMounted = false; };
   }, []);
 
-  // Radar structural loop trigger
+  // 2. RADAR PULSE ANIMATION
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.timing(radarAnim, {
-        toValue: 1, duration: 3000, easing: Easing.out(Easing.quad), useNativeDriver: true,
+        toValue: 1, 
+        duration: 3000, 
+        easing: Easing.out(Easing.quad), 
+        useNativeDriver: true,
       })
-    ).start();
+    );
+    loop.start();
+    return () => loop.stop();
   }, [radarAnim]);
 
-  // 🔄 Real-Time Matching Status Polling & Session Recovery Loop
+  // 3. NON-OVERLAPPING FAST POLLING LOOP
   useEffect(() => {
-    let pollingInterval;
     let isMounted = true;
+    let timerId;
 
     const checkMyPoolStatus = async () => {
+      if (!isMounted) return;
+
       try {
-        console.log(`📡 Polling status for User ID: ${currentUserId} on ${API_URL}/routes/status/${currentUserId}`);
-        const response = await fetch(`${API_URL}/routes/status/${currentUserId}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+        const response = await fetch(`${API_URL}/routes/status/${currentUserId}`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
-          const errorHtml = await response.text();
-          console.log("⚠️ Diagnostic Router Error Response:", errorHtml.slice(0, 100));
           return;
         }
 
         const data = await response.json();
         if (!isMounted) return;
 
-        console.log("📥 [Match Sync Received]:", JSON.stringify(data, null, 2));
-
-        // 🎯 1. Extract status parameters safely from the payload structure
+        // Extract status parameters safely from payload
         const currentPoolStatus = (data.status || data.pool?.status || data.match_pipeline?.status || "searching").toLowerCase().trim();
         const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
         const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
@@ -93,70 +112,71 @@ export default function MatchingScreen({ navigation, route }) {
         setMatchedCount(currentCount);
         setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
 
-        // 🎯 2. check if the ride has departed or started
+        // Check if ride has departed or started
         const rideStatus = (data.rideStatus || data.pool?.rideStatus || "").toLowerCase();
         if (["departed", "started", "inprogress", "in_trip"].includes(rideStatus)) {
-          console.log("🏁 Active ride departed. Fast-tracking to LiveTrackingScreen.");
-          if (pollingInterval) clearInterval(pollingInterval);
           navigation.replace("LiveTrackingScreen", {
-            routeId: routeId || data.routeId || data.pool?.route_id,
+            id: targetRideOfferId,
             rideOfferId: targetRideOfferId,
+            ride_offer_id: targetRideOfferId,
+            routeId: routeId || data.routeId || data.pool?.route_id,
+            route_id: routeId || data.routeId || data.pool?.route_id,
             ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}` },
-            userId: currentUserId
+            userId: currentUserId,
+            user_id: currentUserId,
           });
           return;
         }
 
-        // 🎯 3. IF A DRIVER HAS ACCEPTED (matched_ride_offer_id is not null) -> ROUTE TO PROPOSAL
+        // IF A DRIVER HAS ACCEPTED -> ROUTE TO PROPOSAL OR TRACKING
         if (targetRideOfferId !== null) {
-          console.log(`🚗 [Driver Assigned] Ride Offer Detected: ${targetRideOfferId}. Forwarding to Proposal.`);
-          if (pollingInterval) clearInterval(pollingInterval);
-
           const passengersList = data.passengers || data.pool?.passengers || [];
           const myRow = passengersList.find(p => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId);
           const alreadyArrived = currentPoolStatus === "arrived" || data.pool?.status === "arrived" || myRow?.status?.toLowerCase() === "arrived";
 
-          if (isMounted) {
-            if (alreadyArrived) {
-              console.log("🎯 User already at hub. Forwarding directly to LiveTracking.");
-              navigation.replace("LiveTrackingScreen", {
-                routeId: routeId || data.routeId || data.pool?.route_id,
-                rideOfferId: targetRideOfferId,
-                ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
-                userId: currentUserId,
-                initialUserArrived: true
-              });
-            } else {
-              console.log("🚶 Moving to PickupProposalScreen to meet driver.");
-              navigation.replace("PickupProposal", { 
-                routeId: routeId || data.routeId || data.pool?.route_id, 
-                rideOfferId: targetRideOfferId, 
-                ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
-                userId: currentUserId
-              });
-            }
+          // Shared Navigation Payload Matrix
+          const navigationPayload = {
+            id: targetRideOfferId,
+            rideOfferId: targetRideOfferId,
+            ride_offer_id: targetRideOfferId,
+            ride_id: targetRideOfferId,
+            routeId: routeId || data.routeId || data.pool?.route_id,
+            route_id: routeId || data.routeId || data.pool?.route_id,
+            userId: currentUserId,
+            user_id: currentUserId,
+            ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
+          };
+
+          if (alreadyArrived) {
+            navigation.replace("LiveTrackingScreen", {
+              ...navigationPayload,
+              initialUserArrived: true,
+            });
+          } else {
+            navigation.replace("PickupProposal", navigationPayload);
           }
           return;
         }
 
-        // 🎯 4. passenger-to-passenger matched state (2/2 threshold reached, waiting on driver)
+        // Core match threshold reached (2/2 threshold reached)
         if (currentPoolStatus === "matched" || currentCount >= 2) {
-          console.log("👥 Core match threshold reached! (2/2). Still waiting on a driver offer assignment.");
           setMatchedCount(2); 
         }
 
       } catch (err) {
-        console.log("Status lookup connection failure:", err);
+        // Suppress temporary network drops
+      } finally {
+        if (isMounted) {
+          timerId = setTimeout(checkMyPoolStatus, 2500);
+        }
       }
     };
 
-    // Initialize immediate call followed by systemic layout ticks
     checkMyPoolStatus();
-    pollingInterval = setInterval(checkMyPoolStatus, 2500);
 
     return () => {
       isMounted = false;
-      clearInterval(pollingInterval);
+      if (timerId) clearTimeout(timerId);
     };
   }, [routeId, hubId, userId, navigation]);
 
