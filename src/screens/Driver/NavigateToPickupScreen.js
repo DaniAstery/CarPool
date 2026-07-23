@@ -13,7 +13,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-const API_BASE_URL = "http://192.168.123.52:5000/api";
+const API_BASE_URL = "http://192.168.112.52:5000/api";
 
 const PICKUP_LOCATION = { latitude: 9.0115, longitude: 38.7945 };
 const { width } = Dimensions.get("window");
@@ -43,31 +43,42 @@ export default function NavigateToPickupScreen({ navigation, route }) {
 
   // 🚀 FAST-PATH IDENTITY RESOLUTION
   useEffect(() => {
-    async function resolveActiveOfferInstance() {
-      if (rideIdRef.current) {
-        setLoading(false);
-        return;
-      }
-      try {
-        console.log("🔍 [Discovery] No ID passed via navigation parameters. Pinging network allocations...");
-        const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
-        if (discoveryRes.ok) {
-          const discoveryData = await discoveryRes.json();
-          if (discoveryData.id) {
-            const resolvedId = parseInt(discoveryData.id, 10);
-            rideIdRef.current = resolvedId;
-            setActiveRideOfferId(resolvedId);
-            if (discoveryData.route_id) setResolvedRouteId(discoveryData.route_id);
+  let isSubscribed = true;
+
+  async function resolveActiveOfferInstance() {
+    try {
+      const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
+      
+      if (discoveryRes.ok && isSubscribed) {
+        const data = await discoveryRes.json();
+        
+        if (data?.id) {
+          const resolvedId = parseInt(data.id, 10);
+          rideIdRef.current = resolvedId;
+          setActiveRideOfferId(resolvedId);
+          if (data.route_id) setResolvedRouteId(data.route_id);
+
+          // 🎯 1. Restore persistent status ('arrived' -> shows Start Trip)
+          if (data.status) {
+            setCurrentRideStatus(data.status);
+          }
+
+          // 🎯 2. Restore joined passenger array
+          if (Array.isArray(data.passengers)) {
+            setPassengerList(data.passengers);
           }
         }
-      } catch (err) {
-        console.log("Discovery pipeline fallback failure:", err);
-      } finally {
-        setLoading(false);
       }
+    } catch (err) {
+      console.log("Error restoring active offer state:", err.message);
+    } finally {
+      if (isSubscribed) setLoading(false);
     }
-    resolveActiveOfferInstance();
-  }, []);
+  }
+
+  resolveActiveOfferInstance();
+  return () => { isSubscribed = false; };
+}, []);
 
   // 🔄 TELEMETRY STREAMING PIPELINE
   useEffect(() => {
