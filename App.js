@@ -1,11 +1,13 @@
 import React from "react";
-import { ActivityIndicator, View, Text } from "react-native";
-import { NavigationContainer } from "@react-navigation/native";
+import { ActivityIndicator, View } from "react-native";
+import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 // 🔐 IMPORT THE GLOBAL AUTH STATE SYSTEM
-// 🎯 FIXED: Set to your exact path in the src folder
 import { AuthProvider, useAuth } from "./src/AuthContext"; 
+
+// 🛰️ IMPORT THE ROLE-AWARE RIDE GATEWAY HOOK
+import { useRideGateway } from "./src/hooks/useRideGateway";
 
 // 🛠️ SCREENS IMPORT MATRIX
 import RegisterScreen from "./src/screens/RegistrationScreen";
@@ -22,17 +24,28 @@ import ProposalDriver from "./src/screens/Driver/ProposalDriver";
 import WaitingForAcceptanceScreen from "./src/screens/Driver/WaitingForAcceptanceScreen";
 import NavigateToPickupScreen from "./src/screens/Driver/NavigateToPickupScreen";
 import WaitingForPassengersScreen from "./src/screens/Driver/WaitingForPassengersScreen";
-import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen"; // 🎯 SINGLE DEFAULT EXPORT
+import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen"; 
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 
 const Stack = createNativeStackNavigator();
 
+// 📍 GLOBAL NAVIGATION REF (Allows NavigationGateway to trigger navigation)
+export const navigationRef = createNavigationContainerRef();
+
 // 🗺️ NAVIGATION GATEWAY ENGINE
 function NavigationGateway() {
   const { user, isLoading } = useAuth();
 
-  // 🌀 Show an overlay loading indicator while AsyncStorage reads matching keys from disk storage
+  // 🚀 ACTIVATE ROLE-AWARE RIDE GATEWAY
+  useRideGateway({
+    userId: user?.id,
+    userRole: user?.role, // "driver" vs "passenger"
+    navigationRef: navigationRef,
+    enabled: Boolean(user?.id),
+  });
+
+  // 🌀 Show loading indicator while reading storage
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fff" }}>
@@ -42,22 +55,21 @@ function NavigationGateway() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         
         {user === null ? (
-          // 🛑 1. UNAUTHENTICATED ROUTE CHANNEL (User needs to create an identity)
+          // 🛑 1. UNAUTHENTICATED ROUTE CHANNEL
           <Stack.Screen 
             name="Register" 
             component={RegisterScreen} 
           />
         ) : user.role === "driver" ? (
-          // 🚖 2. DRIVER SYSTEM HUB WORKSPACE (Boots straight to corridor map pipeline setup)
+          // 🚖 2. DRIVER SYSTEM HUB WORKSPACE
           <>
             <Stack.Screen name="CreateCorridorScreen" component={CreateCorridorScreen} />
             <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
             <Stack.Screen name="ProposalDriver" component={ProposalDriver} />
-            {/* 🎯 FIXED: Both rows now point safely to the single imported TripInProgressScreen component */}
             <Stack.Screen name="DriverDepartureScreen" component={TripInProgressScreen} />
             <Stack.Screen name="WaitingForAcceptance" component={WaitingForAcceptanceScreen} />
             <Stack.Screen name="NavigateToPickup" component={NavigateToPickupScreen} />
@@ -66,7 +78,7 @@ function NavigationGateway() {
             <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
           </>
         ) : (
-          // 🎒 3. PASSENGER/RIDER WORKSPACE (Boots instantly to match channels)
+          // 🎒 3. PASSENGER/RIDER WORKSPACE
           <>
             <Stack.Screen name="Passenger" component={PassengerScreen} />
             <Stack.Screen name="JoinedPool" component={PassengerJoinedPoolScreen} />

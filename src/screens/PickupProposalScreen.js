@@ -5,16 +5,13 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
-  Platform,
   Dimensions,
+  SafeAreaView,
 } from "react-native";
-import { View as RNView } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 
-// Adjust your local API base URL
 const API_URL = "http://192.168.112.52:5000";
 
 const DEFAULT_LOCATION = {
@@ -30,9 +27,9 @@ const MEETUP_LOCATION = {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW: Prevents map flicker & CPU drag on timer updates
+// MEMOIZED MAP VIEW: Isolated from state timer ticks to stop native lags
 // ------------------------------------------------------------------
-const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef, coRiders }) => {
+const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
   return (
     <MapView
       ref={mapRef}
@@ -43,14 +40,12 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef, coRiders })
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* Pickup Station Marker */}
       <Marker coordinate={meetupLocation} title="Pickup Point">
         <View style={styles.pickupMarker}>
           <MaterialCommunityIcons name="map-marker-radius" size={24} color="#FFF" />
         </View>
       </Marker>
 
-      {/* Polyline connect to pickup point */}
       {currentLocation && (
         <Polyline
           coordinates={[
@@ -72,53 +67,58 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef, coRiders })
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
   const [coRiders, setCoRiders] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
   
+  // ⚡ MAP MOUNT GUARD: Prevents rendering heavy native MapView until backend status check passes
+  const [initialCheckDone, setInitialCheckDone] = useState(false);
+
   const mapRef = useRef(null);
 
-  // 1. ROBUST PARAMETER EXTRACTION
-  const currentUserId = 
+  // 1. SAFE PARAMETER UNPACKING MATRIX
+  const currentUserId = parseInt(
     route?.params?.userId || 
     route?.params?.user_id || 
-    route?.params?.id 
-      ? parseInt(route?.params?.userId || route?.params?.user_id || route?.params?.id, 10) 
-      : 1;
+    route?.params?.id || "1",
+    10
+  );
 
-  const routeId = 
-    route?.params?.routeId || 
-    route?.params?.route_id || 
-    "1";
-
-  const initialRideOfferId = 
-    route?.params?.rideOfferId || 
-    route?.params?.ride_offer_id || 
-    route?.params?.ride_id || 
-    route?.params?.id || 
+  const routeId = route?.params?.routeId || route?.params?.route_id || "1";
+  const initialRideOfferId =
+    route?.params?.rideOfferId ||
+    route?.params?.ride_offer_id ||
+    route?.params?.ride_id ||
+    route?.params?.id ||
     null;
 
   const activeRideOfferIdRef = useRef(initialRideOfferId);
 
-  // 2. FAST NON-BLOCKING LOCATION INITIALIZATION
+  // Instant navigation transition function
+  const navigateToTracking = useCallback(() => {
+    navigation.replace("LiveTracking", {
+      id: activeRideOfferIdRef.current || 1,
+      rideOfferId: activeRideOfferIdRef.current || 1,
+      ride_offer_id: activeRideOfferIdRef.current || 1,
+      routeId,
+      route_id: routeId,
+      userId: currentUserId,
+      user_id: currentUserId,
+      initialUserArrived: true,
+    });
+  }, [navigation, routeId, currentUserId]);
+
+  // 2. SILENT NON-BLOCKING GPS RESOLUTION
   useEffect(() => {
     let isMounted = true;
-
-    async function initLocation() {
+    (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        
         if (status === "granted" && isMounted) {
-          // Promise race forces GPS to resolve within 2s or fallback immediately
           const locationPromise = Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
           });
-
-          const timeoutPromise = new Promise((resolve) =>
-            setTimeout(() => resolve(null), 2000)
-          );
-
+          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1500));
           const location = await Promise.race([locationPromise, timeoutPromise]);
 
           if (location && isMounted) {
@@ -129,7 +129,6 @@ export default function PickupProposalScreen({ navigation, route }) {
               longitudeDelta: 0.015,
             };
             setCurrentLocation(coords);
-
             mapRef.current?.fitToCoordinates([coords, MEETUP_LOCATION], {
               edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
               animated: true,
@@ -137,28 +136,20 @@ export default function PickupProposalScreen({ navigation, route }) {
           }
         }
       } catch (err) {
-        console.log("📍 Location fetch non-fatal skip:", err.message);
-      } finally {
-        // ALWAYS unblock rendering instantaneously
-        if (isMounted) setLoading(false);
+        console.log("📍 Location resolution non-fatal skip:", err.message);
       }
-    }
-
-    initLocation();
+    })();
     return () => { isMounted = false; };
   }, []);
 
-  // 3. COUNTDOWN TIMER (1 Second Interval)
+  // 3. COUNTDOWN TIMER
   useEffect(() => {
     if (timeLeft <= 0) return;
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => prev - 1);
-    }, 1000);
+    const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // 4. NON-OVERLAPPING ASYNC POLLING LOOP
-  // 4. NON-OVERLAPPING ASYNC POLLING LOOP
+  // 4. INSTANT STATUS POLLING & ARRIVED FAST-FORWARD LOGIC
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -167,63 +158,60 @@ export default function PickupProposalScreen({ navigation, route }) {
       if (!isSubscribed) return;
 
       try {
-        const cleanUserId = parseInt(currentUserId, 10);
-        if (!isNaN(cleanUserId)) {
+        if (!isNaN(currentUserId)) {
           const controller = new AbortController();
-          const abortTimeout = setTimeout(() => controller.abort(), 3500);
+          const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
-          const res = await fetch(`${API_URL}/api/rides/status/${cleanUserId}`, {
+          const res = await fetch(`${API_URL}/api/rides/status/${currentUserId}`, {
             signal: controller.signal,
           });
           clearTimeout(abortTimeout);
 
           if (res.ok && isSubscribed) {
             const data = await res.json();
-            
+
             if (data.ride_offer_id || data.id) {
               activeRideOfferIdRef.current = data.ride_offer_id || data.id;
             }
 
-            // --- NEW: INSTANT YEET LOGIC ---
-            // Find the current user in the passengers array
-            const myRow = data.passengers?.find(p => parseInt(p.userId || p.user_id || p.id, 10) === cleanUserId);
-            const myStatus = myRow?.status?.toLowerCase();
+            // Read passenger row matching user from route_pool / passengers array
+            const passengers = data.passengers || data.pool?.passengers || [];
+            const myRow = passengers.find(
+              (p) => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId
+            );
+            const myStatus = (myRow?.status || data.status || "").toLowerCase();
 
-            // If the DB already says they are arrived/in-trip, or the pool is fully ready, route instantly.
+            // 🚀 ARRIVED YEET LOGIC: Fast-path bypass before mounting MapView
             if (
-              myStatus === "arrived" || 
-              myStatus === "in_trip" || 
+              ["arrived", "in_trip", "departed", "completed"].includes(myStatus) ||
               (data.driver_status === "accepted" && data.pool_status === "ready")
             ) {
               navigateToTracking();
-              return; // Kill the loop, we are leaving the screen
-            }
-            // --------------------------------
-
-            if (data.driver_status) {
-              setDriverState(data.driver_status);
+              return; // Stop execution to prevent MapView initialization
             }
 
-            if (data.passengers && Array.isArray(data.passengers)) {
+            if (data.driver_status) setDriverState(data.driver_status);
+
+            if (Array.isArray(passengers)) {
               const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-              const parsedCoRiders = data.passengers
-                .filter((p) => parseInt(p.userId || p.user_id, 10) !== cleanUserId)
+              const parsedCoRiders = passengers
+                .filter((p) => parseInt(p.userId || p.user_id || p.id, 10) !== currentUserId)
                 .map((p, idx) => ({
-                  id: p.userId || p.user_id,
-                  name: `Rider ${p.userId || p.user_id}`,
+                  id: p.userId || p.user_id || p.id,
+                  name: `Rider ${p.userId || p.user_id || p.id}`,
                   status: (p.status || "Matched").toUpperCase(),
                   color: colorPalette[idx % colorPalette.length],
                 }));
-
               setCoRiders(parsedCoRiders);
             }
           }
         }
       } catch (err) {
-        // Silently capture timeout aborts
+        // Suppress temporary network packet drops
       } finally {
         if (isSubscribed) {
-          timerId = setTimeout(checkProposalStatus, 3000); // Only queue next poll if we didn't navigate away
+          setInitialCheckDone(true); // Allow native MapView to mount ONLY if user remains on this screen
+          timerId = setTimeout(checkProposalStatus, 3000);
         }
       }
     }
@@ -234,25 +222,10 @@ export default function PickupProposalScreen({ navigation, route }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId, navigateToTracking]); // added navigateToTracking to dependencies
-
-  // Handle transition logic
-  const navigateToTracking = useCallback(() => {
-    navigation.replace("LiveTracking", {
-      id: activeRideOfferIdRef.current || 1,
-      rideOfferId: activeRideOfferIdRef.current || 1,
-      ride_offer_id: activeRideOfferIdRef.current || 1,
-      ride_id: activeRideOfferIdRef.current || 1,
-      routeId,
-      route_id: routeId,
-      userId: currentUserId,
-      user_id: currentUserId,
-    });
-  }, [navigation, routeId, currentUserId]);
+  }, [currentUserId, navigateToTracking]);
 
   const handleAcceptProposal = () => {
     setUserAccepted(true);
-    // OPTIONAL: POST to server
     fetch(`${API_URL}/api/rides/accept`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -264,15 +237,20 @@ export default function PickupProposalScreen({ navigation, route }) {
   };
 
   return (
-    <View style={styles.container}>
-      {/* MAP LAYER */}
+    <SafeAreaView style={styles.container}>
+      {/* MAP LAYER: Deferred Mount */}
       <View style={styles.mapContainer}>
-        <MemoizedMap
-          currentLocation={currentLocation}
-          meetupLocation={MEETUP_LOCATION}
-          mapRef={mapRef}
-          coRiders={coRiders}
-        />
+        {initialCheckDone ? (
+          <MemoizedMap
+            currentLocation={currentLocation}
+            meetupLocation={MEETUP_LOCATION}
+            mapRef={mapRef}
+          />
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            <ActivityIndicator size="small" color="#2F4F4F" />
+          </View>
+        )}
       </View>
 
       {/* OVERLAY PANEL */}
@@ -337,35 +315,15 @@ export default function PickupProposalScreen({ navigation, route }) {
           </Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
-const { width } = Dimensions.get("window");
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F8F9FA",
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#FFF",
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 15,
-    color: "#666",
-    fontWeight: "500",
-  },
-  mapContainer: {
-    flex: 1,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  container: { flex: 1, backgroundColor: "#F8F9FA" },
+  mapContainer: { flex: 1 },
+  map: { ...StyleSheet.absoluteFillObject },
+  mapPlaceholder: { flex: 1, backgroundColor: "#EAEAEA", justifyContent: "center", alignItems: "center" },
   pickupMarker: {
     backgroundColor: "#2F4F4F",
     padding: 8,
@@ -400,21 +358,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  title: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#1A1A1A",
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#666",
-    marginTop: 4,
-    marginBottom: 16,
-  },
-  boldText: {
-    fontWeight: "700",
-    color: "#1A1A1A",
-  },
+  title: { fontSize: 20, fontWeight: "700", color: "#1A1A1A" },
+  subtitle: { fontSize: 14, color: "#666", marginTop: 4, marginBottom: 16 },
+  boldText: { fontWeight: "700", color: "#1A1A1A" },
   timerBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -423,15 +369,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
   },
-  timerText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#E28743",
-    marginLeft: 4,
-  },
-  rosterContainer: {
-    marginVertical: 10,
-  },
+  timerText: { fontSize: 13, fontWeight: "700", color: "#E28743", marginLeft: 4 },
+  rosterContainer: { marginVertical: 10 },
   sectionHeader: {
     fontSize: 12,
     fontWeight: "600",
@@ -440,11 +379,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 8,
   },
-  riderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 10,
-  },
+  riderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   avatar: {
     width: 32,
     height: 32,
@@ -452,18 +387,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  avatarText: {
-    color: "#FFF",
-    fontSize: 11,
-    fontWeight: "700",
-  },
-  riderName: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 15,
-    fontWeight: "500",
-    color: "#333",
-  },
+  avatarText: { color: "#FFF", fontSize: 11, fontWeight: "700" },
+  riderName: { flex: 1, marginLeft: 10, fontSize: 15, fontWeight: "500", color: "#333" },
   statusTag: {
     fontSize: 11,
     fontWeight: "700",
@@ -472,14 +397,8 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     overflow: "hidden",
   },
-  statusAccepted: {
-    backgroundColor: "#E8F5E9",
-    color: "#2E7D32",
-  },
-  statusPending: {
-    backgroundColor: "#FFF8E1",
-    color: "#F57F17",
-  },
+  statusAccepted: { backgroundColor: "#E8F5E9", color: "#2E7D32" },
+  statusPending: { backgroundColor: "#FFF8E1", color: "#F57F17" },
   driverCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -488,11 +407,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginVertical: 12,
   },
-  driverText: {
-    marginLeft: 10,
-    fontSize: 14,
-    color: "#444",
-  },
+  driverText: { marginLeft: 10, fontSize: 14, color: "#444" },
   actionButton: {
     backgroundColor: "#2F4F4F",
     paddingVertical: 14,
@@ -500,12 +415,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 8,
   },
-  actionButtonDisabled: {
-    backgroundColor: "#A0B2B2",
-  },
-  actionButtonText: {
-    color: "#FFF",
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  actionButtonDisabled: { backgroundColor: "#A0B2B2" },
+  actionButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
 });
