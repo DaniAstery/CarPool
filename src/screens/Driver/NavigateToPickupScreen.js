@@ -1,386 +1,723 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
   Dimensions,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
-import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import * as Location from "expo-location";
+import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
+import { useAuth } from "../../AuthContext";
 
-const API_BASE_URL = "http://192.168.112.52:5000/api";
-
-const PICKUP_LOCATION = { latitude: 9.0115, longitude: 38.7945 };
 const { width } = Dimensions.get("window");
 
-export default function NavigateToPickupScreen({ navigation, route }) {
-  const mapRef = useRef(null);
+// 🌐 NETWORK HOST CONFIGURATION
+const API_URL = "http://192.168.112.52:5000/api";
 
-  const [activeRideOfferId, setActiveRideOfferId] = useState(() => {
-    const passedId = route?.params?.rideId || route?.params?.ride_offer_id || null;
-    return passedId ? parseInt(passedId, 10) : null;
+export default function ProposalDriver({ navigation, route }) {
+  // 🔐 1. AUTH & SYSTEM PARAMETERS
+  const { user } = useAuth();
+  const currentDriverId =
+    user?.id ||
+    user?.driver_id ||
+    (route?.params?.driverId ? parseInt(route?.params?.driverId, 10) : 10);
+  const routeId = route?.params?.routeId || "1";
+  const activeRideOfferIdRef = useRef(null);
+
+  // 📍 2. STATE MATRIX
+  const [currentLocation, setCurrentLocation] = useState({
+    latitude: 9.0105,
+    longitude: 38.7935,
+    latitudeDelta: 0.008,
+    longitudeDelta: 0.008,
   });
-  
-  const [resolvedRouteId, setResolvedRouteId] = useState(
-    route?.params?.routeId || route?.params?.route_id || "1"
-  );
 
+  const [driverAccepted, setDriverAccepted] = useState(false);
+  const [offerDetails, setOfferDetails] = useState(null);
+  const [poolPassengers, setPoolPassengers] = useState([]);
+  const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [passengerStates, setPassengerStates] = useState([]);
-  const [rideMetrics, setRideMetrics] = useState(null);
-  const [currentRideStatus, setCurrentRideStatus] = useState("accepted");
-  
-  const [driverLocation, setDriverLocation] = useState({ latitude: 9.0045, longitude: 38.7865 });
+  const [timeLeft, setTimeLeft] = useState(45);
+  const [networkError, setNetworkError] = useState(null);
 
-  // Thread safety lock reference
-  const rideIdRef = useRef(activeRideOfferId);
+  // 💸 COMPUTED PRICING & SEAT COUNTS
+  const pricePerSeat = offerDetails?.price_per_seat
+    ? parseFloat(offerDetails.price_per_seat)
+    : 80.0;
+  const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
+  const totalSeats = offerDetails?.total_seats
+    ? parseInt(offerDetails.total_seats, 10)
+    : 4;
+  const availableSeats = Math.max(0, totalSeats - strictlyAcceptedCount);
 
-  // Helper to normalize and map passenger records cleanly
-  const mapPassengerRecords = (passengersArray) => {
-    if (!Array.isArray(passengersArray)) return [];
+  // 🔐 VALIDATION & UNLOCK THRESHOLDS
+  // STRICT: Requires at least 2 passengers with 'accepted' status
+  const hasMinimumRequiredPassengers = strictlyAcceptedCount >= 2;
+  const isDriverButtonUnlocked = hasMinimumRequiredPassengers;
+  const isOfferLockedIn =
+    driverAccepted ||
+    offerDetails?.status === "accepted" ||
+    offerDetails?.status === "inprogress";
 
-    return passengersArray.map((p, index) => {
-      const rawId = p.userId || p.user_id || p.id;
-      const uniqueId = rawId ? parseInt(rawId, 10) : (index + 1);
-      const rawName = p.full_name || p.name || `Rider ${uniqueId}`;
-      const rawStatus = p.status ? p.status.toString().toLowerCase().trim() : "accepted";
-
-      return {
-        id: uniqueId,
-        name: rawName,
-        latitude: PICKUP_LOCATION.latitude + (index * 0.0004 - 0.0002),
-        longitude: PICKUP_LOCATION.longitude + (index * 0.0004 - 0.0002),
-        status: rawStatus === "arrived" 
-          ? "Arrived" 
-          : (rawStatus === "intransit" || rawStatus === "in_trip") 
-          ? "In Transit" 
-          : "Accepted"
-      };
-    });
-  };
-
-  // 🚀 1. FAST-PATH IDENTITY RESOLUTION (RESTORE ON REFRESH)
+  // 📡 3. GPS INITIALIZATION
   useEffect(() => {
-    let isSubscribed = true;
-
-    async function resolveActiveOfferInstance() {
+    (async () => {
       try {
-        const discoveryRes = await fetch(`${API_BASE_URL}/rides/active-accepted-offer`);
-        
-        if (discoveryRes.ok && isSubscribed) {
-          const data = await discoveryRes.json();
-          
-          if (data?.id) {
-            const resolvedId = parseInt(data.id, 10);
-            rideIdRef.current = resolvedId;
-            setActiveRideOfferId(resolvedId);
-            if (data.route_id) setResolvedRouteId(data.route_id);
-
-            // 🎯 Restore persistent status ('arrived' -> shows Start Trip)
-            if (data.status) {
-              setCurrentRideStatus(data.status.toLowerCase().trim());
-            }
-
-            // 🎯 FIXED: Corrected setPassengerList to setPassengerStates
-            if (Array.isArray(data.passengers)) {
-              setPassengerStates(mapPassengerRecords(data.passengers));
-            }
-          }
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          let location = await Location.getCurrentPositionAsync({});
+          setCurrentLocation({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.008,
+            longitudeDelta: 0.008,
+          });
         }
       } catch (err) {
-        console.log("Error restoring active offer state:", err.message);
+        console.log("GPS Location initialization failed:", err);
       } finally {
-        if (isSubscribed) setLoading(false);
+        setLoading(false);
       }
-    }
-
-    resolveActiveOfferInstance();
-    return () => { isSubscribed = false; };
+    })();
   }, []);
 
-  // 🔄 2. TELEMETRY STREAMING PIPELINE
+  // 🕒 4. DISPATCH TIMER CONTROLLER
   useEffect(() => {
-    let isMounted = true;
-    let manifestPollInterval;
+    if (!hasMinimumRequiredPassengers || isOfferLockedIn) return;
 
-    async function pollLiveManifestData() {
-      const currentId = rideIdRef.current;
-      if (!currentId) return;
-
-      try {
-        const res = await fetch(`${API_BASE_URL}/rides/track-live/offer/${currentId}`);
-        if (!res.ok) return;
-
-        const data = await res.json();
-        if (!data || !isMounted) return;
-
-        setRideMetrics(data);
-        
-        if (data.rideStatus) {
-          setCurrentRideStatus(data.rideStatus.toLowerCase().trim());
-        }
-
-        if (data.driverLocation) {
-          setDriverLocation({
-            latitude: parseFloat(data.driverLocation.latitude),
-            longitude: parseFloat(data.driverLocation.longitude)
-          });
-        }
-
-        if (data.passengers && Array.isArray(data.passengers)) {
-          // Keep active passengers matching valid trip statuses
-          const acceptedPassengers = data.passengers.filter(p => {
-            const status = p.status ? p.status.toString().toLowerCase().trim() : "";
-            return status === "accepted" || status === "arrived" || status === "in_trip" || status === "intransit" || status === "matched";
-          });
-
-          setPassengerStates(mapPassengerRecords(acceptedPassengers));
-        }
-      } catch (err) {
-        console.log("Telemetry database synchronization handling error:", err);
-      }
-    }
-
-    pollLiveManifestData();
-    manifestPollInterval = setInterval(pollLiveManifestData, 2200);
-
-    return () => {
-      isMounted = false;
-      clearInterval(manifestPollInterval);
-    };
-  }, []);
-
-  // ⚡ 3. WORKFLOW ACTION HANDLER
-  const handleWorkflowAction = async () => {
-    const targetRideId = rideIdRef.current || activeRideOfferId;
-
-    if (!targetRideId) {
-      Alert.alert("Allocation Error", "Corridor routing identification payload mapping is incomplete.");
+    if (timeLeft <= 0 && !driverAccepted) {
+      Alert.alert(
+        "Offer Expired",
+        "The dispatch acceptance window for this cluster has run out.",
+        [
+          {
+            text: "Return to Queue",
+            onPress: () => {
+              navigation.reset({
+                index: 0,
+                routes: [
+                  {
+                    name: "DriverDashboardScreen",
+                    params: { driverId: currentDriverId },
+                  },
+                ],
+              });
+            },
+          },
+        ]
+      );
       return;
     }
 
-    setSubmitting(true);
-    try {
-      if (currentRideStatus === "arrived") {
-        console.log(`📡 Transferring state to transit engine matrix for Offer ID: [${targetRideId}]`);
-        const response = await fetch(`${API_BASE_URL}/rides/start-trip`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ride_offer_id: targetRideId, rideOfferId: targetRideId }),
+    const timer = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [
+    timeLeft,
+    hasMinimumRequiredPassengers,
+    driverAccepted,
+    isOfferLockedIn,
+    currentDriverId,
+  ]);
+
+  // 🔄 5. DEDICATED CLUSTER POLLING PIPELINE
+  useEffect(() => {
+    if (!currentDriverId) return;
+
+    async function syncClusterProposalState() {
+      try {
+        // 🎯 Calls the dedicated cluster offer endpoint
+        const url = `${API_URL}/rides/driver-cluster-offer/${currentDriverId}`;
+        const res = await fetch(url);
+
+        if (!res.ok) {
+          console.warn(`⚠️ [Cluster Sync] Non-OK response: ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+        setNetworkError(null);
+
+        if (!data || !data.hasActiveProposal) {
+          return;
+        }
+
+        setOfferDetails(data);
+        activeRideOfferIdRef.current = data.ride_offer_id || data.id;
+
+        // Extract accepted passenger IDs
+        const cleanAcceptedIds = data.accepted_passengers || [];
+
+        // Parse passenger manifest list
+        const rawPassengers = data.passengers || [];
+
+        const unifiedRoster = rawPassengers.map((rider) => {
+          const userId = parseInt(rider.user_id || rider.id, 10);
+          const isAccepted = cleanAcceptedIds.includes(userId);
+
+          return {
+            user_id: userId,
+            status: isAccepted ? "accepted" : rider.status || "matched",
+            name: rider.name || `Passenger ${userId}`,
+            phone_number: rider.phone_number,
+          };
         });
 
-        const result = await response.json();
+        const acceptedCount = unifiedRoster.filter(
+          (p) => p.status === "accepted"
+        ).length;
 
-        if (response.ok) {
-          console.log("🚀 Trip successfully activated in DB! Shifting view parameters.");
-          navigation.replace("TripInProgress", { 
-            routeId: resolvedRouteId, 
-            rideOfferId: targetRideId
+        setStrictlyAcceptedCount(acceptedCount);
+        setPoolPassengers(unifiedRoster);
+
+        // Auto-navigate to Pickup if offer moves to active state
+        const currentOfferStatus = data.status
+          ? data.status.toString().trim().toLowerCase()
+          : "";
+
+        if (
+          ["accepted", "inprogress", "arrived"].includes(currentOfferStatus)
+        ) {
+          setDriverAccepted(true);
+          const payloadId = parseInt(data.ride_offer_id || data.id, 10);
+          navigation.replace("NavigateToPickup", {
+            routeId: data.route_id || routeId,
+            route_id: data.route_id || routeId,
+            rideOfferId: payloadId,
+            ride_offer_id: payloadId,
+            rideId: payloadId,
+            driverId: currentDriverId,
           });
-        } else {
-          Alert.alert("Trip Initiation Aborted", result.error || "Check backend engine rules.");
         }
-        return;
+      } catch (err) {
+        console.error("❌ [Cluster Sync] Connection Error:", err.message);
+        setNetworkError(`Cannot connect to host: ${API_URL}`);
       }
+    }
 
-      console.log(`📍 Locking terminal hub station arrival logs for Offer ID: [${targetRideId}]`);
-      const response = await fetch(`${API_BASE_URL}/rides/arrive`, {
+    syncClusterProposalState();
+    const pollInterval = setInterval(syncClusterProposalState, 3000);
+    return () => clearInterval(pollInterval);
+  }, [currentDriverId, routeId, navigation]);
+
+  // 🎯 6. ACTION HANDLERS
+  const handleDriverAccept = async () => {
+    if (!isDriverButtonUnlocked || isOfferLockedIn || timeLeft <= 0) return;
+
+    setDriverAccepted(true);
+
+    try {
+      const res = await fetch(`${API_URL}/rides/driver-accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: targetRideId, rideOfferId: targetRideId }),
+        body: JSON.stringify({
+          ride_offer_id: activeRideOfferIdRef.current || 1,
+          driver_id: currentDriverId,
+        }),
       });
 
-      const result = await response.json();
+      const responseData = await res.json();
 
-      if (response.ok) {
-        setCurrentRideStatus("arrived");
-        console.log("✅ Arrival verified and synchronized across regional matching relays.");
+      if (res.ok && responseData.success) {
+        const finalId = parseInt(
+          responseData.rideOfferId || activeRideOfferIdRef.current || 1,
+          10
+        );
+
+        navigation.replace("NavigateToPickup", {
+          routeId: routeId,
+          route_id: routeId,
+          rideOfferId: finalId,
+          ride_offer_id: finalId,
+          rideId: finalId,
+          driverId: currentDriverId,
+        });
       } else {
-        Alert.alert("Arrival Failure", result.error || "Driver status update rejected.");
+        setDriverAccepted(false);
+        Alert.alert(
+          "Dispatch Rejection",
+          responseData.error || "Manifest cluster state lock failed."
+        );
       }
     } catch (err) {
-      Alert.alert("Connection Failed", "Could not submit context data points to endpoint service maps.");
-    } finally {
-      setSubmitting(false);
+      setDriverAccepted(false);
+      console.log("Accept execution error:", err);
+      Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
     }
   };
 
-  if (loading && !activeRideOfferId) {
+  const handleDriverDecline = async () => {
+    Alert.alert(
+      "Decline Dispatch Manifest?",
+      "Rejecting this cluster removes you from the immediate station queue line logs.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Decline Run",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await fetch(`${API_URL}/rides/driver-decline`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  driver_id: currentDriverId,
+                  ride_offer_id: activeRideOfferIdRef.current || 1,
+                }),
+              });
+            } catch (err) {
+              console.log("Decline error:", err);
+            }
+            navigation.reset({
+              index: 0,
+              routes: [
+                {
+                  name: "DriverDashboardScreen",
+                  params: { driverId: currentDriverId },
+                },
+              ],
+            });
+          },
+        },
+      ]
+    );
+  };
+
+  // Helper for status badge rendering
+  const renderStatusBadge = (status) => {
+    const normStatus = (status || "matched").toLowerCase();
+
+    if (normStatus === "accepted" || normStatus === "confirmed") {
+      return (
+        <View style={[styles.badge, styles.badgeAccepted]}>
+          <Text style={[styles.badgeText, styles.textAccepted]}>Accepted</Text>
+        </View>
+      );
+    }
+    if (normStatus === "arrived") {
+      return (
+        <View style={[styles.badge, styles.badgeArrived]}>
+          <Text style={[styles.badgeText, styles.textArrived]}>Arrived</Text>
+        </View>
+      );
+    }
+    if (normStatus === "searching") {
+      return (
+        <View style={[styles.badge, styles.badgeSearching]}>
+          <Text style={[styles.badgeText, styles.textSearching]}>Searching</Text>
+        </View>
+      );
+    }
     return (
-      <View style={styles.centeredLoadingScreen}>
-        <ActivityIndicator size="large" color="#059669" />
-        <Text style={styles.loadingText}>Locating Active Corridor Offer...</Text>
+      <View style={[styles.badge, styles.badgeMatched]}>
+        <Text style={[styles.badgeText, styles.textMatched]}>Matched</Text>
       </View>
     );
-  }
-
-  const activeCount = passengerStates.length;
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <View style={styles.headerBlock}>
-        <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={22} color="#111827" />
+      {/* HEADER */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation?.goBack()}>
+          <Text style={styles.backButton}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitleText}>Navigate To Pickup</Text>
-        <View style={styles.statusBadgeHUD}>
-          <Text style={styles.statusBadgeHUDText}>ID: #{activeRideOfferId || "..."}</Text>
-        </View>
+        <Text style={styles.headerTitle}>Corridor Run Offer</Text>
+        <View style={{ width: 24 }} />
       </View>
 
+      {/* ERROR BANNER */}
+      {networkError && (
+        <View style={styles.errorBanner}>
+          <MaterialCommunityIcons name="wifi-off" size={16} color="#FFFFFF" />
+          <Text style={styles.errorBannerText}>{networkError}</Text>
+        </View>
+      )}
+
+      {/* MAP AREA */}
       <View style={styles.mapContainer}>
         <MapView
-          ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            ...PICKUP_LOCATION,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          }}
-          customMapStyle={minimalMapStyle}
+          region={currentLocation}
+          showsUserLocation={true}
+          customMapStyle={cleanMinimalMapStyle}
         >
-          <Marker coordinate={PICKUP_LOCATION} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.hubStationWrapper}>
-              <View style={styles.hubStationPin}>
-                <Ionicons name="flag" size={12} color="#FFFFFF" />
+          <Marker
+            coordinate={{
+              latitude: currentLocation.latitude + 0.0004,
+              longitude: currentLocation.longitude + 0.0004,
+            }}
+          >
+            <View style={styles.hubMarkerContainer}>
+              <View style={styles.hubMarkerPin}>
+                <Ionicons name="car" size={18} color="#FFFFFF" />
               </View>
-              <View style={styles.hubStationPulseRing} />
+              <View style={styles.hubMarkerPulse} />
             </View>
           </Marker>
-
-          <Marker coordinate={driverLocation}>
-            <View style={styles.driverCarPin}>
-              <FontAwesome5 name="car-side" size={11} color="#FFFFFF" />
-            </View>
-          </Marker>
-
-          <Polyline coordinates={[driverLocation, PICKUP_LOCATION]} strokeColor="#EF4444" strokeWidth={4} />
-
-          {passengerStates.map((passenger) => (
-            <Marker key={`marker-node-rider-${passenger.id}`} coordinate={{ latitude: passenger.latitude, longitude: passenger.longitude }}>
-              <View style={[styles.passengerTrackingPin, passenger.status === "Arrived" ? { backgroundColor: "#10B981" } : passenger.status === "In Transit" ? { backgroundColor: "#3B82F6" } : { backgroundColor: "#D97706" }]}>
-                <Text style={styles.markerText}>{passenger.id}</Text>
-              </View>
-            </Marker>
-          ))}
         </MapView>
       </View>
 
-      <View style={styles.slidingPanelDrawer}>
+      {/* PROPOSAL CARD */}
+      <View style={styles.proposalCard}>
         <ScrollView showsVerticalScrollIndicator={false}>
-          <View style={[styles.statusBanner, currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }]}>
-            <FontAwesome5 name="route" size={13} color="#FFFFFF" style={{ marginRight: 10 }} />
-            <View style={styles.bannerTextFrame}>
-              <Text style={styles.bannerMainText}>
-                {currentRideStatus === "arrived" ? "Arrival Confirmed" : `Proceeding with ${activeCount} Passengers`}
+          {/* PAYOUT BREAKDOWN */}
+          <View style={styles.priceTierCard}>
+            <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
+            <View style={styles.priceRow}>
+              <Text style={styles.mainPriceText}>
+                {`ETB ${currentDriverPayout}.00`}
               </Text>
-              <Text style={styles.bannerSubText}>
-                {currentRideStatus === "arrived" ? "All riders identified. Initialize transit matrix below." : "Awaiting gathering alignment at terminal hub node"}
+              <View style={styles.tierBadge}>
+                <Text style={styles.tierBadgeText}>{`${availableSeats} Seats Available`}</Text>
+              </View>
+            </View>
+            <View style={styles.priceBreakdownBox}>
+              <Text style={styles.breakdownText}>
+                • Base Rate:{" "}
+                <Text style={{ fontWeight: "700", color: "#10B981" }}>
+                  {`ETB ${pricePerSeat}`}
+                </Text>{" "}
+                per accepted seat ({strictlyAcceptedCount} accepted).
               </Text>
             </View>
           </View>
 
-          <Text style={styles.sectionHeadingLabel}>Co-Rider Acceptance Matrix</Text>
-          <View style={styles.manifestContainer}>
-            {passengerStates.length === 0 ? (
-              <View style={{ paddingVertical: 20, alignItems: "center" }}>
-                <Text style={{ color: "#6B7280", fontSize: 13 }}>No confirmed passengers in this run.</Text>
+          {/* COUNTDOWN TIMER BANNER */}
+          <View
+            style={[
+              styles.timerBanner,
+              !hasMinimumRequiredPassengers
+                ? styles.timerWaiting
+                : timeLeft < 15
+                ? styles.timerUrgent
+                : null,
+            ]}
+          >
+            <MaterialCommunityIcons
+              name={
+                hasMinimumRequiredPassengers
+                  ? "clock-fast"
+                  : "account-clock-outline"
+              }
+              size={18}
+              color={
+                !hasMinimumRequiredPassengers
+                  ? "#6B7280"
+                  : timeLeft < 15
+                  ? "#EF4444"
+                  : "#10B981"
+              }
+            />
+            <Text
+              style={[
+                styles.timerText,
+                !hasMinimumRequiredPassengers
+                  ? { color: "#6B7280" }
+                  : timeLeft < 15
+                  ? { color: "#EF4444" }
+                  : { color: "#10B981" },
+              ]}
+            >
+              {!hasMinimumRequiredPassengers
+                ? `Awaiting Passenger Thresholds (Need 2, got ${strictlyAcceptedCount})...`
+                : driverAccepted
+                ? "Locking Run..."
+                : `Remaining Window to Accept: ${timeLeft}s`}
+            </Text>
+          </View>
+
+          {/* LOCATION DETAILS */}
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.locationPinCircle}>
+              <Ionicons name="git-commit-sharp" size={20} color="#10B981" />
+            </View>
+            <View style={styles.locationTextWrapper}>
+              <Text style={styles.locationTitle}>
+                {offerDetails?.start_location || "Megenagna Departure Hub"}
+              </Text>
+              <Text style={styles.locationSubtitle}>{`Destination: ${
+                offerDetails?.end_location || "Piassa"
+              }`}</Text>
+            </View>
+          </View>
+
+          {/* ROSTER MANIFEST TABLE */}
+          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length} Clustered)`}</Text>
+          <View style={styles.statusTable}>
+            {poolPassengers.length === 0 ? (
+              <View style={{ paddingVertical: 12, alignItems: "center" }}>
+                <Text style={{ color: "#6B7280", fontSize: 13 }}>
+                  No passengers assigned to this run yet.
+                </Text>
               </View>
             ) : (
-              passengerStates.map((passenger) => (
-                <View key={`list-row-rider-${passenger.id}`} style={styles.passengerRow}>
-                  <View style={styles.passengerIdentity}>
-                    <View style={styles.avatarCircle}>
-                      <Ionicons name="person" size={13} color="#4B5563" />
+              poolPassengers.map((passenger) => {
+                const pId = parseInt(passenger.user_id || passenger.id, 10);
+                const isAccepted = passenger.status === "accepted";
+
+                return (
+                  <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
+                    <View style={styles.tableUserLabelGroup}>
+                      <Ionicons
+                        name="person-outline"
+                        size={14}
+                        color={isAccepted ? "#10B981" : "#0284C7"}
+                      />
+                      <Text style={styles.tableUserText}>
+                        {passenger.name || `Passenger ${pId}`}
+                      </Text>
                     </View>
-                    <Text style={styles.passengerName}>{passenger.name}</Text>
+
+                    {renderStatusBadge(passenger.status)}
                   </View>
-                  <View style={passenger.status === "Arrived" ? styles.statusArrivedBadge : passenger.status === "In Transit" ? styles.statusTransitBadge : styles.statusAcceptedBadge}>
-                    <Text style={passenger.status === "Arrived" ? styles.statusArrivedText : passenger.status === "In Transit" ? styles.statusTransitText : styles.statusAcceptedText}>
-                      {passenger.status.toUpperCase()}
-                    </Text>
-                  </View>
-                </View>
-              ))
+                );
+              })
             )}
           </View>
-        </ScrollView>
-      </View>
 
-      <View style={styles.footerContainer}>
-        <TouchableOpacity 
-          style={[
-            styles.actionButton, 
-            submitting && { opacity: 0.6 }, 
-            currentRideStatus === "arrived" && { backgroundColor: "#3B82F6" }
-          ]}
-          activeOpacity={0.85}
-          disabled={submitting}
-          onPress={handleWorkflowAction}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <>
-              <Ionicons 
-                name={currentRideStatus === "arrived" ? "play-sharp" : "location-sharp"} 
-                size={18} 
-                color="#FFFFFF" 
-                style={{ marginRight: 8 }} 
-              />
-              <Text style={styles.actionButtonText}>
-                {currentRideStatus === "arrived" ? "START CORRIDOR TRIP" : "ARRIVED AT PICKUP POINT"}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
+          {/* ACTION BUTTON GROUP */}
+          <View style={styles.actionButtonContainer}>
+            <View style={styles.buttonButtonGroup}>
+              <TouchableOpacity
+                style={styles.declineButton}
+                onPress={handleDriverDecline}
+                activeOpacity={0.7}
+                disabled={isOfferLockedIn}
+              >
+                <Text style={styles.declineButtonText}>DECLINE</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.acceptButton,
+                  !isDriverButtonUnlocked ||
+                  (hasMinimumRequiredPassengers && timeLeft <= 0)
+                    ? { backgroundColor: "#9CA3AF" }
+                    : driverAccepted
+                    ? { backgroundColor: "#059669" }
+                    : { backgroundColor: "#10B981" },
+                ]}
+                onPress={handleDriverAccept}
+                activeOpacity={0.8}
+                disabled={
+                  !isDriverButtonUnlocked ||
+                  (hasMinimumRequiredPassengers && timeLeft <= 0) ||
+                  driverAccepted
+                }
+              >
+                <Text style={styles.acceptButtonText}>
+                  {driverAccepted
+                    ? "LOCKING MANIFEST..."
+                    : hasMinimumRequiredPassengers && timeLeft <= 0
+                    ? "DISPATCH WINDOW ELAPSED"
+                    : !isDriverButtonUnlocked
+                    ? `AWAITING ACCEPTED (${strictlyAcceptedCount}/2)`
+                    : `Accept [${currentDriverPayout} ETB]`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
       </View>
     </SafeAreaView>
   );
 }
 
-const minimalMapStyle = [{ elementType: "geometry", stylers: [{ color: "#F5F5F5" }] }, { featureType: "poi", stylers: [{ visibility: "off" }] }];
+const cleanMinimalMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { featureType: "poi", stylers: [{ visibility: "off" }] },
+];
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F9FAFB" },
-  centeredLoadingScreen: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#F9FAFB" },
-  loadingText: { marginTop: 12, fontSize: 13, color: "#4B5563", fontWeight: "600" },
-  headerBlock: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderBottomWidth: 1, borderColor: "#E5E7EB", zIndex: 10 },
-  headerTitleText: { fontSize: 16, fontWeight: "700", color: "#111827" },
-  statusBadgeHUD: { backgroundColor: "#F3F4F6", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  statusBadgeHUDText: { color: "#4B5563", fontSize: 11, fontWeight: "700" },
-  mapContainer: { flex: 1, minHeight: 240 },
-  hubStationWrapper: { justifyContent: "center", alignItems: "center" },
-  hubStationPin: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", zIndex: 5 },
-  hubStationPulseRing: { position: "absolute", width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(16, 185, 129, 0.2)" },
-  driverCarPin: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
-  passengerTrackingPin: { width: 20, height: 20, borderRadius: 10, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#FFFFFF" },
-  markerText: { color: "#FFFFFF", fontSize: 9, fontWeight: "800" },
-  slidingPanelDrawer: { flex: 1, backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 16, borderWidth: 1, borderColor: "#E5E7EB", marginTop: -10 },
-  statusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#059669", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16 },
-  bannerTextFrame: { flex: 1 },
-  bannerMainText: { fontSize: 14, fontWeight: "700", color: "#FFFFFF" },
-  bannerSubText: { fontSize: 11, color: "rgba(255,255,255,0.85)" },
-  sectionHeadingLabel: { fontSize: 11, fontWeight: "700", color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, marginLeft: 2 },
-  manifestContainer: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, paddingHorizontal: 14, marginBottom: 16 },
-  passengerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, borderColor: "#F3F4F6" },
-  passengerIdentity: { flexDirection: "row", alignItems: "center" },
-  avatarCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center", marginRight: 10 },
-  passengerName: { fontSize: 13, color: "#374151", fontWeight: "600" },
-  statusArrivedBadge: { backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  statusArrivedText: { color: "#10B981", fontSize: 10, fontWeight: "700" },
-  statusTransitBadge: { backgroundColor: "#EFF6FF", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  statusTransitText: { color: "#3B82F6", fontSize: 10, fontWeight: "700" },
-  statusAcceptedBadge: { backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  statusAcceptedText: { color: "#D97706", fontSize: 10, fontWeight: "700" },
-  footerContainer: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FFFFFF", borderTopWidth: 1, borderColor: "#E5E7EB" },
-  actionButton: { backgroundColor: "#059669", borderRadius: 10, paddingVertical: 13, flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700", letterSpacing: 0.3 },
+  container: { flex: 1, backgroundColor: "#F5F5F5" },
+  header: {
+    height: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    backgroundColor: "#FFFFFF",
+  },
+  backButton: { fontSize: 24, fontWeight: "600", color: "#111111" },
+  headerTitle: { fontSize: 16, fontWeight: "700", color: "#111111" },
+  errorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#EF4444",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  errorBannerText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "600",
+    marginLeft: 6,
+    textAlign: "center",
+  },
+  mapContainer: { flex: 1 },
+  hubMarkerContainer: { alignItems: "center", justifyContent: "center" },
+  hubMarkerPin: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#10B981",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+  },
+  hubMarkerPulse: {
+    position: "absolute",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(16, 185, 129, 0.2)",
+  },
+  proposalCard: {
+    position: "absolute",
+    bottom: 0,
+    width: width,
+    maxHeight: "75%",
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    elevation: 10,
+  },
+  priceTierCard: {
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  priceTierHeading: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#6B7280",
+    letterSpacing: 0.5,
+  },
+  priceRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  mainPriceText: { fontSize: 22, fontWeight: "800", color: "#111111" },
+  tierBadge: {
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  tierBadgeText: { fontSize: 11, color: "#065F46", fontWeight: "700" },
+  priceBreakdownBox: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+    paddingTop: 8,
+  },
+  breakdownText: { fontSize: 12, color: "#4B5563", marginVertical: 2 },
+  timerBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#E6F4EA",
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  timerWaiting: {
+    backgroundColor: "#F3F4F6",
+    borderWidth: 0.5,
+    borderColor: "#D1D5DB",
+  },
+  timerUrgent: { backgroundColor: "#FEE2E2" },
+  timerText: {
+    fontSize: 13,
+    color: "#10B981",
+    marginLeft: 6,
+    fontWeight: "600",
+  },
+  cardHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  locationPinCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#E6F4EA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  locationTextWrapper: { flex: 1 },
+  locationTitle: { fontSize: 15, fontWeight: "700" },
+  locationSubtitle: { fontSize: 12, color: "#6B7280" },
+  sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8 },
+  statusTable: { marginBottom: 16 },
+  tableRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#F3F4F6",
+  },
+  tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
+  tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500" },
+  badge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 6,
+    minWidth: 95,
+    alignItems: "center",
+  },
+  badgeMatched: { backgroundColor: "#E0F2FE" },
+  badgeAccepted: { backgroundColor: "#ECFDF5" },
+  badgeArrived: { backgroundColor: "#FEF3C7" },
+  badgeSearching: { backgroundColor: "#F3F4F6" },
+  badgeText: { fontSize: 12, fontWeight: "600" },
+  textMatched: { color: "#0284C7" },
+  textAccepted: { color: "#10B981" },
+  textArrived: { color: "#D97706" },
+  textSearching: { color: "#4B5563" },
+  actionButtonContainer: { marginTop: 4 },
+  buttonButtonGroup: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  declineButton: {
+    width: "30%",
+    borderWidth: 1,
+    borderColor: "#EF4444",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justify.content: "center",
+  },
+  declineButtonText: { color: "#EF4444", fontWeight: "700" },
+  acceptButton: {
+    width: "66%",
+    backgroundColor: "#10B981",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justify.content: "center",
+  },
+  acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
 });
