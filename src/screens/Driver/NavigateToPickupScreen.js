@@ -150,19 +150,15 @@ export default function ProposalDriver({ navigation, route }) {
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // Extract accepted passenger IDs
-        const cleanAcceptedIds = data.accepted_passengers || [];
-
         // Parse passenger manifest list
         const rawPassengers = data.passengers || [];
 
+        // ✅ FIXED CLEAN MAPPING
         const unifiedRoster = rawPassengers.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
-          const isAccepted = cleanAcceptedIds.includes(userId);
-
           return {
             user_id: userId,
-            status: isAccepted ? "accepted" : rider.status || "matched",
+            status: rider.status, // The backend guarantees this is now 100% accurate
             name: rider.name || `Passenger ${userId}`,
             phone_number: rider.phone_number,
           };
@@ -708,7 +704,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
-    justify.content: "center",
+    justifyContent: "center",
   },
   declineButtonText: { color: "#EF4444", fontWeight: "700" },
   acceptButton: {
@@ -717,7 +713,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
-    justify.content: "center",
+    justifyContent: "center",
   },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
 });
