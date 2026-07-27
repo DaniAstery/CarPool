@@ -141,7 +141,7 @@ export default function ProposalDriver({ navigation, route }) {
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // 1. Clean parse of accepted_passengers array
+        // 1. Clean parse of accepted_passengers array (Handles Postgres text arrays like "{14,12}" or JS arrays)
         let cleanAcceptedIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
@@ -175,24 +175,21 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter((p) => p && (p.user_id !== null || p.id !== null))
           : [];
 
-        // 3. Strict Single-Source Status Mapping
+        // 3. Strict Single-Source Status Mapping with Accepted Array Synchronization
         const poolUserIds = cleanPoolArray.map((p) =>
           parseInt(p.user_id || p.id, 10)
         );
 
-          const unifiedRoster = cleanPoolArray.map((rider) => {
+        const unifiedRoster = cleanPoolArray.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
 
-          // Get the raw status directly from route_pool (e.g., 'matched', 'searching', 'accepted')
           let rawDbStatus = rider?.status
             ? rider.status.toString().trim().toLowerCase()
             : "matched";
 
-          // Respect the actual database status from route_pool first
-          let finalStatus = rawDbStatus;
+          // 🛠️ FIX: Force status to "accepted" if the passenger ID is present in cleanAcceptedIds
+          let finalStatus = cleanAcceptedIds.includes(userId) ? "accepted" : rawDbStatus;
 
-          // Only force to 'accepted' if the database explicitly says so or if your workflow requires it
-          // (If you want them to show 'matched' until they accept, let rawDbStatus dictate it)
           const passengerName =
             rider?.passenger_name ||
             rider?.full_name ||
@@ -578,7 +575,7 @@ const styles = StyleSheet.create({
     height: 56,
     flexDirection: "row",
     alignItems: "center",
-    justify: "space-between",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     backgroundColor: "#FFFFFF",
   },
@@ -754,7 +751,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: "center",
-    justify: "center",
+    justifyContent: "center",
   },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
 });
