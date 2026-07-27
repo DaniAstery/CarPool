@@ -184,15 +184,27 @@ export default function PickupProposalScreen({ navigation, route }) {
               activeRideOfferIdRef.current = data.ride_offer_id || data.id;
             }
 
-            const passengers = data.passengers || [];
+          const passengers = data.passengers || [];
+            // Extract accepted passengers array from the ride offer join in your backend response
+            const acceptedPassengersList = data.accepted_passengers || data.ride_offer?.accepted_passengers || [];
+            
+            // Check if current user ID exists in ride_offers.accepted_passengers
+            const isUserAcceptedInOffer = acceptedPassengersList.some(
+              (id) => parseInt(id, 10) === currentUserId
+            );
+
             const myRow = passengers.find(
               (p) => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId
             );
             
-            const rawMyStatus = (myRow?.status || data.status || "matched").toLowerCase();
+            // If present in ride_offers accepted list, force "accepted". Otherwise fallback to route_pool status.
+            const rawMyStatus = (userAccepted || isUserAcceptedInOffer)
+              ? "accepted"
+              : (myRow?.status || "matched").toLowerCase().trim();
+
             setMyDbStatus(rawMyStatus);
 
-            if (["accepted", "confirmed"].includes(rawMyStatus)) {
+            if (rawMyStatus === "accepted") {
               setUserAccepted(true);
             }
 
@@ -203,9 +215,10 @@ export default function PickupProposalScreen({ navigation, route }) {
             // 🚀 ROBUST AUTO-NAVIGATION THRESHOLD CHECK
             const isThresholdMet =
               ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
-              ["accepted", "matched", "ready", "dispatched", "confirmed"].includes(poolStatus) ||
-              ["accepted", "matched", "ready", "dispatched", "confirmed"].includes(generalStatus) ||
-              (driverStatus === "accepted" && ["ready", "matched", "accepted", "dispatched", "confirmed"].includes(poolStatus));
+              isUserAcceptedInOffer || // Auto-navigate if offer accepted
+              ["accepted", "ready", "dispatched", "confirmed"].includes(poolStatus) ||
+              ["accepted", "ready", "dispatched", "confirmed"].includes(generalStatus) ||
+              (driverStatus === "accepted" && ["ready", "accepted", "dispatched", "confirmed"].includes(poolStatus));
 
             if (isThresholdMet) {
               navigateToTracking();
@@ -219,16 +232,27 @@ export default function PickupProposalScreen({ navigation, route }) {
               const parsedCoRiders = passengers
                 .filter((p) => parseInt(p.userId || p.user_id || p.id, 10) !== currentUserId)
                 .map((p, idx) => {
-                  const riderRawStatus = (p.status || "matched").toLowerCase();
+                  const pId = parseInt(p.userId || p.user_id || p.id, 10);
+                  const isCoRiderAccepted = acceptedPassengersList.some((id) => parseInt(id, 10) === pId);
+                  
+                  const riderRawStatus = isCoRiderAccepted 
+                    ? "accepted" 
+                    : (p.status || "matched").toLowerCase().trim();
+
                   let displayStatus = "MATCHED";
-                  if (riderRawStatus === "accepted" || riderRawStatus === "confirmed") displayStatus = "ACCEPTED";
-                  else if (riderRawStatus === "pending") displayStatus = "PENDING";
-                  else if (riderRawStatus === "matched") displayStatus = "MATCHED";
-                  else displayStatus = riderRawStatus.toUpperCase();
+                  if (riderRawStatus === "accepted" || riderRawStatus === "confirmed") {
+                    displayStatus = "ACCEPTED";
+                  } else if (riderRawStatus === "pending") {
+                    displayStatus = "PENDING";
+                  } else if (riderRawStatus === "matched") {
+                    displayStatus = "MATCHED";
+                  } else {
+                    displayStatus = riderRawStatus.toUpperCase();
+                  }
 
                   return {
-                    id: p.userId || p.user_id || p.id,
-                    name: `Rider ${p.userId || p.user_id || p.id}`,
+                    id: pId,
+                    name: `Rider ${pId}`,
                     status: displayStatus,
                     color: colorPalette[idx % colorPalette.length],
                   };
@@ -256,7 +280,7 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, [currentUserId, navigateToTracking, navigation]);
 
 
-  
+
 const handleAcceptProposal = async () => {
     try {
       const resolvedRideId = 
