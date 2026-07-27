@@ -222,7 +222,7 @@ export default function NavigateToPickup({ navigation, route }) {
         const finalId = parseInt(responseData.rideOfferId || rideOfferId, 10);
         
         // Navigate to Trip In Progress Screen
-        navigation.replace("TripinProgress", {
+        navigation.replace("TripInProgress", {
           routeId: routeId,
           route_id: routeId,
           rideOfferId: finalId,
