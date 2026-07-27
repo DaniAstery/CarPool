@@ -142,7 +142,7 @@ export default function TripEarningsSummaryScreen({ navigation }) {
           style={styles.doneReturnButton}
           activeOpacity={0.8}
           onPress={() => {
-             navigation.navigate("CreateCorridorScreen");
+             navigation.navigate("CreateCorridor");
           }}
         >
           <Text style={styles.doneReturnButtonText}>FINISH</Text>
