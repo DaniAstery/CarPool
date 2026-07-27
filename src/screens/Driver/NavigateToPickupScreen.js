@@ -108,14 +108,58 @@ export default function NavigateToPickup({ navigation, route }) {
           setHasArrived(true);
         }
 
-        // Safely parse passenger list
-        const rawPassengers = data.passengers || [];
+        // 1. Clean parse of arrived_passengers array (Handles Postgres text arrays like "{14}" or JS arrays)
+        let cleanArrivedIds = [];
+        if (data.arrived_passengers) {
+          if (Array.isArray(data.arrived_passengers)) {
+            cleanArrivedIds = data.arrived_passengers.map((id) => parseInt(id, 10));
+          } else if (typeof data.arrived_passengers === "string") {
+            cleanArrivedIds = data.arrived_passengers
+              .replace(/[{}]/g, "")
+              .split(",")
+              .map((id) => parseInt(id.trim(), 10))
+              .filter((id) => !isNaN(id));
+          }
+        }
+
+        // 2. Safely parse passenger list from available backend keys
+        let rawPassengers = [];
+        if (Array.isArray(data.passengers)) {
+          rawPassengers = data.passengers;
+        } else if (Array.isArray(data.route_pool_passengers)) {
+          rawPassengers = data.route_pool_passengers;
+        } else if (typeof data.route_pool_passengers === "string") {
+          try {
+            rawPassengers = JSON.parse(data.route_pool_passengers);
+          } catch (e) {
+            rawPassengers = [];
+          }
+        }
+
+        // 3. Unified Roster Mapping with Arrived Status Synchronization
         const unifiedRoster = rawPassengers.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
+          
+          let rawDbStatus = rider?.status
+            ? rider.status.toString().trim().toLowerCase()
+            : "accepted";
+
+          // Force status to "arrived" if ID is present in arrived array or marked arrived in DB
+          let finalStatus =
+            cleanArrivedIds.includes(userId) || rawDbStatus === "arrived"
+              ? "arrived"
+              : rawDbStatus;
+
+          const passengerName =
+            rider?.passenger_name ||
+            rider?.full_name ||
+            rider?.name ||
+            `Passenger ${userId}`;
+
           return {
             user_id: userId,
-            status: rider.status,
-            name: rider.name || `Passenger ${userId}`,
+            status: finalStatus,
+            name: passengerName,
             phone_number: rider.phone_number,
           };
         });
@@ -336,13 +380,13 @@ export default function NavigateToPickup({ navigation, route }) {
             {poolPassengers.length === 0 ? (
               <View style={{ paddingVertical: 12, alignItems: "center" }}>
                 <Text style={{ color: "#6B7280", fontSize: 13 }}>
-                  Fetching accepted passenger data...
+                  Fetching passenger data...
                 </Text>
               </View>
             ) : (
               poolPassengers.map((passenger) => {
                 const pId = parseInt(passenger.user_id || passenger.id, 10);
-                const isAccepted = passenger.status === "accepted";
+                const isArrived = passenger.status === "arrived";
 
                 return (
                   <View key={`pickup-rider-row-${pId}`} style={styles.tableRow}>
@@ -350,7 +394,7 @@ export default function NavigateToPickup({ navigation, route }) {
                       <Ionicons
                         name="person-outline"
                         size={14}
-                        color={isAccepted ? "#10B981" : "#0284C7"}
+                        color={isArrived ? "#D97706" : "#10B981"}
                       />
                       <Text style={styles.tableUserText}>
                         {passenger.name}
@@ -523,6 +567,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   arriveButton: { backgroundColor: "#10B981" },
-  startTripButton: { backgroundColor: "#0284C7" }, // Blue for active trip start
+  startTripButton: { backgroundColor: "#0284C7" },
   actionButtonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 14, letterSpacing: 0.5 },
 });
