@@ -14,10 +14,12 @@ import { useAuth } from '../AuthContext';
 import * as Location from 'expo-location';
 
 const API_URL = "http://192.168.63.52:5000/api"; 
-const STATIC_USER_ID = 1; 
 
 export default function PassengerScreen({ navigation }) {
   const { user, logoutSession } = useAuth();
+
+  // 🎯 Dynamically resolve the logged-in user ID (fallback to valid rider ID 12 if context is unhydrated)
+  const currentUserId = user?.id || user?.userId || 12;
 
   // 🛡️ GATEKEEPER & CORE SYSTEM STATES
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
@@ -37,10 +39,10 @@ export default function PassengerScreen({ navigation }) {
 
     async function checkUserRoutingStatus() {
       try {
-        console.log(`📡 [Gatekeeper] Fetching pure route_pool status for Passenger User: ${STATIC_USER_ID}`);
+        console.log(`📡 [Gatekeeper] Fetching pure route_pool status for Passenger User: ${currentUserId}`);
         
         // Target the dedicated passenger status layout route
-        const statusRes = await fetch(`${API_URL}/passenger/status/${STATIC_USER_ID}`);
+        const statusRes = await fetch(`${API_URL}/passenger/status/${currentUserId}`);
         if (!statusRes.ok) throw new Error("Macro status query rejected.");
         const statusData = await statusRes.json();
 
@@ -68,7 +70,7 @@ export default function PassengerScreen({ navigation }) {
                 params: {
                   routeId: statusData.routeId || null,
                   rideOfferId: statusData.matched_ride_offer_id,
-                  userId: STATIC_USER_ID
+                  userId: currentUserId
                 } 
               }],
             });
@@ -88,6 +90,7 @@ export default function PassengerScreen({ navigation }) {
     return () => { isMounted = false; };
   }, [navigation]);
 
+
   /* 📍 GEOLOCATION POOLING & DYNAMIC PROXIMITY HUB RESOLVER */
   useEffect(() => {
     let locationSubscription = null;
@@ -100,6 +103,13 @@ export default function PassengerScreen({ navigation }) {
           setIsLocating(false);
           return;
         }
+
+        // 🎯 DEVELOPMENT OVERRIDE: Force initial check at Ayat (9.0220, 38.8450)
+        // This ensures you instantly unlock your new Ayat corridors without emulator GPS drift.
+        const ayatLat = 9.0220;
+        const ayatLng = 38.8450;
+        setUserCoords({ latitude: ayatLat, longitude: ayatLng });
+        await resolveClosestHub(ayatLat, ayatLng);
 
         // Subscribing to location changes for passive matching updates
         locationSubscription = await Location.watchPositionAsync(
@@ -207,7 +217,7 @@ export default function PassengerScreen({ navigation }) {
       const payload = {
         user_lat: userCoords?.latitude || 9.0022471,
         user_lng: userCoords?.longitude || 38.8100596,
-        user_id: STATIC_USER_ID,
+        user_id: currentUserId,
         pickup_hub_id: pickupHubId,
         route_id: targetRouteId,
         dropoff_hub_id: null,
@@ -247,8 +257,8 @@ export default function PassengerScreen({ navigation }) {
       const navigationParams = {
         routeId: targetRouteId,
         hubId: pickupHubId,
-        userId: STATIC_USER_ID, 
-        poolId: data.pool?.id || data.poolId || null, 
+        userId: currentUserId,
+        poolId: data.pool?.id || data.poolId || null,
         rideOfferId: data.matched_ride_offer_id || null,
         poolStatus: data.pool?.status || "searching",
         ride: {
@@ -276,7 +286,7 @@ export default function PassengerScreen({ navigation }) {
               navigation.navigate("MatchingScreen", {
                 routeId: parseInt(item.route_id || item.id, 10) || 3,
                 hubId: selectedPickupHub ? selectedPickupHub.id : 7,
-                userId: STATIC_USER_ID,
+                userId: currentUserId,
                 poolId: null,
                 poolStatus: "searching",
                 ride: {
