@@ -148,7 +148,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // Status Polling from Dedicated Endpoint
+  // Status Polling from Dedicated Endpoint (FIXED: Flat useEffect structure)
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -166,7 +166,18 @@ export default function PickupProposalScreen({ navigation, route }) {
           });
           clearTimeout(abortTimeout);
 
-          if (res.ok && isSubscribed) {
+          // 🛑 EVICTION GUARD: If database table is empty / user is removed / 404, snap back immediately
+          if (res.status === 404 || !res.ok) {
+            console.log("🛑 User removed from route pool or empty database. Evicting to Home.");
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              navigation.replace("Home");
+            }
+            return;
+          }
+
+          if (isSubscribed) {
             const data = await res.json();
 
             if (data.ride_offer_id || data.id) {
@@ -189,8 +200,11 @@ export default function PickupProposalScreen({ navigation, route }) {
             const driverStatus = (data.driver_status || "").toLowerCase();
             const generalStatus = (data.status || "").toLowerCase();
 
+            // 🚀 ROBUST AUTO-NAVIGATION THRESHOLD CHECK
             const isThresholdMet =
               ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
+              ["accepted", "matched", "ready", "dispatched", "confirmed"].includes(poolStatus) ||
+              ["accepted", "matched", "ready", "dispatched", "confirmed"].includes(generalStatus) ||
               (driverStatus === "accepted" && ["ready", "matched", "accepted", "dispatched", "confirmed"].includes(poolStatus));
 
             if (isThresholdMet) {
@@ -239,12 +253,11 @@ export default function PickupProposalScreen({ navigation, route }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId, navigateToTracking]);
+  }, [currentUserId, navigateToTracking, navigation]);
 
-  const handleAcceptProposal = async () => {
-    setUserAccepted(true);
-    setMyDbStatus("accepted");
 
+  
+const handleAcceptProposal = async () => {
     try {
       const resolvedRideId = 
         activeRideOfferIdRef.current || 
@@ -266,7 +279,11 @@ export default function PickupProposalScreen({ navigation, route }) {
       });
 
       const data = await response.json();
-      if (!response.ok) {
+      if (response.ok) {
+        // Only update local UI state AFTER the backend successfully saves it
+        setUserAccepted(true);
+        setMyDbStatus("accepted");
+      } else {
         console.warn("⚠️ Server rejected proposal acceptance:", data);
       }
     } catch (err) {
@@ -274,6 +291,16 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   };
 
+
+
+
+
+
+
+
+
+
+  
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.mapContainer}>
