@@ -425,7 +425,7 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
             case "in_trip":
             case "intransit":
               lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripInProgress", {
+              navigationRef.navigate("TripDeparture", {
                 rideOfferId: rideOfferId,
               });
               break;

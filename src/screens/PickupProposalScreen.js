@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  Dimensions,
   SafeAreaView,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
@@ -148,7 +147,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // Status Polling from Dedicated Endpoint (FIXED: Flat useEffect structure)
+  // Status Polling from Dedicated Endpoint
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -184,23 +183,20 @@ export default function PickupProposalScreen({ navigation, route }) {
               activeRideOfferIdRef.current = data.ride_offer_id || data.id;
             }
 
-          const passengers = data.passengers || [];
-            // Extract accepted passengers array from the ride offer join in your backend response
-            const acceptedPassengersList = data.accepted_passengers || data.ride_offer?.accepted_passengers || [];
+            const passengers = data.passengers || [];
             
-            // Check if current user ID exists in ride_offers.accepted_passengers
-            const isUserAcceptedInOffer = acceptedPassengersList.some(
-              (id) => parseInt(id, 10) === currentUserId
-            );
+            // Extract accepted_passengers array from backend response payload safely
+            const acceptedPassengersList = data.accepted_passengers || data.acceptedPassengers || data.ride_offer?.accepted_passengers || [];
+            const normalizedAcceptedIds = acceptedPassengersList.map((id) => parseInt(id, 10));
 
+            // 1. Evaluate Current User Status
+            const isUserAcceptedInOffer = normalizedAcceptedIds.includes(currentUserId);
             const myRow = passengers.find(
-              (p) => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId
+              (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
             );
             
-            // If present in ride_offers accepted list, force "accepted". Otherwise fallback to route_pool status.
-            const rawMyStatus = (userAccepted || isUserAcceptedInOffer)
-              ? "accepted"
-              : (myRow?.status || "matched").toLowerCase().trim();
+            const myRoutePoolStatus = myRow ? (myRow.status || "matched").toLowerCase().trim() : "matched";
+            const rawMyStatus = (userAccepted || isUserAcceptedInOffer) ? "accepted" : myRoutePoolStatus;
 
             setMyDbStatus(rawMyStatus);
 
@@ -208,17 +204,16 @@ export default function PickupProposalScreen({ navigation, route }) {
               setUserAccepted(true);
             }
 
-            const poolStatus = (data.pool_status || data.pool?.status || "").toLowerCase();
             const driverStatus = (data.driver_status || "").toLowerCase();
+            const rideOfferStatus = (data.ride_offer?.status || "").toLowerCase();
             const generalStatus = (data.status || "").toLowerCase();
 
             // 🚀 ROBUST AUTO-NAVIGATION THRESHOLD CHECK
             const isThresholdMet =
               ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
-              isUserAcceptedInOffer || // Auto-navigate if offer accepted
-              ["accepted", "ready", "dispatched", "confirmed"].includes(poolStatus) ||
-              ["accepted", "ready", "dispatched", "confirmed"].includes(generalStatus) ||
-              (driverStatus === "accepted" && ["ready", "accepted", "dispatched", "confirmed"].includes(poolStatus));
+              ["accepted", "ready", "dispatched", "confirmed", "active"].includes(rideOfferStatus) ||
+              ["accepted", "ready", "dispatched", "confirmed", "active"].includes(driverStatus) ||
+              ["accepted", "ready", "dispatched", "confirmed", "active"].includes(generalStatus);
 
             if (isThresholdMet) {
               navigateToTracking();
@@ -227,27 +222,27 @@ export default function PickupProposalScreen({ navigation, route }) {
 
             if (data.driver_status) setDriverState(data.driver_status);
 
+            // 2. Evaluate Co-Riders Status Manifest
             if (Array.isArray(passengers)) {
               const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
               const parsedCoRiders = passengers
-                .filter((p) => parseInt(p.userId || p.user_id || p.id, 10) !== currentUserId)
+                .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
                 .map((p, idx) => {
-                  const pId = parseInt(p.userId || p.user_id || p.id, 10);
-                  const isCoRiderAccepted = acceptedPassengersList.some((id) => parseInt(id, 10) === pId);
-                  
-                  const riderRawStatus = isCoRiderAccepted 
-                    ? "accepted" 
-                    : (p.status || "matched").toLowerCase().trim();
+                  const pId = parseInt(p.user_id || p.userId || p.id, 10);
+                  const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
+                  const pRoutePoolStatus = (p.status || "matched").toLowerCase().trim();
+
+                  const riderEffectiveStatus = isCoRiderAccepted ? "accepted" : pRoutePoolStatus;
 
                   let displayStatus = "MATCHED";
-                  if (riderRawStatus === "accepted" || riderRawStatus === "confirmed") {
+                  if (riderEffectiveStatus === "accepted" || riderEffectiveStatus === "confirmed") {
                     displayStatus = "ACCEPTED";
-                  } else if (riderRawStatus === "pending") {
-                    displayStatus = "PENDING";
-                  } else if (riderRawStatus === "matched") {
+                  } else if (riderEffectiveStatus === "matched") {
                     displayStatus = "MATCHED";
+                  } else if (riderEffectiveStatus === "pending") {
+                    displayStatus = "PENDING";
                   } else {
-                    displayStatus = riderRawStatus.toUpperCase();
+                    displayStatus = riderEffectiveStatus.toUpperCase();
                   }
 
                   return {
@@ -277,11 +272,12 @@ export default function PickupProposalScreen({ navigation, route }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId, navigateToTracking, navigation]);
+  }, [currentUserId, navigateToTracking, navigation, userAccepted]);
 
+  const handleAcceptProposal = async () => {
+    setUserAccepted(true);
+    setMyDbStatus("accepted");
 
-
-const handleAcceptProposal = async () => {
     try {
       const resolvedRideId = 
         activeRideOfferIdRef.current || 
@@ -303,11 +299,7 @@ const handleAcceptProposal = async () => {
       });
 
       const data = await response.json();
-      if (response.ok) {
-        // Only update local UI state AFTER the backend successfully saves it
-        setUserAccepted(true);
-        setMyDbStatus("accepted");
-      } else {
+      if (!response.ok) {
         console.warn("⚠️ Server rejected proposal acceptance:", data);
       }
     } catch (err) {
@@ -315,16 +307,6 @@ const handleAcceptProposal = async () => {
     }
   };
 
-
-
-
-
-
-
-
-
-
-  
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.mapContainer}>

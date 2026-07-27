@@ -86,7 +86,7 @@ function NavigationGateway() {
             <Stack.Screen name="MatchingScreen" component={MatchingScreen} />
             <Stack.Screen name="PickupProposal" component={PickupProposalScreen} />
             <Stack.Screen name="TripDeparture" component={TripDepartureScreen} />
-            <Stack.Screen name="TripCompletionScreen" component={TripCompletionScreen} />
+            <Stack.Screen name="TripCompletion" component={TripCompletionScreen} />
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
           </>
         )}
