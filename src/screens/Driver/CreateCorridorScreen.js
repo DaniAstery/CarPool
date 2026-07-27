@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 
-const API_URL = "http://192.168.112.52:5000"; 
+const API_URL = "http://192.168.63.52:5000"; 
 
 export default function CreateCorridorScreen({ navigation }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE
@@ -169,7 +169,9 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
+  
   // 🚀 5. LIVE DISPATCH / GO ONLINE TRIGGER
+ // 🚀 5. LIVE DISPATCH / GO ONLINE TRIGGER
   const handleGoOnline = async () => {
     if (!currentDriverId) {
       Alert.alert("Session Error", "Authentication expired. Please log in again.");
@@ -181,6 +183,34 @@ export default function CreateCorridorScreen({ navigation }) {
       return;
     }
 
+    if (!currentHub) {
+      Alert.alert("Location Required", "Current hub location could not be verified.");
+      return;
+    }
+
+    // 1. Start location is strictly the driver's current hub ID
+    const startHubId = Number(currentHub.id);
+
+    // 2. Extract end location hub ID from the selected corridor route object
+    const endHubId = Number(
+      selectedRoute.end_hub_id || 
+      selectedRoute.destination_hub_id || 
+      selectedRoute.end_hub?.id ||
+      (Array.isArray(selectedRoute.hub_ids) ? selectedRoute.hub_ids[selectedRoute.hub_ids.length - 1] : null) ||
+      (Array.isArray(selectedRoute.stop_ids) ? selectedRoute.stop_ids[selectedRoute.stop_ids.length - 1] : null) ||
+      selectedRoute.destination_id
+    );
+
+    console.log("🚀 Publishing Ride Offer Payload:");
+    console.log(`   - start_location (Current Hub ID): ${startHubId}`);
+    console.log(`   - end_location (Destination Hub ID): ${endHubId}`);
+    console.log("   - Selected Route Object:", selectedRoute);
+
+    if (!endHubId || isNaN(endHubId) || endHubId === startHubId) {
+      Alert.alert("Route Error", "Could not resolve a valid destination hub ID for this corridor.");
+      return;
+    }
+
     setIsPublishing(true);
     try {
       const response = await fetch(`${API_URL}/api/rides/create`, {
@@ -188,9 +218,11 @@ export default function CreateCorridorScreen({ navigation }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           driver_id: currentDriverId,
-          vehicle_id: activeVehicleId, // Sends hardcoded 1 perfectly
+          vehicle_id: activeVehicleId, 
           route_id: selectedRoute.route_id,
           total_seats: capacity,
+          start_location: startHubId, 
+          end_location: endHubId
         })
       });
 
@@ -223,6 +255,7 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
+  
   if (isAuthLoading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -300,11 +333,18 @@ export default function CreateCorridorScreen({ navigation }) {
             </Text>
           </View>
         ) : (
-          predefinedCorridors.map((route) => {
-            const isSelected = selectedRoute?.route_id === route.route_id;
+         predefinedCorridors.map((route, index) => {
+            // 🛠️ 1. Match selection by BOTH route_id AND end_hub_id so only ONE card gets selected
+            const isSelected = 
+              selectedRoute?.route_id === route.route_id && 
+              selectedRoute?.end_hub_id === route.end_hub_id;
+
+            // 🛠️ 2. Combine properties to create a unique key for React (e.g. "1-1-4-0")
+            const uniqueKey = `${route.route_id}-${route.start_hub_id}-${route.end_hub_id}-${index}`;
+
             return (
               <TouchableOpacity 
-                key={route.route_id} 
+                key={uniqueKey} 
                 style={[styles.routeCard, isSelected && styles.selectedItemBorder]}
                 onPress={() => setSelectedRoute(route)}
                 activeOpacity={0.8}
@@ -315,7 +355,7 @@ export default function CreateCorridorScreen({ navigation }) {
                   </View>
                   <View style={styles.routeDetails}>
                     <Text style={[styles.routeText, isSelected && styles.selectedRouteText]}>
-                      {route.stops.join(" ➔ ")}
+                      {Array.isArray(route.stops) ? route.stops.join(" ➔ ") : "Corridor Route"}
                     </Text>
                     <Text style={styles.routeSubPrice}>Estimated Fare: {route.base_price || 100} ETB</Text>
                   </View>

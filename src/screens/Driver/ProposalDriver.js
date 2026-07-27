@@ -15,7 +15,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.112.52:5000/api";
+const API_URL = "http://192.168.63.52:5000/api";
 
 export default function ProposalDriver({ navigation, route }) {
   const { user } = useAuth();
@@ -180,27 +180,19 @@ export default function ProposalDriver({ navigation, route }) {
           parseInt(p.user_id || p.id, 10)
         );
 
-        const unifiedRoster = cleanPoolArray.map((rider) => {
+          const unifiedRoster = cleanPoolArray.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
 
-          // STRICT CHECK: ONLY accepted if userId is explicitly in cleanAcceptedIds array
-          const isAccepted = cleanAcceptedIds.includes(userId);
-
+          // Get the raw status directly from route_pool (e.g., 'matched', 'searching', 'accepted')
           let rawDbStatus = rider?.status
             ? rider.status.toString().trim().toLowerCase()
             : "matched";
 
-          let finalStatus = "matched";
-          if (isAccepted) {
-            finalStatus = "accepted";
-          } else if (
-            rawDbStatus &&
-            rawDbStatus !== "accepted" &&
-            rawDbStatus !== "confirmed"
-          ) {
-            finalStatus = rawDbStatus;
-          }
+          // Respect the actual database status from route_pool first
+          let finalStatus = rawDbStatus;
 
+          // Only force to 'accepted' if the database explicitly says so or if your workflow requires it
+          // (If you want them to show 'matched' until they accept, let rawDbStatus dictate it)
           const passengerName =
             rider?.passenger_name ||
             rider?.full_name ||

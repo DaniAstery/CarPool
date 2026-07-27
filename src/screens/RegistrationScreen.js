@@ -95,7 +95,7 @@ export default function RegisterScreen() {
     try {
       setLoading(true);
       // Update this IP string with your current node testing gateway
-      const response = await fetch("http://192.168.112.52:5000/api/auth/verify-otp", {
+      const response = await fetch("http://192.168.63.52:5000/api/auth/verify-otp", {
         method: "POST",
         body: formData,
         headers: {
