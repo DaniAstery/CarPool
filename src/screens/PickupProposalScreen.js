@@ -15,19 +15,19 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 const API_URL = "http://192.168.63.52:5000";
 
 const DEFAULT_LOCATION = {
-  latitude: 9.0107,
-  longitude: 38.7612,
+  latitude: 9.0220,
+  longitude: 38.8450,
   latitudeDelta: 0.015,
   longitudeDelta: 0.015,
 };
 
 const MEETUP_LOCATION = {
-  latitude: 9.0125,
-  longitude: 38.7635,
+  latitude: 9.0220,
+  longitude: 38.8450,
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW: Isolated from state timer ticks to stop native lags
+// MEMOIZED MAP VIEW: Displays both Device Location & Pickup Hub
 // ------------------------------------------------------------------
 const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
   return (
@@ -36,28 +36,30 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
       style={styles.map}
       provider={PROVIDER_DEFAULT}
       initialRegion={currentLocation || DEFAULT_LOCATION}
-      showsUserLocation={true}
+      showsUserLocation={false}
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      <Marker coordinate={meetupLocation} title="Pickup Point">
+      {currentLocation && (
+        <Marker coordinate={currentLocation} title="Your Device Location" description="Current GPS position">
+          <View style={styles.userMarker}>
+            <Ionicons name="person" size={16} color="#FFF" />
+          </View>
+        </Marker>
+      )}
+
+      <Marker coordinate={meetupLocation} title="Pickup Hub" description="Corridor meeting point">
         <View style={styles.pickupMarker}>
-          <MaterialCommunityIcons name="map-marker-radius" size={24} color="#FFF" />
+          <MaterialCommunityIcons name="map-marker-radius" size={22} color="#FFF" />
         </View>
       </Marker>
 
       {currentLocation && (
         <Polyline
-          coordinates={[
-            {
-              latitude: currentLocation.latitude,
-              longitude: currentLocation.longitude,
-            },
-            meetupLocation,
-          ]}
+          coordinates={[currentLocation, meetupLocation]}
           strokeColor="#2F4F4F"
-          strokeWidth={3}
-          lineDashPattern={[5, 5]}
+          strokeWidth={4}
+          lineDashPattern={[6, 6]}
         />
       )}
     </MapView>
@@ -66,35 +68,32 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
 
 export default function PickupProposalScreen({ navigation, route }) {
   const [userAccepted, setUserAccepted] = useState(false);
+  const [myDbStatus, setMyDbStatus] = useState("matched");
   const [coRiders, setCoRiders] = useState([]);
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
   
-  // ⚡ MAP MOUNT GUARD: Prevents rendering heavy native MapView until backend status check passes
   const [initialCheckDone, setInitialCheckDone] = useState(false);
-
   const mapRef = useRef(null);
 
-  // 1. SAFE PARAMETER UNPACKING MATRIX
   const currentUserId = parseInt(
     route?.params?.userId || 
     route?.params?.user_id || 
-    route?.params?.id || "1",
+    route?.params?.id || "12",
     10
   );
 
-  const routeId = route?.params?.routeId || route?.params?.route_id || "1";
+  const routeId = route?.params?.routeId || route?.params?.route_id || "4";
   const initialRideOfferId =
     route?.params?.rideOfferId ||
     route?.params?.ride_offer_id ||
     route?.params?.ride_id ||
     route?.params?.id ||
-    null;
+    "1";
 
   const activeRideOfferIdRef = useRef(initialRideOfferId);
 
-  // Instant navigation transition function
   const navigateToTracking = useCallback(() => {
     navigation.replace("LiveTracking", {
       id: activeRideOfferIdRef.current || 1,
@@ -108,7 +107,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     });
   }, [navigation, routeId, currentUserId]);
 
-  // 2. SILENT NON-BLOCKING GPS RESOLUTION
+  // GPS Resolution
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -142,14 +141,14 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => { isMounted = false; };
   }, []);
 
-  // 3. COUNTDOWN TIMER
+  // Countdown Timer
   useEffect(() => {
     if (timeLeft <= 0) return;
     const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // 4. INSTANT STATUS POLLING & ARRIVED FAST-FORWARD LOGIC
+  // Status Polling from Dedicated Endpoint
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -162,7 +161,7 @@ export default function PickupProposalScreen({ navigation, route }) {
           const controller = new AbortController();
           const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
-          const res = await fetch(`${API_URL}/api/rides/status/${currentUserId}`, {
+          const res = await fetch(`${API_URL}/api/rides/pool-status/${currentUserId}`, {
             signal: controller.signal,
           });
           clearTimeout(abortTimeout);
@@ -174,20 +173,29 @@ export default function PickupProposalScreen({ navigation, route }) {
               activeRideOfferIdRef.current = data.ride_offer_id || data.id;
             }
 
-            // Read passenger row matching user from route_pool / passengers array
-            const passengers = data.passengers || data.pool?.passengers || [];
+            const passengers = data.passengers || [];
             const myRow = passengers.find(
               (p) => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId
             );
-            const myStatus = (myRow?.status || data.status || "").toLowerCase();
+            
+            const rawMyStatus = (myRow?.status || data.status || "matched").toLowerCase();
+            setMyDbStatus(rawMyStatus);
 
-            // 🚀 ARRIVED YEET LOGIC: Fast-path bypass before mounting MapView
-            if (
-              ["arrived", "in_trip", "departed", "completed"].includes(myStatus) ||
-              (data.driver_status === "accepted" && data.pool_status === "ready")
-            ) {
+            if (["accepted", "confirmed"].includes(rawMyStatus)) {
+              setUserAccepted(true);
+            }
+
+            const poolStatus = (data.pool_status || data.pool?.status || "").toLowerCase();
+            const driverStatus = (data.driver_status || "").toLowerCase();
+            const generalStatus = (data.status || "").toLowerCase();
+
+            const isThresholdMet =
+              ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
+              (driverStatus === "accepted" && ["ready", "matched", "accepted", "dispatched", "confirmed"].includes(poolStatus));
+
+            if (isThresholdMet) {
               navigateToTracking();
-              return; // Stop execution to prevent MapView initialization
+              return;
             }
 
             if (data.driver_status) setDriverState(data.driver_status);
@@ -196,21 +204,30 @@ export default function PickupProposalScreen({ navigation, route }) {
               const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
               const parsedCoRiders = passengers
                 .filter((p) => parseInt(p.userId || p.user_id || p.id, 10) !== currentUserId)
-                .map((p, idx) => ({
-                  id: p.userId || p.user_id || p.id,
-                  name: `Rider ${p.userId || p.user_id || p.id}`,
-                  status: (p.status || "Matched").toUpperCase(),
-                  color: colorPalette[idx % colorPalette.length],
-                }));
+                .map((p, idx) => {
+                  const riderRawStatus = (p.status || "matched").toLowerCase();
+                  let displayStatus = "MATCHED";
+                  if (riderRawStatus === "accepted" || riderRawStatus === "confirmed") displayStatus = "ACCEPTED";
+                  else if (riderRawStatus === "pending") displayStatus = "PENDING";
+                  else if (riderRawStatus === "matched") displayStatus = "MATCHED";
+                  else displayStatus = riderRawStatus.toUpperCase();
+
+                  return {
+                    id: p.userId || p.user_id || p.id,
+                    name: `Rider ${p.userId || p.user_id || p.id}`,
+                    status: displayStatus,
+                    color: colorPalette[idx % colorPalette.length],
+                  };
+                });
               setCoRiders(parsedCoRiders);
             }
           }
         }
       } catch (err) {
-        // Suppress temporary network packet drops
+        // Suppress temporary network drops
       } finally {
         if (isSubscribed) {
-          setInitialCheckDone(true); // Allow native MapView to mount ONLY if user remains on this screen
+          setInitialCheckDone(true);
           timerId = setTimeout(checkProposalStatus, 3000);
         }
       }
@@ -224,21 +241,41 @@ export default function PickupProposalScreen({ navigation, route }) {
     };
   }, [currentUserId, navigateToTracking]);
 
-  const handleAcceptProposal = () => {
+  const handleAcceptProposal = async () => {
     setUserAccepted(true);
-    fetch(`${API_URL}/api/rides/accept`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    setMyDbStatus("accepted");
+
+    try {
+      const resolvedRideId = 
+        activeRideOfferIdRef.current || 
+        route?.params?.rideOfferId || 
+        route?.params?.ride_offer_id || 
+        1;
+
+      const payload = {
         userId: currentUserId,
-        rideOfferId: activeRideOfferIdRef.current,
-      }),
-    }).catch(() => {});
+        user_id: currentUserId,
+        rideOfferId: resolvedRideId,
+        ride_offer_id: resolvedRideId,
+      };
+
+      const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        console.warn("⚠️ Server rejected proposal acceptance:", data);
+      }
+    } catch (err) {
+      console.error("❌ Network error during proposal acceptance:", err.message);
+    }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* MAP LAYER: Deferred Mount */}
       <View style={styles.mapContainer}>
         {initialCheckDone ? (
           <MemoizedMap
@@ -253,7 +290,6 @@ export default function PickupProposalScreen({ navigation, route }) {
         )}
       </View>
 
-      {/* OVERLAY PANEL */}
       <View style={styles.panel}>
         <View style={styles.dragHandle} />
 
@@ -269,7 +305,6 @@ export default function PickupProposalScreen({ navigation, route }) {
           Meetup at <Text style={styles.boldText}>Bole Station Stop B</Text>
         </Text>
 
-        {/* CO-RIDERS ROSTER */}
         <View style={styles.rosterContainer}>
           <Text style={styles.sectionHeader}>Matching Corridor Pool</Text>
           
@@ -278,8 +313,13 @@ export default function PickupProposalScreen({ navigation, route }) {
               <Text style={styles.avatarText}>YOU</Text>
             </View>
             <Text style={styles.riderName}>You</Text>
-            <Text style={[styles.statusTag, userAccepted ? styles.statusAccepted : styles.statusPending]}>
-              {userAccepted ? "ACCEPTED" : "PENDING"}
+            <Text style={[
+              styles.statusTag, 
+              myDbStatus === "accepted" ? styles.statusAccepted : 
+              myDbStatus === "matched" ? styles.statusMatched : 
+              styles.statusPending
+            ]}>
+              {myDbStatus.toUpperCase()}
             </Text>
           </View>
 
@@ -289,14 +329,18 @@ export default function PickupProposalScreen({ navigation, route }) {
                 <Text style={styles.avatarText}>{rider.id}</Text>
               </View>
               <Text style={styles.riderName}>{rider.name}</Text>
-              <Text style={[styles.statusTag, rider.status === "ACCEPTED" ? styles.statusAccepted : styles.statusPending]}>
+              <Text style={[
+                styles.statusTag, 
+                rider.status === "ACCEPTED" ? styles.statusAccepted : 
+                rider.status === "MATCHED" ? styles.statusMatched : 
+                styles.statusPending
+              ]}>
                 {rider.status}
               </Text>
             </View>
           ))}
         </View>
 
-        {/* DRIVER STATUS */}
         <View style={styles.driverCard}>
           <Ionicons name="car-sport" size={20} color="#2F4F4F" />
           <Text style={styles.driverText}>
@@ -304,14 +348,13 @@ export default function PickupProposalScreen({ navigation, route }) {
           </Text>
         </View>
 
-        {/* ACTION BUTTON */}
         <TouchableOpacity
           style={[styles.actionButton, userAccepted && styles.actionButtonDisabled]}
           disabled={userAccepted}
           onPress={handleAcceptProposal}
         >
           <Text style={styles.actionButtonText}>
-            {userAccepted ? "Waiting for others..." : "Accept Pickup Spot"}
+            {userAccepted ? "Waiting for driver to arrive at hub..." : "Accept Pickup Spot"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -324,15 +367,19 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1 },
   map: { ...StyleSheet.absoluteFillObject },
   mapPlaceholder: { flex: 1, backgroundColor: "#EAEAEA", justifyContent: "center", alignItems: "center" },
+  userMarker: {
+    backgroundColor: "#10B981",
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: "#FFF",
+    elevation: 4,
+  },
   pickupMarker: {
     backgroundColor: "#2F4F4F",
     padding: 8,
     borderRadius: 20,
     elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
   },
   panel: {
     backgroundColor: "#FFF",
@@ -340,10 +387,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     padding: 20,
     elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
   },
   dragHandle: {
     width: 40,
@@ -398,6 +441,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   statusAccepted: { backgroundColor: "#E8F5E9", color: "#2E7D32" },
+  statusMatched: { backgroundColor: "#E3F2FD", color: "#1565C0" },
   statusPending: { backgroundColor: "#FFF8E1", color: "#F57F17" },
   driverCard: {
     flexDirection: "row",
