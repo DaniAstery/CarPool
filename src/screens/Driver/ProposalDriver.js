@@ -320,7 +320,7 @@ export default function ProposalDriver({ navigation, route }) {
               index: 0,
               routes: [
                 {
-                  name: "DriverDashboardScreen",
+                  name: "CreateCorridor",
                   params: { driverId: currentDriverId },
                 },
               ],

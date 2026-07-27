@@ -67,7 +67,7 @@ function NavigationGateway() {
         ) : user.role === "driver" ? (
           // 🚖 2. DRIVER SYSTEM HUB WORKSPACE
           <>
-            <Stack.Screen name="CreateCorridorScreen" component={CreateCorridorScreen} />
+            <Stack.Screen name="CreateCorridor" component={CreateCorridorScreen} />
             <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
             <Stack.Screen name="ProposalDriver" component={ProposalDriver} />
             <Stack.Screen name="DriverDepartureScreen" component={TripInProgressScreen} />
