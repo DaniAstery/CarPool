@@ -80,8 +80,8 @@ export default function PickupProposalScreen({ navigation }) {
 
   const mapRef = useRef(null);
 
+  // Define navigation wrapper safely
   const navigateToTracking = useCallback(() => {
-    // 🎯 No route parameter pollution required
     navigation.replace("LiveTracking");
   }, [navigation]);
 
@@ -169,12 +169,14 @@ export default function PickupProposalScreen({ navigation }) {
           const rideOfferStatus = (data.ride_offer?.status || "").toLowerCase();
           const generalStatus = (data.status || "").toLowerCase();
 
-          // Auto-Navigate Threshold Check
+          // 🎯 Fixed Auto-Navigate Threshold Check: 
+          // Only redirect when trip is physically underway, arrived, or completed.
+          // Ignored non-tracking states like "accepted" or "confirmed".
           const isThresholdMet =
             ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
-            ["accepted", "ready", "dispatched", "confirmed", "active"].includes(rideOfferStatus) ||
-            ["accepted", "ready", "dispatched", "confirmed", "active"].includes(driverStatus) ||
-            ["accepted", "ready", "dispatched", "confirmed", "active"].includes(generalStatus);
+            ["arrived", "in_trip", "departed", "completed"].includes(driverStatus) ||
+            ["in_trip", "departed", "completed"].includes(rideOfferStatus) ||
+            ["in_trip", "departed", "completed"].includes(generalStatus);
 
           if (isThresholdMet) {
             navigateToTracking();

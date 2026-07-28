@@ -128,13 +128,8 @@ export default function MatchingScreen({ navigation, route }) {
           return;
         }
 
-        // IF A DRIVER HAS ACCEPTED -> ROUTE TO PROPOSAL OR TRACKING
+       // IF A DRIVER HAS ACCEPTED OR MATCHED -> ROUTE STRICTLY TO PICKUP PROPOSAL FIRST
         if (targetRideOfferId !== null) {
-          const passengersList = data.passengers || data.pool?.passengers || [];
-          const myRow = passengersList.find(p => parseInt(p.userId || p.user_id || p.id, 10) === currentUserId);
-          const alreadyArrived = currentPoolStatus === "arrived" || data.pool?.status === "arrived" || myRow?.status?.toLowerCase() === "arrived";
-
-          // Shared Navigation Payload Matrix
           const navigationPayload = {
             id: targetRideOfferId,
             rideOfferId: targetRideOfferId,
@@ -147,14 +142,9 @@ export default function MatchingScreen({ navigation, route }) {
             ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
           };
 
-          if (alreadyArrived) {
-            navigation.replace("LiveTrackingScreen", {
-              ...navigationPayload,
-              initialUserArrived: true,
-            });
-          } else {
-            navigation.replace("PickupProposal", navigationPayload);
-          }
+          // 🎯 ONLY route to PickupProposal when a match offer is active.
+          // Let PickupProposal handle user acceptance before ever touching LiveTracking.
+          navigation.replace("PickupProposal", navigationPayload);
           return;
         }
 

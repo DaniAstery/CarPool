@@ -16,95 +16,108 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
       if (!isSubscribed) return;
 
       try {
-        const res = await fetch(`${API_BASE_URL}/rides/status/${userId}`);
+        const normalizedRole = userRole?.toLowerCase().trim();
+        const isDriver = normalizedRole === "driver";
+        const roleParam = isDriver ? "driver" : "passenger";
+
+        const res = await fetch(`${API_BASE_URL}/gateway/state/${userId}?role=${roleParam}`);
         if (!res.ok || !isSubscribed) return;
 
         const data = await res.json();
-        
-        // 🛑 SAFETY GUARD: If database is cleared or returns no active status, bail out!
-        if (!data || Object.keys(data).length === 0 || !data.status && !data.driver_status && !data.rideStatus) {
-          return; 
-        }
+        if (!data || Object.keys(data).length === 0 || !data.status) return;
 
-        const rawStatus = data.driver_status || data.rideStatus || data.status;
-        if (!rawStatus) return; // Do not guess status if none exists
+        const status = data.status.toLowerCase().trim();
+        const rideOfferId = data.rideOfferId || data.matched_ride_offer_id || data.id;
+        const sourceTable = data.source_table || "route_pool";
+        const isAcceptedPassenger = Boolean(data.is_in_accepted_passengers);
+        const poolCount = data.currentPoolCount || data.pool_count || 1;
 
-        const status = rawStatus.toLowerCase().trim();
-        
-        // Ignore dummy/cleared statuses
-        if (["none", "cancelled", "inactive", "idle"].includes(status)) {
-          return;
-        }
+        if (["none", "cancelled", "idle", "expired"].includes(status)) return;
 
-        const rideOfferId = data.matched_ride_offer_id || data.ride_offer_id || data.id;
-        const isDriver = userRole?.toLowerCase() === "driver";
-
-        // For passengers, ensure 'pending' or 'proposal' actually has a backing ride or pool record
-        if (!isDriver && ["pending", "proposal"].includes(status) && !rideOfferId && !data.pool && !data.passengers) {
-          return; // Phantom pending state from an empty table -> ignore
-        }
-
-        const stateFingerprint = `${status}:${rideOfferId}:${isDriver ? "driver" : "passenger"}`;
+        const stateFingerprint = `${sourceTable}:${status}:${rideOfferId}:${isAcceptedPassenger}:${poolCount}:${isDriver ? "driver" : "passenger"}`;
         if (lastRoutedStateRef.current === stateFingerprint) return;
 
-        // Ensure navigation container is ready before triggering route shifts
         if (!navigationRef.isReady()) return;
 
-        // -------------------------------------------------------------
-        // ROLE-AWARE ROUTING MATRIX
-        // -------------------------------------------------------------
         if (isDriver) {
           switch (status) {
             case "accepted":
+            case "pending":
+              if (rideOfferId) {
+                lastRoutedStateRef.current = stateFingerprint;
+                navigationRef.navigate("NavigateToPickup", { ride_offer_id: rideOfferId, rideId: rideOfferId });
+              }
+              break;
             case "arrived":
               if (rideOfferId) {
                 lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("NavigateToPickup", {
-                  ride_offer_id: rideOfferId,
-                  rideId: rideOfferId,
-                });
+                navigationRef.navigate("DriverArrivedScreen", { ride_offer_id: rideOfferId, rideId: rideOfferId });
               }
               break;
-
             case "in_trip":
             case "intransit":
               if (rideOfferId) {
                 lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("TripInProgress", {
-                  rideOfferId: rideOfferId,
-                });
+                navigationRef.navigate("TripInProgress", { rideOfferId });
               }
               break;
-
+            case "completed":
+            case "finished":
+              lastRoutedStateRef.current = stateFingerprint;
+              navigationRef.navigate("TripCompletion", { userId, rideOfferId });
+              break;
             default:
               break;
           }
         } else {
+          // --- PASSENGER / RIDER RULE MATRIX ---
+
+          // 🎯 CORE RULE: If ride_offer is pending AND route_pool is matched with >= 2 passengers -> Force PickupProposal
+          const isPendingProposalMatch = 
+            (status === "matched" || status === "pending" || sourceTable === "route_pool") && 
+            rideOfferId !== null && 
+            !isAcceptedPassenger;
+
+          if (isPendingProposalMatch && poolCount >= 2) {
+            lastRoutedStateRef.current = stateFingerprint;
+            navigationRef.navigate("PickupProposal", { userId, rideOfferId });
+            return;
+          }
+
+          // LiveTracking is strictly reserved for users explicitly accepted in an active trip phase
+          if (isAcceptedPassenger && ["accepted", "in_trip", "intransit"].includes(status)) {
+            lastRoutedStateRef.current = stateFingerprint;
+            navigationRef.navigate("LiveTracking", { userId, rideOfferId });
+            return;
+          }
+
           switch (status) {
-            case "pending":
-            case "proposal":
+            case "searching":
               lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("PickupProposal", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
+              navigationRef.navigate("MatchingScreen", { userId, rideOfferId });
               break;
 
-            case "accepted":
+            case "matched":
+            case "proposal":
+              lastRoutedStateRef.current = stateFingerprint;
+              navigationRef.navigate("PickupProposal", { userId, rideOfferId });
+              break;
+
             case "arrived":
               lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("LiveTracking", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
+              navigationRef.navigate("DriverArrivedPassenger", { userId, rideOfferId });
               break;
 
             case "in_trip":
             case "intransit":
               lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripInProgress", {
-                rideOfferId: rideOfferId,
-              });
+              navigationRef.navigate("TripDeparture", { userId, rideOfferId });
+              break;
+
+            case "completed":
+            case "finished":
+              lastRoutedStateRef.current = stateFingerprint;
+              navigationRef.navigate("TripCompletion", { userId, rideOfferId });
               break;
 
             default:
@@ -112,343 +125,14 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
           }
         }
       } catch (err) {
-        console.log("📍 [RideGateway] Route evaluation non-fatal check failure:", err.message);
+        console.log("📍 [RideGateway] Route evaluation check error:", err.message);
       } finally {
         if (isSubscribed) {
-          timerId = setTimeout(evaluateGatewayRoute, 4000);
-        }
-      }
-    }async function evaluateGatewayRoute() {
-      if (!isSubscribed) return;
-
-      try {
-        const res = await fetch(`${API_BASE_URL}/rides/status/${userId}`);
-        if (!res.ok || !isSubscribed) return;
-
-        const data = await res.json();
-        
-        // 🛑 SAFETY GUARD: If database is cleared or returns no active status, bail out!
-        if (!data || Object.keys(data).length === 0 || !data.status && !data.driver_status && !data.rideStatus) {
-          return; 
-        }
-
-        const rawStatus = data.driver_status || data.rideStatus || data.status;
-        if (!rawStatus) return; // Do not guess status if none exists
-
-        const status = rawStatus.toLowerCase().trim();
-        
-        // Ignore dummy/cleared statuses
-        if (["none", "cancelled", "inactive", "idle"].includes(status)) {
-          return;
-        }
-
-        const rideOfferId = data.matched_ride_offer_id || data.ride_offer_id || data.id;
-        const isDriver = userRole?.toLowerCase() === "driver";
-
-        // For passengers, ensure 'pending' or 'proposal' actually has a backing ride or pool record
-        if (!isDriver && ["pending", "proposal"].includes(status) && !rideOfferId && !data.pool && !data.passengers) {
-          return; // Phantom pending state from an empty table -> ignore
-        }
-
-        const stateFingerprint = `${status}:${rideOfferId}:${isDriver ? "driver" : "passenger"}`;
-        if (lastRoutedStateRef.current === stateFingerprint) return;
-
-        // Ensure navigation container is ready before triggering route shifts
-        if (!navigationRef.isReady()) return;
-
-        // -------------------------------------------------------------
-        // ROLE-AWARE ROUTING MATRIX
-        // -------------------------------------------------------------
-        if (isDriver) {
-          switch (status) {
-            case "accepted":
-            case "arrived":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("NavigateToPickup", {
-                  ride_offer_id: rideOfferId,
-                  rideId: rideOfferId,
-                });
-              }
-              break;
-
-            case "in_trip":
-            case "intransit":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("TripInProgress", {
-                  rideOfferId: rideOfferId,
-                });
-              }
-              break;
-
-            default:
-              break;
-          }
-        } else {
-          switch (status) {
-            case "pending":
-            case "proposal":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("PickupProposal", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "accepted":
-            case "arrived":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("LiveTracking", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "in_trip":
-            case "intransit":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripInProgress", {
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            default:
-              break;
-          }
-        }
-      } catch (err) {
-        console.log("📍 [RideGateway] Route evaluation non-fatal check failure:", err.message);
-      } finally {
-        if (isSubscribed) {
-          timerId = setTimeout(evaluateGatewayRoute, 4000);
+          timerId = setTimeout(evaluateGatewayRoute, 3500);
         }
       }
     }
-    
-    
-   async function evaluateGatewayRoute() {
-      if (!isSubscribed) return;
 
-      try {
-        const res = await fetch(`${API_BASE_URL}/rides/status/${userId}`);
-        
-        // 🛑 HANDLE CLEARED DATABASE / 404 / EMPTY POOL
-        if (!res.ok || !isSubscribed) {
-          // If the server says 404 or fails, clear state and route back to Home
-          const stateFingerprint = "cleared:none";
-          if (lastRoutedStateRef.current !== stateFingerprint && navigationRef.isReady()) {
-            lastRoutedStateRef.current = stateFingerprint;
-            navigationRef.navigate("Home"); // Change to your app's home/search screen name if different
-          }
-          return;
-        }
-
-        const data = await res.json();
-        const rawStatus = data.driver_status || data.rideStatus || data.status;
-        const status = rawStatus ? rawStatus.toLowerCase().trim() : "none";
-        const rideOfferId = data.matched_ride_offer_id || data.ride_offer_id || data.id;
-        const isDriver = userRole?.toLowerCase() === "driver";
-
-        // 🛑 HANDLE EXPLICITLY CLEARED OR CANCELLED STATUSES
-        if (["none", "cancelled", "inactive", "idle", "expired"].includes(status) || !rideOfferId && !data.pool && !data.passengers && !data.status) {
-          const stateFingerprint = "cleared:none";
-          if (lastRoutedStateRef.current !== stateFingerprint && navigationRef.isReady()) {
-            lastRoutedStateRef.current = stateFingerprint;
-            navigationRef.navigate("Home"); // Active bounce back to home
-          }
-          return;
-        }
-
-        const stateFingerprint = `${status}:${rideOfferId}:${isDriver ? "driver" : "passenger"}`;
-        if (lastRoutedStateRef.current === stateFingerprint) return;
-
-        if (!navigationRef.isReady()) return;
-
-        // -------------------------------------------------------------
-        // ROLE-AWARE ROUTING MATRIX
-        // -------------------------------------------------------------
-        if (isDriver) {
-          switch (status) {
-            case "accepted":
-            case "arrived":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("NavigateToPickup", {
-                  ride_offer_id: rideOfferId,
-                  rideId: rideOfferId,
-                });
-              }
-              break;
-
-            case "in_trip":
-            case "intransit":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("TripInProgress", {
-                  rideOfferId: rideOfferId,
-                });
-              }
-              break;
-
-            default:
-              break;
-          }
-        } else {
-          switch (status) {
-            case "matched":
-            case "pending":
-            case "proposal":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("PickupProposal", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "accepted":
-            case "arrived":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("LiveTracking", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "in_trip":
-            case "intransit":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripInProgress", {
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            default:
-              break;
-          }
-        }
-      } catch (err) {
-        console.log("📍 [RideGateway] Route evaluation non-fatal check failure:", err.message);
-      } finally {
-        if (isSubscribed) {
-          timerId = setTimeout(evaluateGatewayRoute, 4000);
-        }
-      }
-    }async function evaluateGatewayRoute() {
-      if (!isSubscribed) return;
-
-      try {
-        const res = await fetch(`${API_BASE_URL}/rides/status/${userId}`);
-        
-        // 🛑 HANDLE CLEARED DATABASE / 404 / EMPTY POOL
-        if (!res.ok || !isSubscribed) {
-          // If the server says 404 or fails, clear state and route back to Home
-          const stateFingerprint = "cleared:none";
-          if (lastRoutedStateRef.current !== stateFingerprint && navigationRef.isReady()) {
-            lastRoutedStateRef.current = stateFingerprint;
-            navigationRef.navigate("Home"); // Change to your app's home/search screen name if different
-          }
-          return;
-        }
-
-        const data = await res.json();
-        const rawStatus = data.driver_status || data.rideStatus || data.status;
-        const status = rawStatus ? rawStatus.toLowerCase().trim() : "none";
-        const rideOfferId = data.matched_ride_offer_id || data.ride_offer_id || data.id;
-        const isDriver = userRole?.toLowerCase() === "driver";
-
-        // 🛑 HANDLE EXPLICITLY CLEARED OR CANCELLED STATUSES
-        if (["none", "cancelled", "inactive", "idle", "expired"].includes(status) || !rideOfferId && !data.pool && !data.passengers && !data.status) {
-          const stateFingerprint = "cleared:none";
-          if (lastRoutedStateRef.current !== stateFingerprint && navigationRef.isReady()) {
-            lastRoutedStateRef.current = stateFingerprint;
-            navigationRef.navigate("Home"); // Active bounce back to home
-          }
-          return;
-        }
-
-        const stateFingerprint = `${status}:${rideOfferId}:${isDriver ? "driver" : "passenger"}`;
-        if (lastRoutedStateRef.current === stateFingerprint) return;
-
-        if (!navigationRef.isReady()) return;
-
-        // -------------------------------------------------------------
-        // ROLE-AWARE ROUTING MATRIX
-        // -------------------------------------------------------------
-        if (isDriver) {
-          switch (status) {
-            case "accepted":
-            case "arrived":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("NavigateToPickup", {
-                  ride_offer_id: rideOfferId,
-                  rideId: rideOfferId,
-                });
-              }
-              break;
-
-            case "in_trip":
-            case "intransit":
-              if (rideOfferId) {
-                lastRoutedStateRef.current = stateFingerprint;
-                navigationRef.navigate("TripInProgress", {
-                  rideOfferId: rideOfferId,
-                });
-              }
-              break;
-
-            default:
-              break;
-          }
-        } else {
-          switch (status) {
-            case "matched":
-            case "pending":
-            case "proposal":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("PickupProposal", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "accepted":
-            case "arrived":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("LiveTracking", {
-                userId: userId,
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            case "in_trip":
-            case "intransit":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripDeparture", {
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-               case "completed":
-              lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("TripCompletion", {
-                rideOfferId: rideOfferId,
-              });
-              break;
-
-            default:
-              break;
-          }
-        }
-      } catch (err) {
-        console.log("📍 [RideGateway] Route evaluation non-fatal check failure:", err.message);
-      } finally {
-        if (isSubscribed) {
-          timerId = setTimeout(evaluateGatewayRoute, 4000);
-        }
-      }
-    }
     evaluateGatewayRoute();
 
     return () => {
