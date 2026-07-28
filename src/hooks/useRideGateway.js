@@ -430,6 +430,13 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
               });
               break;
 
+               case "completed":
+              lastRoutedStateRef.current = stateFingerprint;
+              navigationRef.navigate("TripCompletion", {
+                rideOfferId: rideOfferId,
+              });
+              break;
+
             default:
               break;
           }
