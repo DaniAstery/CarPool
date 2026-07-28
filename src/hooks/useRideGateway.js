@@ -105,7 +105,7 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
 
             case "arrived":
               lastRoutedStateRef.current = stateFingerprint;
-              navigationRef.navigate("DriverArrivedPassenger", { userId, rideOfferId });
+              navigationRef.navigate("PickupProposal", { userId, rideOfferId });
               break;
 
             case "in_trip":
