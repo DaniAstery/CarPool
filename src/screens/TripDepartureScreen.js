@@ -13,23 +13,22 @@ import {
   Alert,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
-import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
-const { width } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window");
 const API_URL = "http://192.168.63.52:5000/api";
 
 export default function TripInProgressScreen({ navigation, route }) {
-  // Extract parameters passed safely from our core routing gatekeeper layer
   const userId = route?.params?.userId || 1;
   const initialRideOfferId = route?.params?.rideOfferId;
 
-  // Structural Core States
+  // Core States
   const [loading, setLoading] = useState(true);
-  const [tripStatus, setTripStatus] = useState("in_trip"); // Tracks live backend route_pool array indices
+  const [tripStatus, setTripStatus] = useState("in_trip");
   const [rideDetails, setRideDetails] = useState({
     corridor: "Loading Corridor Axis...",
-    driverName: "Assigning...",
-    vehicleInfo: "Syncing asset registration...",
+    driverName: "Assigning Driver...",
+    vehicleInfo: "Syncing vehicle registration...",
     driverRating: "5.0",
     fixedPrice: 150,
     coRidersCount: 0,
@@ -39,6 +38,8 @@ export default function TripInProgressScreen({ navigation, route }) {
     pickupLng: 38.7945,
     dropoffLat: 8.9985,
     dropoffLng: 38.7855,
+    etaMinutes: "--",
+    distanceRemainingKm: "--",
   });
 
   const [pulseAnim] = useState(new Animated.Value(0));
@@ -56,42 +57,44 @@ export default function TripInProgressScreen({ navigation, route }) {
     ).start();
   }, []);
 
-  // 2. LIVE DATA STREAM SUBSCRIPTION (POLLING LOOP)
+  // 2. LIVE TELEMETRY & POLLING LOOP
   useEffect(() => {
     let isMounted = true;
 
     async function streamLiveTripMetrics() {
       try {
-        // Step A: Read pure passenger status to follow lifecycle synchronization closely
         const statusRes = await fetch(`${API_URL}/passenger/status/${userId}`);
         if (!statusRes.ok) throw new Error("Status polling error.");
         const statusData = await statusRes.json();
 
         if (isMounted && statusData) {
-          setTripStatus(statusData.status); // Dynamically shifts from 'in_trip' -> 'completed'
-          
-          // Use the active matching offer reference returned dynamically by the passenger state
+          setTripStatus(statusData.status);
           const activeOfferId = statusData.matched_ride_offer_id || initialRideOfferId;
-          
+
           if (activeOfferId) {
-            // Step B: Query the deep passenger tracking stream layer for coordinates & asset values
-            const trackRes = await fetch(`${API_URL}/rides/passenger-track/${activeOfferId}/user/${userId}`);
+            const trackRes = await fetch(
+              `${API_URL}/rides/passenger-track/${activeOfferId}/user/${userId}`
+            );
             if (trackRes.ok) {
               const trackData = await trackRes.json();
-              
+
               setRideDetails({
                 corridor: trackData.corridor || "Transit Axis Corridor",
-                driverName: trackData.driverName || "Dawit Mengistu",
-                vehicleInfo: trackData.vehicleInfo || "Toyota Probox • Code 3",
+                driverName: trackData.driverName || "Driver Assigned",
+                vehicleInfo: trackData.vehicleInfo || "Vehicle Syncing...",
                 driverRating: trackData.driverRating || "4.9",
                 fixedPrice: trackData.finalPrice || statusData.finalPrice || 80,
-                coRidersCount: Array.isArray(trackData.passengers) ? trackData.passengers.length : 1,
+                coRidersCount:
+                  trackData.passengersCount ??
+                  (Array.isArray(trackData.passengers) ? trackData.passengers.length : 1),
                 carLat: parseFloat(trackData.carLatitude) || 9.0115,
                 carLng: parseFloat(trackData.carLongitude) || 38.7945,
                 pickupLat: parseFloat(trackData.pickupLatitude) || 9.0115,
                 pickupLng: parseFloat(trackData.pickupLongitude) || 38.7945,
                 dropoffLat: parseFloat(trackData.dropoffLatitude) || 8.9985,
                 dropoffLng: parseFloat(trackData.dropoffLongitude) || 38.7855,
+                etaMinutes: trackData.etaMinutes ?? "--",
+                distanceRemainingKm: trackData.distanceRemainingKm ?? "--",
               });
             }
           }
@@ -103,7 +106,7 @@ export default function TripInProgressScreen({ navigation, route }) {
     }
 
     streamLiveTripMetrics();
-    const syncInterval = setInterval(streamLiveTripMetrics, 4000); // Poll live telemetry every 4 seconds
+    const syncInterval = setInterval(streamLiveTripMetrics, 4000);
 
     return () => {
       isMounted = false;
@@ -111,25 +114,56 @@ export default function TripInProgressScreen({ navigation, route }) {
     };
   }, [userId, initialRideOfferId]);
 
-  // 3. SECURE CHECKOUT HANDLER
- const handlePaymentCheckout = async () => {
-  try {
-    console.log(`🚀 Navigating to Payment Checkout screen for user ${userId}. Total: ETB ${rideDetails.fixedPrice}`);
-    
-    // Replace the current screen in the stack with the dedicated payment layout
-    navigation.replace("TripPayment", { 
-      userId: userId, 
-      fixedPrice: rideDetails.fixedPrice, 
-      corridor: rideDetails.corridor 
-    });
-    
-  } catch (payError) {
-    console.error("❌ Failed to hand off variables to TripPaymentScreen:", payError);
-    Alert.alert("Checkout Disconnect", "Unable to establish secure gateway navigation context.");
-  }
-};
+  const isTripFinished = tripStatus === "completed";
 
-  // Interpolation variables for animations
+  // 3. MAP CAMERA CONTROLLER
+  useEffect(() => {
+    if (mapRef.current && !loading) {
+      const coordinatesToFit = [
+        { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
+        { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
+      ];
+
+      if (!isTripFinished) {
+        coordinatesToFit.push({ latitude: rideDetails.carLat, longitude: rideDetails.carLng });
+      }
+
+      const validCoords = coordinatesToFit.filter((c) => c.latitude && c.longitude);
+
+      if (validCoords.length > 1) {
+        mapRef.current.fitToCoordinates(validCoords, {
+          edgePadding: {
+            top: 80,
+            right: 50,
+            bottom: height * 0.55,
+            left: 50,
+          },
+          animated: true,
+        });
+      }
+    }
+  }, [
+    rideDetails.carLat,
+    rideDetails.carLng,
+    rideDetails.pickupLat,
+    rideDetails.dropoffLat,
+    loading,
+    isTripFinished,
+  ]);
+
+  // 4. CHECKOUT HANDLER
+  const handlePaymentCheckout = async () => {
+    try {
+      navigation.replace("TripPayment", {
+        userId: userId,
+        fixedPrice: rideDetails.fixedPrice,
+        corridor: rideDetails.corridor,
+      });
+    } catch (payError) {
+      Alert.alert("Checkout Disconnect", "Unable to establish secure gateway navigation context.");
+    }
+  };
+
   const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.0] });
   const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.5, 0.2, 0] });
 
@@ -142,16 +176,13 @@ export default function TripInProgressScreen({ navigation, route }) {
     );
   }
 
-  const isTripFinished = tripStatus === "completed";
-
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* Top Banner Theme adapts based on Trip lifecycle */}
+      {/* 1. TOP BANNER STATUS BAR */}
       <View style={[styles.statusBarBanner, isTripFinished && styles.bannerFinishedBg]}>
         <View style={styles.statusIndicatorWrapper}>
           {!isTripFinished && (
-            <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }] } />
+            <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }]} />
           )}
           <View style={[styles.statusCenterCoreDot, isTripFinished && styles.coreDotFinishedBg]}>
             <FontAwesome5 name={isTripFinished ? "check-circle" : "car-side"} size={11} color="#FFFFFF" />
@@ -162,42 +193,57 @@ export default function TripInProgressScreen({ navigation, route }) {
             {isTripFinished ? "Arrived safely at Destination" : "Transit Active"}
           </Text>
           <Text style={styles.statusSecondaryText}>
-            {isTripFinished ? "Thank you for riding shared corridor loops." : "En-route along optimized corridor transit path"}
+            {isTripFinished
+              ? "Thank you for riding shared corridor loops."
+              : `ETA: ${rideDetails.etaMinutes} mins • ${rideDetails.distanceRemainingKm} km remaining`}
           </Text>
         </View>
       </View>
 
-      {/* Real Interactive Map Layout */}
+      {/* 2. PRODUCTION MAP VIEW */}
       <View style={styles.mapContainer}>
         <MapView
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
-            latitude: rideDetails.carLat,
-            longitude: rideDetails.carLng,
-            latitudeDelta: 0.022,
-            longitudeDelta: 0.022,
+            latitude: rideDetails.carLat || 9.0115,
+            longitude: rideDetails.carLng || 38.7945,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
           }}
           customMapStyle={cleanMinimalMapStyle}
+          showsUserLocation={false}
+          showsMyLocationButton={false}
+          showsCompass={false}
+          toolbarEnabled={false}
+          pitchEnabled={false}
+          moveOnMarkerPress={false}
         >
-          {/* Main Corridor Polyline Routing Node Array */}
+          {/* Route Polyline */}
           <Polyline
             coordinates={[
               { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
-              { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }
+              { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
             ]}
-            strokeColor={isTripFinished ? "#6B7280" : "#10B981"}
-            strokeWidth={5}
+            strokeColor={isTripFinished ? "#9CA3AF" : "#10B981"}
+            strokeWidth={4}
+            geodesic={true}
           />
 
-          {/* Pickup Hub Marker */}
-          <Marker coordinate={{ latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng }}>
+          {/* Pickup Marker */}
+          <Marker
+            coordinate={{ latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng }}
+            tracksViewChanges={false}
+          >
             <View style={styles.originMarkerPoint} />
           </Marker>
 
-          {/* Target Drop-off Hub Terminal Marker */}
-          <Marker coordinate={{ latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }}>
+          {/* Drop-off Marker */}
+          <Marker
+            coordinate={{ latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }}
+            tracksViewChanges={false}
+          >
             <View style={styles.destinationMarkerWrapper}>
               <View style={styles.destinationMarkerPin}>
                 <Ionicons name="location-sharp" size={14} color="#FFFFFF" />
@@ -205,9 +251,13 @@ export default function TripInProgressScreen({ navigation, route }) {
             </View>
           </Marker>
 
-          {/* Active Car position tracker rendered dynamically */}
+          {/* Active Moving Vehicle Marker */}
           {!isTripFinished && (
-            <Marker coordinate={{ latitude: rideDetails.carLat, longitude: rideDetails.carLng }}>
+            <Marker
+              coordinate={{ latitude: rideDetails.carLat, longitude: rideDetails.carLng }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={999}
+            >
               <View style={styles.activeCarWrapper}>
                 <FontAwesome5 name="car" size={14} color="#FFFFFF" />
               </View>
@@ -216,20 +266,27 @@ export default function TripInProgressScreen({ navigation, route }) {
         </MapView>
       </View>
 
-      {/* Sliding Trip Context Information Sheet Drawer */}
+      {/* 3. SLIDING INFORMATION DRAWER */}
       <View style={styles.slidingPanelDrawer}>
         <ScrollView showsVerticalScrollIndicator={false}>
-          
+          {/* Real-time Distance & Arrival Metrics Header */}
           <View style={styles.transitSummaryHeader}>
             <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>STATUS INDEX</Text>
-              <Text style={[styles.metricValueHighlight, isTripFinished && { color: "#10B981" }]}>
-                {isTripFinished ? "COMPLETED" : "EN-ROUTE"}
+              <Text style={styles.metricLabel}>EST. TIME</Text>
+              <Text style={[styles.metricValueHighlight, { color: "#059669" }]}>
+                {isTripFinished ? "0 mins" : `${rideDetails.etaMinutes} mins`}
               </Text>
             </View>
             <View style={styles.verticalSplitter} />
             <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>FIXED TRANSIT COST</Text>
+              <Text style={styles.metricLabel}>DISTANCE</Text>
+              <Text style={styles.metricValueHighlight}>
+                {isTripFinished ? "0 km" : `${rideDetails.distanceRemainingKm} km`}
+              </Text>
+            </View>
+            <View style={styles.verticalSplitter} />
+            <View style={styles.metricColumn}>
+              <Text style={styles.metricLabel}>FIXED COST</Text>
               <Text style={styles.metricValueHighlight}>ETB {rideDetails.fixedPrice}</Text>
             </View>
           </View>
@@ -251,7 +308,7 @@ export default function TripInProgressScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* Shared Corridor Real Data Manifest Block */}
+          {/* Corridor Manifest Card */}
           <View style={styles.manifestContainerCard}>
             <View style={styles.manifestRow}>
               <View style={styles.leftLabelCluster}>
@@ -260,15 +317,25 @@ export default function TripInProgressScreen({ navigation, route }) {
               </View>
               <Text style={styles.manifestValueText}>{rideDetails.corridor}</Text>
             </View>
-            
+
             <View style={styles.horizontalLineDivider} />
 
             <View style={styles.manifestRow}>
               <View style={styles.leftLabelCluster}>
                 <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Verified Manifest</Text>
+                <Text style={styles.manifestRouteLabel}>Passengers On Board</Text>
               </View>
-              <Text style={styles.manifestValueText}>{rideDetails.coRidersCount} Passengers on board</Text>
+              <Text style={styles.manifestValueText}>{rideDetails.coRidersCount} Passengers</Text>
+            </View>
+
+            <View style={styles.horizontalLineDivider} />
+
+            <View style={styles.manifestRow}>
+              <View style={styles.leftLabelCluster}>
+                <Ionicons name="navigate-outline" size={16} color="#9CA3AF" />
+                <Text style={styles.manifestRouteLabel}>Remaining Distance</Text>
+              </View>
+              <Text style={styles.manifestValueText}>{rideDetails.distanceRemainingKm} km left</Text>
             </View>
 
             <View style={styles.horizontalLineDivider} />
@@ -284,9 +351,9 @@ export default function TripInProgressScreen({ navigation, route }) {
             </View>
           </View>
 
-          {/* 🎯 PRODUCTION CONTEXT ACTION BUTTON */}
+          {/* Action / Checkout Button */}
           {isTripFinished ? (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.actionButton, styles.paymentButtonBg]}
               activeOpacity={0.85}
               onPress={handlePaymentCheckout}
@@ -304,7 +371,6 @@ export default function TripInProgressScreen({ navigation, route }) {
               </View>
             </View>
           )}
-
         </ScrollView>
       </View>
     </SafeAreaView>
@@ -336,12 +402,12 @@ const styles = StyleSheet.create({
   destinationMarkerWrapper: { justifyContent: "center", alignItems: "center" },
   destinationMarkerPin: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
   activeCarWrapper: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#111827", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
-  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "50%", backgroundColor: "#F9FAFB", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 20, borderWidth: 1, borderColor: "#E5E7EB" },
-  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 14, marginBottom: 16 },
+  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "52%", backgroundColor: "#F9FAFB", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 20, borderWidth: 1, borderColor: "#E5E7EB" },
+  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 12, marginBottom: 16 },
   metricColumn: { flex: 1, alignItems: "center", justifyContent: "center" },
   verticalSplitter: { width: 1, backgroundColor: "#E5E7EB" },
-  metricLabel: { fontSize: 10, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
-  metricValueHighlight: { fontSize: 18, fontWeight: "800", color: "#111111", marginTop: 4 },
+  metricLabel: { fontSize: 9, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
+  metricValueHighlight: { fontSize: 15, fontWeight: "800", color: "#111111", marginTop: 2 },
   sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10, marginLeft: 2 },
   driverProfileCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 10 },
   avatarHolder: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#ECFDF5", alignItems: "center", justifyContent: "center" },
