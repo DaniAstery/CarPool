@@ -16,7 +16,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://192.168.63.52:5000/api";
+const API_URL = "http://192.168.1.3:5000/api";
 
 export default function TripInProgressScreen({ navigation, route }) {
   const userId = route?.params?.userId || 1;
@@ -63,7 +63,7 @@ export default function TripInProgressScreen({ navigation, route }) {
 
     async function streamLiveTripMetrics() {
       try {
-        const statusRes = await fetch(`${API_URL}/passenger/status/${userId}`);
+        const statusRes = await fetch(`${API_URL}/passenger-livetracking/status/${userId}`);
         if (!statusRes.ok) throw new Error("Status polling error.");
         const statusData = await statusRes.json();
 

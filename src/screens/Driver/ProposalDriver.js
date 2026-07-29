@@ -15,7 +15,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.63.52:5000/api";
+const API_URL = "http://192.168.1.3:5000/api";
 
 export default function ProposalDriver({ navigation, route }) {
   const { user } = useAuth();

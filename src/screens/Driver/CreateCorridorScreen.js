@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 
-const API_URL = "http://192.168.63.52:5000"; 
+const API_URL = "http://192.168.1.3:5000"; 
 
 export default function CreateCorridorScreen({ navigation }) {
   // 🔐 1. ACCESS GLOBAL AUTHENTICATION ENVIRONMENT STATE

@@ -12,7 +12,7 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 
-const API_URL = "http://192.168.63.52:5000";
+const API_URL = "http://192.168.1.3:5000";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0220,

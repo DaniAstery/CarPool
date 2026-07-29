@@ -13,7 +13,7 @@ import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://192.168.63.52:5000/api"; 
+const API_URL = "http://192.168.1.3:5000/api"; 
 
 export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);
