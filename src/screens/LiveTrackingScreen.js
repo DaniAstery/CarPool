@@ -116,62 +116,64 @@ export default function LiveTrackingScreen({ route, navigation }) {
     let timerId;
 
     async function fetchTrackingStatus() {
-      if (!isSubscribed || !currentUserId || !rideOfferId) return;
+  if (!isSubscribed || !currentUserId || !rideOfferId) return;
 
-      try {
-        const res = await fetch(`${API_URL}/api/rides/passenger-tracking/${rideOfferId}/${currentUserId}`);
-        if (!res.ok) return;
+  try {
+    const res = await fetch(`${API_URL}/api/rides/passenger-tracking/${rideOfferId}/${currentUserId}`);
+    if (!res.ok) return;
 
-        const data = await res.json();
-        if (isSubscribed) {
-          setPickupHubName(parseHubName(data.pickup_hub, "Pickup Hub"));
-          setDropoffHubName(parseHubName(data.dropoff_hub, "Destination Hub"));
+    const data = await res.json();
+    if (isSubscribed) {
+      // Correctly reads backend properties
+      if (data.pickup_hub) setPickupHubName(data.pickup_hub);
+      if (data.dropoff_hub) setDropoffHubName(data.dropoff_hub);
 
-          if (data.driverName) setDriverName(data.driverName);
-          if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
-          if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
+      if (data.driverName) setDriverName(data.driverName);
+      if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
+      if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
 
-          if (data.pickup_lat && data.pickup_lng) {
-            setMeetupLocation({
-              latitude: parseFloat(data.pickup_lat),
-              longitude: parseFloat(data.pickup_lng),
-            });
-          }
-
-          const passengers = data.passengers || [];
-          const myRow = passengers.find(
-            (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
-          );
-
-          const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
-          
-          if (rawMyStatus === "in_trip") {
-            navigateToDeparture();
-            return;
-          }
-
-          setMyStatus(rawMyStatus);
-
-          const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-          const parsedCoRiders = passengers
-            .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
-            .map((p, idx) => ({
-              id: parseInt(p.user_id || p.userId || p.id, 10),
-              name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
-              status: (p.status || "accepted").toUpperCase(),
-              color: colorPalette[idx % colorPalette.length],
-            }));
-
-          setCoRiders(parsedCoRiders);
-        }
-      } catch (err) {
-        // Suppress network polling drops
-      } finally {
-        if (isSubscribed) {
-          timerId = setTimeout(fetchTrackingStatus, 3000);
-        }
+      if (data.pickup_lat && data.pickup_lng) {
+        setMeetupLocation({
+          latitude: parseFloat(data.pickup_lat),
+          longitude: parseFloat(data.pickup_lng),
+        });
       }
+
+      const passengers = data.passengers || [];
+      const myRow = passengers.find(
+        (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
+      );
+
+      const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
+      
+      // Auto-transition when trip starts
+      if (rawMyStatus === "in_trip") {
+        navigateToDeparture();
+        return;
+      }
+
+      setMyStatus(rawMyStatus);
+
+      const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+      const parsedCoRiders = passengers
+        .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
+        .map((p, idx) => ({
+          id: parseInt(p.user_id || p.userId || p.id, 10),
+          name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
+          status: (p.status || "accepted").toUpperCase(),
+          color: colorPalette[idx % colorPalette.length],
+        }));
+
+      setCoRiders(parsedCoRiders);
     }
+  } catch (err) {
+    // Suppress network polling drops
+  } finally {
+    if (isSubscribed) {
+      timerId = setTimeout(fetchTrackingStatus, 3000);
+    }
+  }
+}
 
     fetchTrackingStatus();
     return () => {

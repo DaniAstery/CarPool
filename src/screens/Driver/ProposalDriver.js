@@ -18,7 +18,11 @@ const { width } = Dimensions.get("window");
 const API_URL = "http://192.168.1.3:5000/api";
 
 export default function ProposalDriver({ navigation, route }) {
+  // 1. Get authenticated user directly from AuthContext
   const { user } = useAuth();
+  
+  // Strictly derive the logged-in driver's ID from AuthContext
+  const currentDriverId = user?.id || user?.driver_id;
 
   const [currentLocation, setCurrentLocation] = useState({
     latitude: 9.0105,
@@ -35,10 +39,6 @@ export default function ProposalDriver({ navigation, route }) {
   const [timeLeft, setTimeLeft] = useState(45);
   const [networkError, setNetworkError] = useState(null);
 
-  const currentDriverId =
-    user?.id ||
-    user?.driver_id ||
-    (route?.params?.driverId ? parseInt(route?.params?.driverId, 10) : 10);
   const routeId = route?.params?.routeId || "1";
   const activeRideOfferIdRef = useRef(null);
 
@@ -119,9 +119,12 @@ export default function ProposalDriver({ navigation, route }) {
     currentDriverId,
   ]);
 
-  // Live Database Polling Pipeline
+  // Live Database Polling Pipeline using AuthContext driver ID
   useEffect(() => {
-    if (!currentDriverId) return;
+    if (!currentDriverId) {
+      console.warn("[Corridor Sync] Waiting for authenticated driver ID from AuthContext...");
+      return;
+    }
 
     async function syncDatabaseManifestState() {
       try {
@@ -141,7 +144,7 @@ export default function ProposalDriver({ navigation, route }) {
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
 
-        // 1. Clean parse of accepted_passengers array (Handles Postgres text arrays like "{14,12}" or JS arrays)
+        // Clean parse of accepted_passengers array
         let cleanAcceptedIds = [];
         if (data.accepted_passengers) {
           if (Array.isArray(data.accepted_passengers)) {
@@ -157,7 +160,7 @@ export default function ProposalDriver({ navigation, route }) {
           }
         }
 
-        // 2. Clean parse of route pool passengers array
+        // Clean parse of route pool passengers array
         let rawPoolArray = [];
         if (Array.isArray(data.passengers)) {
           rawPoolArray = data.passengers;
@@ -175,19 +178,17 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter((p) => p && (p.user_id !== null || p.id !== null))
           : [];
 
-        // 3. Strict Single-Source Status Mapping with Accepted Array Synchronization
+        // Strict Single-Source Status Mapping with Accepted Array Synchronization
         const poolUserIds = cleanPoolArray.map((p) =>
           parseInt(p.user_id || p.id, 10)
         );
 
         const unifiedRoster = cleanPoolArray.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
-
           let rawDbStatus = rider?.status
             ? rider.status.toString().trim().toLowerCase()
             : "matched";
 
-          // 🛠️ FIX: Force status to "accepted" if the passenger ID is present in cleanAcceptedIds
           let finalStatus = cleanAcceptedIds.includes(userId) ? "accepted" : rawDbStatus;
 
           const passengerName =
@@ -203,7 +204,6 @@ export default function ProposalDriver({ navigation, route }) {
           };
         });
 
-        // Add any rider in accepted array that was missing from cleanPoolArray
         cleanAcceptedIds.forEach((acceptedId) => {
           if (!poolUserIds.includes(acceptedId)) {
             unifiedRoster.push({
@@ -251,7 +251,13 @@ export default function ProposalDriver({ navigation, route }) {
     return () => clearInterval(pollInterval);
   }, [currentDriverId, routeId, navigation]);
 
+  // Handle Driver Acceptance using AuthContext driver ID
   const handleDriverAccept = async () => {
+    if (!currentDriverId) {
+      Alert.alert("Authentication Error", "Unable to identify driver credentials from session.");
+      return;
+    }
+
     if (!isDriverButtonUnlocked || isOfferLockedIn || timeLeft <= 0) return;
 
     setDriverAccepted(true);
@@ -260,8 +266,8 @@ export default function ProposalDriver({ navigation, route }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ride_offer_id: activeRideOfferIdRef.current || 1,
-          driver_id: currentDriverId,
+          ride_offer_id: activeRideOfferIdRef.current,
+          driver_id: currentDriverId, // AuthContext driver ID
         }),
       });
 
@@ -269,7 +275,7 @@ export default function ProposalDriver({ navigation, route }) {
 
       if (res.ok && responseData.success) {
         const finalId = parseInt(
-          responseData.rideOfferId || activeRideOfferIdRef.current || 1,
+          responseData.rideOfferId || activeRideOfferIdRef.current,
           10
         );
 
@@ -294,7 +300,13 @@ export default function ProposalDriver({ navigation, route }) {
     }
   };
 
+  // Handle Driver Decline using AuthContext driver ID
   const handleDriverDecline = async () => {
+    if (!currentDriverId) {
+      Alert.alert("Authentication Error", "Unable to identify driver credentials from session.");
+      return;
+    }
+
     Alert.alert(
       "Decline Dispatch Manifest?",
       "Rejecting this cluster removes you from the station queue.",
@@ -309,8 +321,8 @@ export default function ProposalDriver({ navigation, route }) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  driver_id: currentDriverId,
-                  ride_offer_id: activeRideOfferIdRef.current || 1,
+                  driver_id: currentDriverId, // AuthContext driver ID
+                  ride_offer_id: activeRideOfferIdRef.current,
                 }),
               });
             } catch (err) {
