@@ -91,8 +91,9 @@ export default function PickupProposalScreen({ navigation }) {
 
   const mapRef = useRef(null);
 
-  const navigateToTracking = useCallback(() => {
-    navigation.replace("LiveTracking");
+  // 🚨 PASS RIDE OFFER ID TO LIVETRACKING
+  const navigateToTracking = useCallback((rideOfferId) => {
+    navigation.replace("LiveTracking", { rideOfferId });
   }, [navigation]);
 
   useEffect(() => {
@@ -132,15 +133,13 @@ export default function PickupProposalScreen({ navigation }) {
     let isSubscribed = true;
     let timerId;
 
-    
-   async function checkProposalStatus() {
+    async function checkProposalStatus() {
       if (!isSubscribed || !currentUserId) return;
 
       try {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
-        // 🎯 USE THE NEW STRICT ENDPOINT
         const res = await fetch(`${API_URL}/api/rides/proposal-manifest/${currentUserId}`, {
           signal: controller.signal,
         });
@@ -156,7 +155,7 @@ export default function PickupProposalScreen({ navigation }) {
           const data = await res.json();
           const passengers = data.passengers || [];
 
-          // Hub is now cleanly provided by backend
+          // Hub is provided by backend
           if (data.hub && data.hub.latitude) {
             setMeetupHub(data.hub);
           }
@@ -170,18 +169,25 @@ export default function PickupProposalScreen({ navigation }) {
 
           setMyDbStatus(rawMyStatus);
           if (rawMyStatus === "accepted") setUserAccepted(true);
-          if (data.driver_status) setDriverState(data.driver_status);
+
+          const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
+          setDriverState(currentDriverStatus);
+
+          // 🚨 AUTOMATIC NAVIGATION TRIGGER WHEN DRIVER ACCEPTS
+          const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
+          if (currentDriverStatus === "accepted" && activeRideOfferId) {
+            navigateToTracking(activeRideOfferId);
+            return; // Exit early & stop rescheduling timers
+          }
 
           if (Array.isArray(passengers)) {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
             const parsedCoRiders = passengers
-              // Exclude current user
               .filter(p => parseInt(p.user_id, 10) !== currentUserId)
               .map((p, idx) => {
                 const pId = parseInt(p.user_id, 10);
                 const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
                 const pRoutePoolStatus = (p.status || "matched").toLowerCase().trim();
-
                 const riderEffectiveStatus = isCoRiderAccepted ? "accepted" : pRoutePoolStatus;
 
                 return {
@@ -195,7 +201,7 @@ export default function PickupProposalScreen({ navigation }) {
           }
         }
       } catch (err) {
-        // Suppress network drops
+        // Suppress transient network drops
       } finally {
         if (isSubscribed) {
           setInitialCheckDone(true);
