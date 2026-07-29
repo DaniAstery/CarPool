@@ -75,7 +75,7 @@ export default function PickupProposalScreen({ navigation }) {
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
 
   const [userAccepted, setUserAccepted] = useState(false);
-  const [myDbStatus, setMyDbStatus] = useState("matched");
+  const [myDbStatus, setMyDbStatus] = useState("searching");
   const [coRiders, setCoRiders] = useState([]);
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
@@ -155,7 +155,7 @@ export default function PickupProposalScreen({ navigation }) {
           const data = await res.json();
           const passengers = data.passengers || [];
 
-          // Hub is provided by backend
+          // Hub provided by backend
           if (data.hub && data.hub.latitude) {
             setMeetupHub(data.hub);
           }
@@ -164,7 +164,7 @@ export default function PickupProposalScreen({ navigation }) {
           const isUserAcceptedInOffer = normalizedAcceptedIds.includes(currentUserId);
           
           const myRow = passengers.find(p => parseInt(p.user_id, 10) === currentUserId);
-          const myRoutePoolStatus = myRow ? (myRow.status || "matched").toLowerCase().trim() : "matched";
+          const myRoutePoolStatus = myRow ? (myRow.status || "searching").toLowerCase().trim() : "searching";
           const rawMyStatus = (userAccepted || isUserAcceptedInOffer) ? "accepted" : myRoutePoolStatus;
 
           setMyDbStatus(rawMyStatus);
@@ -177,7 +177,7 @@ export default function PickupProposalScreen({ navigation }) {
           const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
           if (currentDriverStatus === "accepted" && activeRideOfferId) {
             navigateToTracking(activeRideOfferId);
-            return; // Exit early & stop rescheduling timers
+            return; // Exit early & stop polling
           }
 
           if (Array.isArray(passengers)) {
@@ -187,7 +187,7 @@ export default function PickupProposalScreen({ navigation }) {
               .map((p, idx) => {
                 const pId = parseInt(p.user_id, 10);
                 const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
-                const pRoutePoolStatus = (p.status || "matched").toLowerCase().trim();
+                const pRoutePoolStatus = (p.status || "searching").toLowerCase().trim();
                 const riderEffectiveStatus = isCoRiderAccepted ? "accepted" : pRoutePoolStatus;
 
                 return {
@@ -220,15 +220,30 @@ export default function PickupProposalScreen({ navigation }) {
   const handleAcceptProposal = async () => {
     setUserAccepted(true);
     setMyDbStatus("accepted");
+
     try {
       const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: currentUserId }),
       });
-      if (!response.ok) console.warn("⚠️ Server rejected proposal acceptance.");
+
+      if (response.ok) {
+        const data = await response.json();
+        // If driver already accepted, trigger navigation immediately with returned ride_offer_id
+        if (data.ride_offer_id && driverState === "accepted") {
+          navigateToTracking(data.ride_offer_id);
+        }
+      } else {
+        console.warn("⚠️ Server rejected proposal acceptance.");
+        // Rollback state if proposal acceptance fails
+        setUserAccepted(false);
+        setMyDbStatus("searching");
+      }
     } catch (err) {
       console.error("❌ Network error during proposal acceptance:", err.message);
+      setUserAccepted(false);
+      setMyDbStatus("searching");
     }
   };
 
@@ -270,7 +285,7 @@ export default function PickupProposalScreen({ navigation }) {
             <Text style={[
               styles.statusTag, 
               myDbStatus === "accepted" ? styles.statusAccepted : 
-              myDbStatus === "matched" ? styles.statusMatched : 
+              (myDbStatus === "matched" || myDbStatus === "searching") ? styles.statusMatched : 
               styles.statusPending
             ]}>
               {myDbStatus.toUpperCase()}
@@ -286,7 +301,7 @@ export default function PickupProposalScreen({ navigation }) {
               <Text style={[
                 styles.statusTag, 
                 rider.status === "ACCEPTED" ? styles.statusAccepted : 
-                rider.status === "MATCHED" ? styles.statusMatched : 
+                (rider.status === "MATCHED" || rider.status === "SEARCHING") ? styles.statusMatched : 
                 styles.statusPending
               ]}>
                 {rider.status}
