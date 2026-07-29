@@ -21,11 +21,6 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.015,
 };
 
-const MEETUP_LOCATION = {
-  latitude: 9.0220,
-  longitude: 38.8450,
-};
-
 // ------------------------------------------------------------------
 // MEMOIZED MAP VIEW
 // ------------------------------------------------------------------
@@ -48,15 +43,24 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
         </Marker>
       )}
 
-      <Marker coordinate={meetupLocation} title="Pickup Hub" description="Corridor Meeting Point">
-        <View style={styles.pickupMarker}>
-          <MaterialCommunityIcons name="map-marker-radius" size={22} color="#FFF" />
-        </View>
-      </Marker>
+      {meetupLocation && meetupLocation.latitude && (
+        <Marker 
+          coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
+          title={meetupLocation.name || "Pickup Hub"} 
+          description="Corridor Meeting Point"
+        >
+          <View style={styles.pickupMarker}>
+            <MaterialCommunityIcons name="map-marker-radius" size={22} color="#FFF" />
+          </View>
+        </Marker>
+      )}
 
-      {currentLocation && (
+      {currentLocation && meetupLocation && meetupLocation.latitude && (
         <Polyline
-          coordinates={[currentLocation, meetupLocation]}
+          coordinates={[
+            currentLocation, 
+            { latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }
+          ]}
           strokeColor="#2F4F4F"
           strokeWidth={4}
           lineDashPattern={[6, 6]}
@@ -77,15 +81,20 @@ export default function PickupProposalScreen({ navigation }) {
   const [driverState, setDriverState] = useState("pending");
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
+  
+  // 🎯 Dynamic Meetup Hub State
+  const [meetupHub, setMeetupHub] = useState({
+    name: "Resolving Hub...",
+    latitude: DEFAULT_LOCATION.latitude,
+    longitude: DEFAULT_LOCATION.longitude
+  });
 
   const mapRef = useRef(null);
 
-  // Define navigation wrapper safely
   const navigateToTracking = useCallback(() => {
     navigation.replace("LiveTracking");
   }, [navigation]);
 
-  // GPS Resolution
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -104,10 +113,6 @@ export default function PickupProposalScreen({ navigation }) {
               longitudeDelta: 0.015,
             };
             setCurrentLocation(coords);
-            mapRef.current?.fitToCoordinates([coords, MEETUP_LOCATION], {
-              edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-              animated: true,
-            });
           }
         }
       } catch (err) {
@@ -117,26 +122,26 @@ export default function PickupProposalScreen({ navigation }) {
     return () => { isMounted = false; };
   }, []);
 
-  // Countdown Timer
   useEffect(() => {
     if (timeLeft <= 0) return;
     const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // Status Polling driven by AuthContext user_id
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
 
-    async function checkProposalStatus() {
+    
+   async function checkProposalStatus() {
       if (!isSubscribed || !currentUserId) return;
 
       try {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
-        const res = await fetch(`${API_URL}/api/rides/pool-status/${currentUserId}`, {
+        // 🎯 USE THE NEW STRICT ENDPOINT
+        const res = await fetch(`${API_URL}/api/rides/proposal-manifest/${currentUserId}`, {
           signal: controller.signal,
         });
         clearTimeout(abortTimeout);
@@ -151,47 +156,29 @@ export default function PickupProposalScreen({ navigation }) {
           const data = await res.json();
           const passengers = data.passengers || [];
 
-          const acceptedPassengersList = data.accepted_passengers || data.acceptedPassengers || data.ride_offer?.accepted_passengers || [];
-          const normalizedAcceptedIds = acceptedPassengersList.map((id) => parseInt(id, 10));
+          // Hub is now cleanly provided by backend
+          if (data.hub && data.hub.latitude) {
+            setMeetupHub(data.hub);
+          }
 
+          const normalizedAcceptedIds = (data.accepted_passengers || []).map(id => parseInt(id, 10));
           const isUserAcceptedInOffer = normalizedAcceptedIds.includes(currentUserId);
-          const myRow = passengers.find(
-            (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
-          );
           
+          const myRow = passengers.find(p => parseInt(p.user_id, 10) === currentUserId);
           const myRoutePoolStatus = myRow ? (myRow.status || "matched").toLowerCase().trim() : "matched";
           const rawMyStatus = (userAccepted || isUserAcceptedInOffer) ? "accepted" : myRoutePoolStatus;
 
           setMyDbStatus(rawMyStatus);
           if (rawMyStatus === "accepted") setUserAccepted(true);
-
-          const driverStatus = (data.driver_status || "").toLowerCase();
-          const rideOfferStatus = (data.ride_offer?.status || "").toLowerCase();
-          const generalStatus = (data.status || "").toLowerCase();
-
-          // 🎯 Fixed Auto-Navigate Threshold Check: 
-          // Only redirect when trip is physically underway, arrived, or completed.
-          // Ignored non-tracking states like "accepted" or "confirmed".
-          const isThresholdMet =
-            ["arrived", "in_trip", "departed", "completed"].includes(rawMyStatus) ||
-            ["arrived", "in_trip", "departed", "completed"].includes(driverStatus) ||
-            ["in_trip", "departed", "completed"].includes(rideOfferStatus) ||
-            ["in_trip", "departed", "completed"].includes(generalStatus);
-
-          if (isThresholdMet) {
-            navigateToTracking();
-            return;
-          }
-
           if (data.driver_status) setDriverState(data.driver_status);
 
-          // Co-Riders Manifest Parse
           if (Array.isArray(passengers)) {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
             const parsedCoRiders = passengers
-              .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
+              // Exclude current user
+              .filter(p => parseInt(p.user_id, 10) !== currentUserId)
               .map((p, idx) => {
-                const pId = parseInt(p.user_id || p.userId || p.id, 10);
+                const pId = parseInt(p.user_id, 10);
                 const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
                 const pRoutePoolStatus = (p.status || "matched").toLowerCase().trim();
 
@@ -208,7 +195,7 @@ export default function PickupProposalScreen({ navigation }) {
           }
         }
       } catch (err) {
-        // Suppress temporary network drops
+        // Suppress network drops
       } finally {
         if (isSubscribed) {
           setInitialCheckDone(true);
@@ -227,18 +214,13 @@ export default function PickupProposalScreen({ navigation }) {
   const handleAcceptProposal = async () => {
     setUserAccepted(true);
     setMyDbStatus("accepted");
-
     try {
       const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: currentUserId }),
       });
-
-      const data = await response.json();
-      if (!response.ok) {
-        console.warn("⚠️ Server rejected proposal acceptance:", data);
-      }
+      if (!response.ok) console.warn("⚠️ Server rejected proposal acceptance.");
     } catch (err) {
       console.error("❌ Network error during proposal acceptance:", err.message);
     }
@@ -248,7 +230,7 @@ export default function PickupProposalScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       <View style={styles.mapContainer}>
         {initialCheckDone ? (
-          <MemoizedMap currentLocation={currentLocation} meetupLocation={MEETUP_LOCATION} mapRef={mapRef} />
+          <MemoizedMap currentLocation={currentLocation} meetupLocation={meetupHub} mapRef={mapRef} />
         ) : (
           <View style={styles.mapPlaceholder}>
             <ActivityIndicator size="small" color="#2F4F4F" />
@@ -268,7 +250,7 @@ export default function PickupProposalScreen({ navigation }) {
         </View>
 
         <Text style={styles.subtitle}>
-          Meetup at <Text style={styles.boldText}>Bole Station Stop B</Text>
+          Meetup at <Text style={styles.boldText}>{meetupHub.name}</Text>
         </Text>
 
         <View style={styles.rosterContainer}>

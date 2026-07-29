@@ -18,30 +18,17 @@ const API_URL = "http://192.168.63.52:5000";
 const DEFAULT_LOCATION = {
   latitude: 9.0220,
   longitude: 38.8450,
-  latitudeDelta: 0.015,
-  longitudeDelta: 0.015,
+  latitudeDelta: 0.02,
+  longitudeDelta: 0.02,
 };
 
-const MEETUP_LOCATION = {
-  latitude: 9.0220,
-  longitude: 38.8450,
-};
-
-// ------------------------------------------------------------------
-// HELPER TO SAFELY EXTRACT STRINGS FROM OBJECTS OR STRINGS
-// ------------------------------------------------------------------
-const parseHubName = (hubData, fallbackId, defaultText) => {
-  if (!hubData) return defaultText;
+const parseHubName = (hubData, fallbackText) => {
+  if (!hubData) return fallbackText;
   if (typeof hubData === "string") return hubData;
-  if (typeof hubData === "object") {
-    return hubData.name || hubData.title || (fallbackId ? `Hub #${fallbackId}` : defaultText);
-  }
-  return defaultText;
+  if (typeof hubData === "object") return hubData.name || hubData.title || fallbackText;
+  return fallbackText;
 };
 
-// ------------------------------------------------------------------
-// MEMOIZED MAP VIEW
-// ------------------------------------------------------------------
 const TrackingMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
   return (
     <MapView
@@ -60,13 +47,15 @@ const TrackingMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
         </Marker>
       )}
 
-      <Marker coordinate={meetupLocation} title="Pickup Hub Station">
-        <View style={styles.pickupMarker}>
-          <MaterialCommunityIcons name="bus-stop" size={22} color="#FFF" />
-        </View>
-      </Marker>
+      {meetupLocation && (
+        <Marker coordinate={meetupLocation} title="Pickup Hub Station">
+          <View style={styles.pickupMarker}>
+            <MaterialCommunityIcons name="bus-stop" size={22} color="#FFF" />
+          </View>
+        </Marker>
+      )}
 
-      {currentLocation && (
+      {currentLocation && meetupLocation && (
         <Polyline
           coordinates={[currentLocation, meetupLocation]}
           strokeColor="#10B981"
@@ -80,16 +69,17 @@ const TrackingMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
 export default function LiveTrackingScreen({ route, navigation }) {
   const { user } = useAuth();
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
-  
   const rideOfferId = route?.params?.rideOfferId || 0;
 
   const [myStatus, setMyStatus] = useState("accepted");
-  const [driverState, setDriverState] = useState("en_route");
+  const [driverState, setDriverState] = useState("accepted");
+  const [driverName, setDriverName] = useState("Assigned Driver");
+  const [vehicleInfo, setVehicleInfo] = useState("Corridor Shuttle");
   const [coRiders, setCoRiders] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
-  
-  // Dynamic Hub Names
+  const [meetupLocation, setMeetupLocation] = useState(DEFAULT_LOCATION);
+
   const [pickupHubName, setPickupHubName] = useState("Fetching Pickup Hub...");
   const [dropoffHubName, setDropoffHubName] = useState("Fetching Destination...");
 
@@ -99,7 +89,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
     navigation.replace("TripDeparture");
   }, [navigation]);
 
-  // GPS Resolution
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -110,29 +99,24 @@ export default function LiveTrackingScreen({ route, navigation }) {
           const coords = {
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.015,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
           };
           setCurrentLocation(coords);
-          mapRef.current?.fitToCoordinates([coords, MEETUP_LOCATION], {
-            edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-            animated: true,
-          });
         }
       } catch (err) {
-        console.log("📍 Tracking map location skip:", err.message);
+        console.log("📍 Location skip:", err.message);
       }
     })();
     return () => { isMounted = false; };
   }, []);
 
-  // Poll route_pool status using endpoint structure
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
 
     async function fetchTrackingStatus() {
-      if (!isSubscribed || !currentUserId) return;
+      if (!isSubscribed || !currentUserId || !rideOfferId) return;
 
       try {
         const res = await fetch(`${API_URL}/api/rides/passenger-tracking/${rideOfferId}/${currentUserId}`);
@@ -140,13 +124,19 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
         const data = await res.json();
         if (isSubscribed) {
-          
-          // Safe Parsing for Hub Names preventing object render crash
-          const resolvedPickup = parseHubName(data.pickup_hub || data.pickup_name, data.pickup_hub_id, "Pickup Hub");
-          const resolvedDropoff = parseHubName(data.dropoff_hub || data.dropoff_name, data.dropoff_hub_id, "Destination Hub");
+          setPickupHubName(parseHubName(data.pickup_hub, "Pickup Hub"));
+          setDropoffHubName(parseHubName(data.dropoff_hub, "Destination Hub"));
 
-          setPickupHubName(resolvedPickup);
-          setDropoffHubName(resolvedDropoff);
+          if (data.driverName) setDriverName(data.driverName);
+          if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
+          if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
+
+          if (data.pickup_lat && data.pickup_lng) {
+            setMeetupLocation({
+              latitude: parseFloat(data.pickup_lat),
+              longitude: parseFloat(data.pickup_lng),
+            });
+          }
 
           const passengers = data.passengers || [];
           const myRow = passengers.find(
@@ -155,7 +145,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
           const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
           
-          // AUTO-NAVIGATE to TripDepartureScreen once in_trip
           if (rawMyStatus === "in_trip") {
             navigateToDeparture();
             return;
@@ -163,25 +152,20 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
           setMyStatus(rawMyStatus);
 
-          if (data.driver_status) {
-            setDriverState(data.driver_status.toLowerCase());
-          }
-
-          // Parse Co-Rider List with blue/green status tags
           const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
           const parsedCoRiders = passengers
             .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
             .map((p, idx) => ({
               id: parseInt(p.user_id || p.userId || p.id, 10),
-              name: `Rider ${p.user_id || p.userId || p.id}`,
-              status: (p.status || "matched").toUpperCase(),
+              name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
+              status: (p.status || "accepted").toUpperCase(),
               color: colorPalette[idx % colorPalette.length],
             }));
 
           setCoRiders(parsedCoRiders);
         }
       } catch (err) {
-        // Suppress polling error visually, will retry
+        // Suppress network polling drops
       } finally {
         if (isSubscribed) {
           timerId = setTimeout(fetchTrackingStatus, 3000);
@@ -196,7 +180,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
     };
   }, [currentUserId, rideOfferId, navigateToDeparture]);
 
-  // Signal Arrival - instantly updates UI with server response
   const handleSignalArrival = async () => {
     setIsSubmitting(true);
     try {
@@ -215,20 +198,18 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
       setMyStatus("arrived");
 
-      // Instantly update matrix from POST response
       if (data.passengers && Array.isArray(data.passengers)) {
         const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
         const instantCoRiders = data.passengers
-          .filter((p) => (p.userId || p.user_id) !== currentUserId)
+          .filter((p) => parseInt(p.userId || p.user_id, 10) !== currentUserId)
           .map((p, idx) => ({
-            id: p.userId || p.user_id,
-            name: `Rider ${p.userId || p.user_id}`,
+            id: parseInt(p.userId || p.user_id, 10),
+            name: p.full_name || `Rider ${p.userId || p.user_id}`,
             status: (p.status || "arrived").toUpperCase(),
             color: colorPalette[idx % colorPalette.length],
           }));
         setCoRiders(instantCoRiders);
       }
-
     } catch (err) {
       Alert.alert("Network Error", "Failed to reach server. Please try again.");
     } finally {
@@ -241,7 +222,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.mapContainer}>
-        <TrackingMap currentLocation={currentLocation} meetupLocation={MEETUP_LOCATION} mapRef={mapRef} />
+        <TrackingMap currentLocation={currentLocation} meetupLocation={meetupLocation} mapRef={mapRef} />
       </View>
 
       <View style={styles.panel}>
@@ -254,7 +235,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* Dynamic Route Corridor Card */}
+        {/* Route Corridor Details */}
         <View style={styles.routeCard}>
           <View style={styles.routeItem}>
             <Ionicons name="location-sharp" size={18} color="#10B981" />
@@ -275,14 +256,16 @@ export default function LiveTrackingScreen({ route, navigation }) {
           </View>
         </View>
 
+        {/* Driver Card */}
         <View style={styles.driverCard}>
           <Ionicons name="car" size={22} color="#2F4F4F" />
           <View style={{ marginLeft: 10 }}>
-            <Text style={styles.driverLabel}>Corridor Shuttle</Text>
-            <Text style={styles.driverSub}>Status: <Text style={styles.boldText}>{driverState.toUpperCase()}</Text></Text>
+            <Text style={styles.driverLabel}>{driverName} • {vehicleInfo}</Text>
+            <Text style={styles.driverSub}>Driver Status: <Text style={styles.boldText}>{driverState.toUpperCase()}</Text></Text>
           </View>
         </View>
 
+        {/* Co-Riders Matrix */}
         <View style={styles.rosterContainer}>
           <Text style={styles.sectionHeader}>Co-Riders Presence Matrix</Text>
           
@@ -290,7 +273,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
             <View style={[styles.avatar, { backgroundColor: "#2F4F4F" }]}>
               <Text style={styles.avatarText}>YOU</Text>
             </View>
-            <Text style={styles.riderName}>You (User {currentUserId})</Text>
+            <Text style={styles.riderName}>{user?.full_name || `You (User ${currentUserId})`}</Text>
             <Text style={[styles.statusTag, isArrived ? styles.tagArrived : styles.tagAccepted]}>
               {myStatus.toUpperCase()}
             </Text>
@@ -299,7 +282,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
           {coRiders.map((rider) => (
             <View key={rider.id} style={styles.riderRow}>
               <View style={[styles.avatar, { backgroundColor: rider.color }]}>
-                <Text style={styles.avatarText}>{rider.id}</Text>
+                <Text style={styles.avatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
               </View>
               <Text style={styles.riderName}>{rider.name}</Text>
               <Text style={[
@@ -347,14 +330,7 @@ const styles = StyleSheet.create({
   badgeAccepted: { backgroundColor: "#E3F2FD" },
   badgeArrived: { backgroundColor: "#E8F5E9" },
   badgeText: { fontSize: 11, fontWeight: "700", color: "#2F4F4F" },
-  routeCard: {
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
-    padding: 12,
-    marginVertical: 12,
-    borderWidth: 1,
-    borderColor: "#EAEAEA",
-  },
+  routeCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 12, borderWidth: 1, borderColor: "#EAEAEA" },
   routeItem: { flexDirection: "row", alignItems: "center" },
   routeLabel: { fontSize: 10, fontWeight: "700", color: "#888", letterSpacing: 0.5 },
   routeValue: { fontSize: 14, fontWeight: "700", color: "#1A1A1A", marginTop: 1 },

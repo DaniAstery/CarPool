@@ -84,12 +84,7 @@ export function useRideGateway({ userId, userRole, navigationRef, enabled = true
             return;
           }
 
-          // LiveTracking is strictly reserved for users explicitly accepted in an active trip phase
-          if (isAcceptedPassenger && ["accepted", "in_trip", "intransit"].includes(status)) {
-            lastRoutedStateRef.current = stateFingerprint;
-            navigationRef.navigate("LiveTracking", { userId, rideOfferId });
-            return;
-          }
+        
 
           switch (status) {
             case "searching":

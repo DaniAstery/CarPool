@@ -27,7 +27,7 @@ import WaitingForPassengersScreen from "./src/screens/Driver/WaitingForPassenger
 import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen"; 
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
-
+import HomeScreen from "./src/screens/HomeScreen";
 const Stack = createNativeStackNavigator();
 
 // 📍 GLOBAL NAVIGATION REF (Allows NavigationGateway to trigger navigation)
@@ -88,6 +88,7 @@ function NavigationGateway() {
             <Stack.Screen name="TripDeparture" component={TripDepartureScreen} />
             <Stack.Screen name="TripCompletion" component={TripCompletionScreen} />
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
+             <Stack.Screen name="Home" component={HomeScreen} />
           </>
         )}
 
