@@ -177,32 +177,31 @@ export default function NavigateToPickup({ navigation, route }) {
   }, [currentDriverId]);
 
   // 🎯 5. ACTION HANDLERS (Arrival & Trip Start)
-  const handleArrived = async () => {
-    setIsActionLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/rides/arrive`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ride_offer_id: rideOfferId,
-          driver_id: currentDriverId,
-        }),
-      });
+    const handleArrived = async () => {
+      setIsActionLoading(true);
+      try {
+        const res = await fetch(`${API_URL}/api/rides/arrive`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            driver_id: currentDriverId, // 👈 Only driver_id is needed now
+          }),
+        });
 
-      const responseData = await res.json();
+        const data = await res.json();
 
-      if (res.ok) {
-        setHasArrived(true);
-        Alert.alert("Arrival Confirmed", "Passengers have been notified of your arrival.");
-      } else {
-        Alert.alert("Update Failed", responseData.error || "Could not confirm arrival.");
+        if (res.ok) {
+          console.log("✅ Driver arrival recorded:", data);
+          // Proceed to update local state or UI
+        } else {
+          console.warn("⚠️ Arrival update failed:", data.error);
+        }
+      } catch (err) {
+        console.error("❌ Network error sending arrival update:", err.message);
+      } finally {
+        setIsActionLoading(false);
       }
-    } catch (error) {
-      Alert.alert("Network Error", "Could not reach Corridor routing hub.");
-    } finally {
-      setIsActionLoading(false);
-    }
-  };
+    };
 
   const handleStartTrip = async () => {
     setIsActionLoading(true);
