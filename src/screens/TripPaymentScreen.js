@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,45 +7,67 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Linking,
 } from "react-native";
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
+import { useAuth } from "../AuthContext";
 
-export default function TripPaymentScreen({ navigation, route }) {
-  const fixedPrice = route?.params?.fixedPrice || 80;
-  const corridor = route?.params?.corridor || "Megenagna → Bole";
-  const driverName = route?.params?.driverName || "Dawit Mengistu";
-  const driverPhone = route?.params?.driverPhone || "0911234567";
+export default function TripPaymentScreen({ navigation }) {
+  const { user } = useAuth();
+  const currentUserId = parseInt(user?.id || user?.user_id, 10);
 
+  const [fixedPrice, setFixedPrice] = useState(80);
+  const [corridor, setCorridor] = useState("Loading corridor...");
+  const [driverName, setDriverName] = useState("Assigned Driver");
+  const [driverPhone, setDriverPhone] = useState("");
+  const [isLoadingDetails, setIsLoadingDetails] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Fetch payment info dynamically based on the logged-in user ID
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchPaymentDetailsByUser() {
+      if (!currentUserId) {
+        setIsLoadingDetails(false);
+        setCorridor("User ID Not Found");
+        return;
+      }
+      try {
+        const res = await fetch(`http://192.168.1.3:5000/api/rides/payment-details-by-user/${currentUserId}`);
+        const data = await res.json();
+        if (res.ok && data.success && isMounted) {
+          if (data.fixedPrice) setFixedPrice(data.fixedPrice);
+          if (data.corridor) setCorridor(data.corridor);
+          if (data.driverName) setDriverName(data.driverName);
+          if (data.driverPhone) setDriverPhone(data.driverPhone);
+        } else if (isMounted) {
+          setCorridor("No Active Route Found");
+        }
+      } catch (err) {
+        console.log("⚠️ Failed to fetch payment details:", err.message);
+        if (isMounted) setCorridor("Connection Error");
+      } finally {
+        if (isMounted) setIsLoadingDetails(false);
+      }
+    }
+    fetchPaymentDetailsByUser();
+    return () => { isMounted = false; };
+  }, [currentUserId]);
+
   const handleTelebirrPay = async () => {
+    if (!driverPhone || driverPhone === "Phone Not Available") {
+      Alert.alert("Notice", "Driver phone number is not available.");
+      return;
+    }
+
     setIsProcessing(true);
     try {
-      // 1. Copy driver phone number to clipboard instantly
       await Clipboard.setStringAsync(driverPhone);
-
-      // 2. Telebirr package/scheme intent
-      const telebirrAndroidScheme = "cn.tydic.ethiopay://";
-      const telebirrIOSScheme = "telebirr://";
-      const targetScheme = Platform.OS === "ios" ? telebirrIOSScheme : telebirrAndroidScheme;
-
-      const supported = await Linking.canOpenURL(targetScheme);
-
-      setTimeout(async () => {
+      setTimeout(() => {
         setIsProcessing(false);
-        if (supported) {
-          await Linking.openURL(targetScheme);
-        } else {
-          // Fallback to USSD code or dialer if app scheme isn't directly caught
-          Linking.openURL("tel:*127#");
-        }
-
-        // Show confirmation prompt that redirects home after they return
         Alert.alert(
-          "Number Copied! 📋",
-          `Driver's phone number (${driverPhone}) has been copied to your clipboard. Paste it into Telebirr to complete your ETB ${fixedPrice} payment.`,
+          "Telebirr Number Copied! 📋",
+          `Driver phone number (${driverPhone}) copied to clipboard. Open Telebirr and paste it to transfer ETB ${fixedPrice}.`,
           [
             {
               text: "I Have Paid",
@@ -59,10 +81,10 @@ export default function TripPaymentScreen({ navigation, route }) {
           ],
           { cancelable: false }
         );
-      }, 1000);
+      }, 600);
     } catch (err) {
       setIsProcessing(false);
-      Alert.alert("Notice", `Driver phone ${driverPhone} copied. Please open Telebirr manually to transfer.`);
+      Alert.alert("Error", "Failed to copy number to clipboard.");
     }
   };
 
@@ -88,7 +110,7 @@ export default function TripPaymentScreen({ navigation, route }) {
           },
         ]
       );
-    }, 1000);
+    }, 600);
   };
 
   return (
@@ -96,13 +118,15 @@ export default function TripPaymentScreen({ navigation, route }) {
       {/* Header Context Bar */}
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Settle Split Fare</Text>
-        <Text style={styles.headerSubtitle}>Tap below to copy details and launch your payment app</Text>
+        <Text style={styles.headerSubtitle}>Tap below to copy details and pay manually</Text>
       </View>
 
       {/* Itemized Fare Receipt Card */}
       <View style={styles.receiptCard}>
         <Text style={styles.receiptLabel}>TRANSIT CORRIDOR</Text>
-        <Text style={styles.receiptValue}>{corridor}</Text>
+        <Text style={styles.receiptValue}>
+          {isLoadingDetails ? "Loading corridor..." : corridor}
+        </Text>
         
         <View style={styles.dividerLine} />
         
@@ -112,9 +136,9 @@ export default function TripPaymentScreen({ navigation, route }) {
         </View>
       </View>
 
-      <Text style={styles.selectionSectionLabel}>Choose Payment App</Text>
+      <Text style={styles.selectionSectionLabel}>Choose Payment Method</Text>
 
-      {/* 💳 TELEBIRR FAST LAUNCH BUTTON */}
+      {/* 💳 TELEBIRR COPY BUTTON */}
       <TouchableOpacity
         style={styles.paymentMethodCard}
         activeOpacity={0.85}
@@ -123,7 +147,9 @@ export default function TripPaymentScreen({ navigation, route }) {
       >
         <View style={styles.driverDetailSnippet}>
           <Text style={styles.driverSnippetLabel}>TELEBIRR DESTINATION ACCOUNT</Text>
-          <Text style={styles.driverSnippetValue}>{driverName} ({driverPhone})</Text>
+          <Text style={styles.driverSnippetValue}>
+            {driverName} ({driverPhone || "Loading..."})
+          </Text>
         </View>
 
         <View style={styles.methodInterfaceRow}>
@@ -133,14 +159,14 @@ export default function TripPaymentScreen({ navigation, route }) {
             </View>
             <View style={styles.methodMeta}>
               <Text style={styles.methodTitleName}>Pay via telebirr</Text>
-              <Text style={styles.methodSubtext}>Copies number & opens Telebirr automatically</Text>
+              <Text style={styles.methodSubtext}>Copies driver phone number to clipboard</Text>
             </View>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
         </View>
       </TouchableOpacity>
 
-      {/* 🏦 CBE APP FAST LAUNCH BUTTON */}
+      {/* 🏦 CBE APP COPY BUTTON */}
       <TouchableOpacity
         style={styles.paymentMethodCard}
         activeOpacity={0.85}
@@ -159,7 +185,7 @@ export default function TripPaymentScreen({ navigation, route }) {
             </View>
             <View style={styles.methodMeta}>
               <Text style={styles.methodTitleName}>Pay via CBE Birr</Text>
-              <Text style={styles.methodSubtext}>Copies account number for mobile banking</Text>
+              <Text style={styles.methodSubtext}>Copies CBE account number to clipboard</Text>
             </View>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
@@ -169,7 +195,7 @@ export default function TripPaymentScreen({ navigation, route }) {
       {isProcessing && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#10B981" />
-          <Text style={styles.loadingText}>Preparing payment bridge...</Text>
+          <Text style={styles.loadingText}>Copying payment details...</Text>
         </View>
       )}
     </SafeAreaView>
