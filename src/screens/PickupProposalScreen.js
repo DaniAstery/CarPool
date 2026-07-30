@@ -217,6 +217,12 @@ export default function PickupProposalScreen({ navigation }) {
     };
   }, [currentUserId, navigateToTracking, navigation, userAccepted]);
 
+      useEffect(() => {
+          console.log("🔍 [PickupProposal Mount] Raw Auth user object:", user);
+          console.log("🎯 [PickupProposal Mount] Resolved currentUserId:", currentUserId);
+        }, [user, currentUserId]);
+
+
   const handleAcceptProposal = async () => {
     setUserAccepted(true);
     setMyDbStatus("accepted");
