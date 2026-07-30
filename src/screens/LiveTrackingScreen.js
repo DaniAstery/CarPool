@@ -22,13 +22,6 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.02,
 };
 
-const parseHubName = (hubData, fallbackText) => {
-  if (!hubData) return fallbackText;
-  if (typeof hubData === "string") return hubData;
-  if (typeof hubData === "object") return hubData.name || hubData.title || fallbackText;
-  return fallbackText;
-};
-
 const TrackingMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
   return (
     <MapView
@@ -86,8 +79,8 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const mapRef = useRef(null);
 
   const navigateToDeparture = useCallback(() => {
-    navigation.replace("TripDeparture");
-  }, [navigation]);
+    navigation.replace("TripDeparture", { rideOfferId, userId: currentUserId });
+  }, [navigation, rideOfferId, currentUserId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -96,13 +89,12 @@ export default function LiveTrackingScreen({ route, navigation }) {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          const coords = {
+          setCurrentLocation({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
             latitudeDelta: 0.02,
             longitudeDelta: 0.02,
-          };
-          setCurrentLocation(coords);
+          });
         }
       } catch (err) {
         console.log("📍 Location skip:", err.message);
@@ -115,67 +107,66 @@ export default function LiveTrackingScreen({ route, navigation }) {
     let isSubscribed = true;
     let timerId;
 
-    async function fetchTrackingStatus() {
-  if (!isSubscribed || !currentUserId || !rideOfferId) return;
+    async function fetchHubPresenceStatus() {
+      if (!isSubscribed || !currentUserId || !rideOfferId) return;
 
-  try {
-    const res = await fetch(`${API_URL}/api/rides/passenger-tracking/${rideOfferId}/${currentUserId}`);
-    if (!res.ok) return;
+      try {
+        // Dedicated lightweight status endpoint for pre-departure presence tracking
+        const res = await fetch(`${API_URL}/api/rides/presence-status/${rideOfferId}/${currentUserId}`);
+        if (!res.ok) return;
 
-    const data = await res.json();
-    if (isSubscribed) {
-      // Correctly reads backend properties
-      if (data.pickup_hub) setPickupHubName(data.pickup_hub);
-      if (data.dropoff_hub) setDropoffHubName(data.dropoff_hub);
+        const data = await res.json();
+        if (isSubscribed && data.success) {
+          if (data.pickup_hub) setPickupHubName(data.pickup_hub);
+          if (data.dropoff_hub) setDropoffHubName(data.dropoff_hub);
+          if (data.driverName) setDriverName(data.driverName);
+          if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
+          if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
 
-      if (data.driverName) setDriverName(data.driverName);
-      if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
-      if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
+          if (data.pickup_lat && data.pickup_lng) {
+            setMeetupLocation({
+              latitude: parseFloat(data.pickup_lat),
+              longitude: parseFloat(data.pickup_lng),
+            });
+          }
 
-      if (data.pickup_lat && data.pickup_lng) {
-        setMeetupLocation({
-          latitude: parseFloat(data.pickup_lat),
-          longitude: parseFloat(data.pickup_lng),
-        });
+          const passengers = data.passengers || [];
+          const myRow = passengers.find(
+            (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
+          );
+
+          const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
+          
+          // Auto-transition to TripDeparture when driver starts the trip
+          if (rawMyStatus === "in_trip" || data.driver_status?.toLowerCase() === "in_trip") {
+            navigateToDeparture();
+            return;
+          }
+
+          setMyStatus(rawMyStatus);
+
+          const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+          const parsedCoRiders = passengers
+            .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
+            .map((p, idx) => ({
+              id: parseInt(p.user_id || p.userId || p.id, 10),
+              name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
+              status: (p.status || "accepted").toUpperCase(),
+              color: colorPalette[idx % colorPalette.length],
+            }));
+
+          setCoRiders(parsedCoRiders);
+        }
+      } catch (err) {
+        // Suppress background polling drops
+      } finally {
+        if (isSubscribed) {
+          timerId = setTimeout(fetchHubPresenceStatus, 3500);
+        }
       }
-
-      const passengers = data.passengers || [];
-      const myRow = passengers.find(
-        (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
-      );
-
-      const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
-      
-      // Auto-transition when trip starts
-      if (rawMyStatus === "in_trip") {
-        navigateToDeparture();
-        return;
-      }
-
-      setMyStatus(rawMyStatus);
-
-      const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-      const parsedCoRiders = passengers
-        .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
-        .map((p, idx) => ({
-          id: parseInt(p.user_id || p.userId || p.id, 10),
-          name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
-          status: (p.status || "accepted").toUpperCase(),
-          color: colorPalette[idx % colorPalette.length],
-        }));
-
-      setCoRiders(parsedCoRiders);
     }
-  } catch (err) {
-    // Suppress network polling drops
-  } finally {
-    if (isSubscribed) {
-      timerId = setTimeout(fetchTrackingStatus, 3000);
-    }
-  }
-}
 
-    fetchTrackingStatus();
+    fetchHubPresenceStatus();
     return () => {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
@@ -188,7 +179,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
       const response = await fetch(`${API_URL}/api/rides/signal-arrival`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: currentUserId }),
+        body: JSON.stringify({ user_id: currentUserId, ride_offer_id: rideOfferId }),
       });
 
       const data = await response.json();
@@ -231,7 +222,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
         <View style={styles.dragHandle} />
 
         <View style={styles.headerRow}>
-          <Text style={styles.title}>Live Ride Tracking</Text>
+          <Text style={styles.title}>Hub Presence & Matching</Text>
           <View style={[styles.statusBadge, isArrived ? styles.badgeArrived : styles.badgeAccepted]}>
             <Text style={styles.badgeText}>{myStatus.toUpperCase()}</Text>
           </View>
@@ -308,7 +299,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
             <ActivityIndicator size="small" color="#FFF" />
           ) : (
             <Text style={styles.actionButtonText}>
-              {isArrived ? "Waiting for others..." : "I've Arrived at Hub"}
+              {isArrived ? "Waiting for others at Hub..." : "I've Arrived at Hub"}
             </Text>
           )}
         </TouchableOpacity>

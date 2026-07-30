@@ -7,37 +7,78 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 
 export default function TripPaymentScreen({ navigation, route }) {
   const fixedPrice = route?.params?.fixedPrice || 80;
   const corridor = route?.params?.corridor || "Megenagna → Bole";
+  const driverName = route?.params?.driverName || "Dawit Mengistu";
+  const driverPhone = route?.params?.driverPhone || "0911234567";
 
-  // State Management 
-  const [selectedMethod, setSelectedMethod] = useState("telebirr"); 
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Simulated Driver Payment Destination Records
-  const driverPaymentDetails = {
-    telebirr: { accountName: "Dawit Mengistu", accountNo: "0911****89" },
-    cbe: { accountName: "Dawit Mengistu Toola", accountNo: "100034******9012" }
+  const handleTelebirrPay = async () => {
+    setIsProcessing(true);
+    try {
+      // 1. Copy driver phone number to clipboard instantly
+      await Clipboard.setStringAsync(driverPhone);
+
+      // 2. Telebirr package/scheme intent
+      const telebirrAndroidScheme = "cn.tydic.ethiopay://";
+      const telebirrIOSScheme = "telebirr://";
+      const targetScheme = Platform.OS === "ios" ? telebirrIOSScheme : telebirrAndroidScheme;
+
+      const supported = await Linking.canOpenURL(targetScheme);
+
+      setTimeout(async () => {
+        setIsProcessing(false);
+        if (supported) {
+          await Linking.openURL(targetScheme);
+        } else {
+          // Fallback to USSD code or dialer if app scheme isn't directly caught
+          Linking.openURL("tel:*127#");
+        }
+
+        // Show confirmation prompt that redirects home after they return
+        Alert.alert(
+          "Number Copied! 📋",
+          `Driver's phone number (${driverPhone}) has been copied to your clipboard. Paste it into Telebirr to complete your ETB ${fixedPrice} payment.`,
+          [
+            {
+              text: "I Have Paid",
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: "Passenger" }],
+                });
+              },
+            },
+          ],
+          { cancelable: false }
+        );
+      }, 1000);
+    } catch (err) {
+      setIsProcessing(false);
+      Alert.alert("Notice", `Driver phone ${driverPhone} copied. Please open Telebirr manually to transfer.`);
+    }
   };
 
-  const handleSettlePayment = async () => {
+  const handleCbePay = async () => {
     setIsProcessing(true);
+    const cbeAccount = "1000349012901";
+    await Clipboard.setStringAsync(cbeAccount);
     
     setTimeout(() => {
       setIsProcessing(false);
-      
       Alert.alert(
-        "Payment Successful 🎉",
-        `ETB ${fixedPrice}.00 successfully processed via ${
-          selectedMethod === "telebirr" ? "telebirr" : "CBE App"
-        }.`,
+        "CBE Account Copied! 📋",
+        `CBE Account (${cbeAccount}) copied to clipboard. Transfer ETB ${fixedPrice} via CBE Birr or Mobile Banking.`,
         [
           {
-            text: "Done",
+            text: "I Have Paid",
             onPress: () => {
               navigation.reset({
                 index: 0,
@@ -47,7 +88,7 @@ export default function TripPaymentScreen({ navigation, route }) {
           },
         ]
       );
-    }, 2000);
+    }, 1000);
   };
 
   return (
@@ -55,7 +96,7 @@ export default function TripPaymentScreen({ navigation, route }) {
       {/* Header Context Bar */}
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Settle Split Fare</Text>
-        <Text style={styles.headerSubtitle}>Verify driver details and settle your transit balance</Text>
+        <Text style={styles.headerSubtitle}>Tap below to copy details and launch your payment app</Text>
       </View>
 
       {/* Itemized Fare Receipt Card */}
@@ -71,18 +112,18 @@ export default function TripPaymentScreen({ navigation, route }) {
         </View>
       </View>
 
-      <Text style={styles.selectionSectionLabel}>Select Payment Method & Destination</Text>
+      <Text style={styles.selectionSectionLabel}>Choose Payment App</Text>
 
-      {/* 💳 TELEBIRR OPTION WITH DRIVER CREDENTIALS FIRST */}
+      {/* 💳 TELEBIRR FAST LAUNCH BUTTON */}
       <TouchableOpacity
-        style={[styles.paymentMethodCard, selectedMethod === "telebirr" && styles.activeCardBorder]}
+        style={styles.paymentMethodCard}
         activeOpacity={0.85}
-        onPress={() => setSelectedMethod("telebirr")}
+        onPress={handleTelebirrPay}
+        disabled={isProcessing}
       >
-        {/* Driver Payment Account Container */}
-        <View style={[styles.driverDetailSnippet, selectedMethod === "telebirr" && styles.activeSnippetBg]}>
+        <View style={styles.driverDetailSnippet}>
           <Text style={styles.driverSnippetLabel}>TELEBIRR DESTINATION ACCOUNT</Text>
-          <Text style={styles.driverSnippetValue}>{driverPaymentDetails.telebirr.accountName} ({driverPaymentDetails.telebirr.accountNo})</Text>
+          <Text style={styles.driverSnippetValue}>{driverName} ({driverPhone})</Text>
         </View>
 
         <View style={styles.methodInterfaceRow}>
@@ -91,26 +132,24 @@ export default function TripPaymentScreen({ navigation, route }) {
               <MaterialCommunityIcons name="cellphone-wireless" size={22} color="#1D4ED8" />
             </View>
             <View style={styles.methodMeta}>
-              <Text style={styles.methodTitleName}>telebirr</Text>
-              <Text style={styles.methodSubtext}>Instant merchant transfer via mobile network</Text>
+              <Text style={styles.methodTitleName}>Pay via telebirr</Text>
+              <Text style={styles.methodSubtext}>Copies number & opens Telebirr automatically</Text>
             </View>
           </View>
-          <View style={styles.radioOutlineCircle}>
-            {selectedMethod === "telebirr" && <View style={styles.radioInnerCore} />}
-          </View>
+          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
         </View>
       </TouchableOpacity>
 
-      {/* 🏦 CBE APP / CBE BIRR OPTION WITH DRIVER CREDENTIALS FIRST */}
+      {/* 🏦 CBE APP FAST LAUNCH BUTTON */}
       <TouchableOpacity
-        style={[styles.paymentMethodCard, selectedMethod === "cbe" && styles.activeCardBorder]}
+        style={styles.paymentMethodCard}
         activeOpacity={0.85}
-        onPress={() => setSelectedMethod("cbe")}
+        onPress={handleCbePay}
+        disabled={isProcessing}
       >
-        {/* Driver Payment Account Container */}
-        <View style={[styles.driverDetailSnippet, selectedMethod === "cbe" && styles.activeSnippetBg]}>
+        <View style={styles.driverDetailSnippet}>
           <Text style={styles.driverSnippetLabel}>CBE ACCOUNT DESTINATION</Text>
-          <Text style={styles.driverSnippetValue}>{driverPaymentDetails.cbe.accountName} • {driverPaymentDetails.cbe.accountNo}</Text>
+          <Text style={styles.driverSnippetValue}>{driverName} • 1000349012901</Text>
         </View>
 
         <View style={styles.methodInterfaceRow}>
@@ -119,34 +158,20 @@ export default function TripPaymentScreen({ navigation, route }) {
               <FontAwesome5 name="university" size={18} color="#D97706" />
             </View>
             <View style={styles.methodMeta}>
-              <Text style={styles.methodTitleName}>CBE App / CBE Birr</Text>
-              <Text style={styles.methodSubtext}>Commercial Bank of Ethiopia Direct Transfer</Text>
+              <Text style={styles.methodTitleName}>Pay via CBE Birr</Text>
+              <Text style={styles.methodSubtext}>Copies account number for mobile banking</Text>
             </View>
           </View>
-          <View style={styles.radioOutlineCircle}>
-            {selectedMethod === "cbe" && <View style={styles.radioInnerCore} />}
-          </View>
+          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
         </View>
       </TouchableOpacity>
 
-      {/* FOOTER STICKY DISPATCH ACTION */}
-      <View style={styles.footerStickyLayout}>
-        <TouchableOpacity
-          style={[styles.primaryCheckoutButton, isProcessing && styles.disabledCheckoutBtn]}
-          activeOpacity={0.8}
-          onPress={handleSettlePayment}
-          disabled={isProcessing}
-        >
-          {isProcessing ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <View style={styles.btnInternalRow}>
-              <Ionicons name="lock-closed" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
-              <Text style={styles.checkoutBtnText}>CONFIRM & PAY ETB {fixedPrice}.00</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
+      {isProcessing && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#10B981" />
+          <Text style={styles.loadingText}>Preparing payment bridge...</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -164,23 +189,16 @@ const styles = StyleSheet.create({
   priceLabel: { fontSize: 14, fontWeight: "600", color: "#4B5563" },
   priceValueAmount: { fontSize: 22, fontWeight: "800", color: "#10B981" },
   selectionSectionLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12, marginLeft: 2 },
-  paymentMethodCard: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 14, padding: 14, marginBottom: 16, overflow: "hidden" },
-  activeCardBorder: { borderColor: "#10B981" },
-  driverDetailSnippet: { backgroundColor: "#F3F4F6", marginHorizontal: -14, marginTop: -14, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderColor: "#E5E7EB", marginBottom: 14 },
-  activeSnippetBg: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
-  driverSnippetLabel: { fontSize: 9, fontWeight: "800", color: "#6B7280", letterSpacing: 0.5 },
-  driverSnippetValue: { fontSize: 13, fontWeight: "700", color: "#111827", marginTop: 2 },
+  paymentMethodCard: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 14, padding: 14, marginBottom: 16, overflow: "hidden", shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.02, shadowRadius: 3, elevation: 1 },
+  driverDetailSnippet: { backgroundColor: "#ECFDF5", marginHorizontal: -14, marginTop: -14, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderColor: "#A7F3D0", marginBottom: 14 },
+  driverSnippetLabel: { fontSize: 9, fontWeight: "800", color: "#047857", letterSpacing: 0.5 },
+  driverSnippetValue: { fontSize: 13, fontWeight: "700", color: "#065F46", marginTop: 2 },
   methodInterfaceRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   cardLeftContent: { flexDirection: "row", alignItems: "center", flex: 1 },
   iconFrame: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   methodMeta: { marginLeft: 14, flex: 1 },
   methodTitleName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   methodSubtext: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  radioOutlineCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: "#D1D5DB", alignItems: "center", justifyContent: "center" },
-  radioInnerCore: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#10B981" },
-  footerStickyLayout: { position: "absolute", bottom: 24, left: 20, right: 20 },
-  primaryCheckoutButton: { backgroundColor: "#111827", borderRadius: 14, paddingVertical: 16, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 6, elevation: 4 },
-  disabledCheckoutBtn: { backgroundColor: "#9CA3AF" },
-  btnInternalRow: { flexDirection: "row", alignItems: "center" },
-  checkoutBtnText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", letterSpacing: 0.3 },
+  loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(255,255,255,0.8)", justifyContent: "center", alignItems: "center", zIndex: 99 },
+  loadingText: { marginTop: 10, fontSize: 14, fontWeight: "600", color: "#374151" }
 });
