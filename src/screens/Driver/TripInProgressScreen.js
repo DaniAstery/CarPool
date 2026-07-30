@@ -96,12 +96,12 @@ export default function TripInProgressScreen({ navigation, route }) {
   const handleFinishTrip = async () => {
     setSubmitting(true);
     try {
-      console.log(`📡 Sending transaction closeout matrix for Ride ID: [${rideOfferId}]`);
+      console.log(`📡 Sending transaction closeout matrix for Driver ID: [${driverId}]`);
 
       const response = await fetch(`${API_BASE_URL}/rides/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_offer_id: rideOfferId }),
+        body: JSON.stringify({ driver_id: driverId }), // Switched from ride_offer_id to driver_id
       });
 
       // Safely grab text payload to verify if we hit HTML or valid JSON data signatures
@@ -111,9 +111,12 @@ export default function TripInProgressScreen({ navigation, route }) {
         const result = JSON.parse(rawText);
         console.log("🏁 Ledger entry processed successfully on server engine layer.");
         
+        // Extract the resolved ride offer ID from backend response safely
+        const resolvedRideOfferId = result.rideOffer?.id || rideOfferId;
+
         // Push driver smoothly onto the earnings breakdown view screen card
         navigation.replace("TripEarningsSummary", {
-          rideOfferId: rideOfferId,
+          rideOfferId: resolvedRideOfferId,
           routeId: routeId,
           finalPrice: result.finalPrice,
           ridersCount: result.updatedRidersCount
@@ -138,7 +141,6 @@ export default function TripInProgressScreen({ navigation, route }) {
       setSubmitting(false);
     }
   };
-
   if (loading) {
     return (
       <View style={styles.centeredLoadingScreen}>

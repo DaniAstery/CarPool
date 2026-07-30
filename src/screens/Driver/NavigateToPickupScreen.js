@@ -203,48 +203,58 @@ export default function NavigateToPickup({ navigation, route }) {
       }
     };
 
-  const handleStartTrip = async () => {
-    setIsActionLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/rides/start-trip`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ride_offer_id: rideOfferId,
-          driver_id: currentDriverId,
-        }),
+const handleStartTrip = async () => {
+  setIsActionLoading(true);
+  try {
+    const res = await fetch(`${API_URL}/api/rides/start-trip`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        driver_id: currentDriverId, // 👈 Only driver_id is required now
+      }),
+    });
+
+    const responseData = await res.json();
+
+    if (res.ok) {
+      // 🎯 Safely parse ride_offer ID & route ID returned directly by Express/Postgres
+      const finalRideOfferId = parseInt(
+        responseData.ride_offer?.id || responseData.rideOfferId || rideOfferId,
+        10
+      );
+      const activeRouteId = responseData.ride_offer?.routeId || routeId;
+
+      console.log(`🚀 [Start Trip Success] Transitioning to TripInProgress for Ride Offer #${finalRideOfferId}`);
+
+      // Navigate to Trip In Progress Screen
+      navigation.replace("TripInProgress", {
+        routeId: activeRouteId,
+        route_id: activeRouteId,
+        rideOfferId: finalRideOfferId,
+        ride_offer_id: finalRideOfferId,
+        driverId: currentDriverId,
       });
-
-      const responseData = await res.json();
-
-      if (res.ok) {
-        const finalId = parseInt(responseData.rideOfferId || rideOfferId, 10);
-        
-        // Navigate to Trip In Progress Screen
-        navigation.replace("TripInProgress", {
-          routeId: routeId,
-          route_id: routeId,
-          rideOfferId: finalId,
-          ride_offer_id: finalId,
-          driverId: currentDriverId,
-        });
-      } else {
-        Alert.alert("Start Trip Failed", responseData.error || "Could not launch trip sequence.");
-      }
-    } catch (error) {
-      Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
-    } finally {
-      setIsActionLoading(false);
-    }
-  };
-
-  const handleMainActionButton = () => {
-    if (!hasArrived) {
-      handleArrived();
     } else {
-      handleStartTrip();
+      Alert.alert(
+        "Start Trip Failed", 
+        responseData.error || "Could not launch trip sequence."
+      );
     }
-  };
+  } catch (error) {
+    console.error("❌ Network error starting trip:", error);
+    Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
+  } finally {
+    setIsActionLoading(false);
+  }
+};
+
+const handleMainActionButton = () => {
+  if (!hasArrived) {
+    handleArrived();
+  } else {
+    handleStartTrip();
+  }
+};
 
   // Helper for status badge rendering
   const renderStatusBadge = (status) => {
