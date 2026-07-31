@@ -299,7 +299,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
             <ActivityIndicator size="small" color="#FFF" />
           ) : (
             <Text style={styles.actionButtonText}>
-              {isArrived ? "Waiting for others at Hub..." : "I've Arrived at Hub"}
+              {isArrived ? "Awaiting Co-Riders & Driver Dispatch" : "I've Arrived at Hub"}
             </Text>
           )}
         </TouchableOpacity>

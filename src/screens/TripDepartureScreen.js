@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, memo } from "react";
 import {
   View,
   Text,
@@ -11,12 +11,111 @@ import {
   Easing,
   ActivityIndicator,
   Alert,
+  Pressable,
+  BackHandler,
+  Platform,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
-import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://192.168.1.3:5000/api";
+
+const DEFAULT_COORDS = {
+  latitude: 9.0115,
+  longitude: 38.7945,
+};
+
+// ------------------------------------------------------------------
+// MEMOIZED UBER-STYLE TRIP MAP
+// ------------------------------------------------------------------
+const MemoizedTripMap = memo(({ rideDetails, isTripFinished, mapRef }) => {
+  return (
+    <MapView
+      ref={mapRef}
+      provider={PROVIDER_GOOGLE}
+      style={StyleSheet.absoluteFillObject}
+      initialRegion={{
+        ...DEFAULT_COORDS,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
+      }}
+      customMapStyle={cleanMinimalMapStyle}
+      showsUserLocation={false}
+      showsMyLocationButton={false}
+      showsCompass={false}
+      toolbarEnabled={false}
+      pitchEnabled={false}
+      moveOnMarkerPress={false}
+    >
+      {/* 🛣️ 1. Traveled Route Segment (Gray / Completed) */}
+      {!isTripFinished && rideDetails.carLat && rideDetails.carLng && (
+        <Polyline
+          coordinates={[
+            { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
+            { latitude: rideDetails.carLat, longitude: rideDetails.carLng },
+          ]}
+          strokeColor="#9CA3AF"
+          strokeWidth={4}
+          geodesic={true}
+        />
+      )}
+
+      {/* 🛣️ 2. Remaining Route Segment (Emerald Green / Active Path) */}
+      <Polyline
+        coordinates={[
+          isTripFinished || !rideDetails.carLat 
+            ? { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng } 
+            : { latitude: rideDetails.carLat, longitude: rideDetails.carLng },
+          { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
+        ]}
+        strokeColor={isTripFinished ? "#9CA3AF" : "#059669"}
+        strokeWidth={5}
+        geodesic={true}
+      />
+
+      {/* 📍 Origin / Pickup Marker */}
+      <Marker
+        coordinate={{ latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng }}
+        tracksViewChanges={false}
+        anchor={{ x: 0.5, y: 0.5 }}
+      >
+        <View style={styles.originMarkerPoint} />
+      </Marker>
+
+      {/* 🏁 Destination Marker */}
+      <Marker
+        coordinate={{ latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }}
+        tracksViewChanges={false}
+        anchor={{ x: 0.5, y: 1 }}
+      >
+        <View style={styles.destinationMarkerContainer}>
+          <View style={styles.destinationPinBubble}>
+            <Ionicons name="flag" size={12} color="#FFFFFF" />
+          </View>
+          <View style={styles.destinationPinTip} />
+        </View>
+      </Marker>
+
+      {/* 🚗 Active Moving Vehicle Marker */}
+      {!isTripFinished && rideDetails.carLat && rideDetails.carLng && (
+        <Marker
+          coordinate={{ latitude: rideDetails.carLat, longitude: rideDetails.carLng }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          zIndex={999}
+          tracksViewChanges={false}
+          rotation={rideDetails.carHeading || 0}
+        >
+          <View style={styles.activeCarWrapper}>
+            <View style={styles.carInnerBubble}>
+              <FontAwesome5 name="car-side" size={13} color="#FFFFFF" />
+            </View>
+          </View>
+        </Marker>
+      )}
+    </MapView>
+  );
+});
 
 export default function TripInProgressScreen({ navigation, route }) {
   const userId = route?.params?.userId || 1;
@@ -25,17 +124,19 @@ export default function TripInProgressScreen({ navigation, route }) {
   // Core States
   const [loading, setLoading] = useState(true);
   const [tripStatus, setTripStatus] = useState("in_trip");
+  const [isDrawerExpanded, setIsDrawerExpanded] = useState(false);
   const [rideDetails, setRideDetails] = useState({
     corridor: "Loading Corridor Axis...",
     driverName: "Assigning Driver...",
     vehicleInfo: "Syncing vehicle registration...",
     driverRating: "5.0",
     fixedPrice: 150,
-    coRidersCount: 0,
-    carLat: 9.0115,
-    carLng: 38.7945,
-    pickupLat: 9.0115,
-    pickupLng: 38.7945,
+    coRiders: [],
+    carLat: DEFAULT_COORDS.latitude,
+    carLng: DEFAULT_COORDS.longitude,
+    carHeading: 0,
+    pickupLat: DEFAULT_COORDS.latitude,
+    pickupLng: DEFAULT_COORDS.longitude,
     dropoffLat: 8.9985,
     dropoffLng: 38.7855,
     etaMinutes: "--",
@@ -44,8 +145,29 @@ export default function TripInProgressScreen({ navigation, route }) {
 
   const [pulseAnim] = useState(new Animated.Value(0));
   const mapRef = useRef(null);
+  const hasInitializedCamera = useRef(false);
 
-  // 1. INFINITE BANNER PULSE ANIMATION
+  const isTripFinished = tripStatus === "completed";
+
+  // 1. DISABLE ANDROID BACK BUTTON COMPLETELY DURING TRIP/CHECKOUT
+  useEffect(() => {
+    const backAction = () => {
+      // Returning true blocks the default back button action
+      return true;
+    };
+
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => backHandler.remove();
+  }, []);
+
+  // 2. AUTO-EXPAND DRAWER WHEN TRIP FINISHES
+  useEffect(() => {
+    if (isTripFinished) {
+      setIsDrawerExpanded(true);
+    }
+  }, [isTripFinished]);
+
+  // 3. INFINITE BANNER PULSE ANIMATION
   useEffect(() => {
     Animated.loop(
       Animated.timing(pulseAnim, {
@@ -55,9 +177,9 @@ export default function TripInProgressScreen({ navigation, route }) {
         useNativeDriver: true,
       })
     ).start();
-  }, []);
+  }, [pulseAnim]);
 
-  // 2. LIVE TELEMETRY & POLLING LOOP
+  // 4. LIVE TELEMETRY & POLLING LOOP
   useEffect(() => {
     let isMounted = true;
 
@@ -77,6 +199,19 @@ export default function TripInProgressScreen({ navigation, route }) {
             );
             if (trackRes.ok) {
               const trackData = await trackRes.json();
+              const rawPassengers = Array.isArray(trackData.passengers) ? trackData.passengers : [];
+              
+              const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+              const formattedCoRiders = rawPassengers.map((p, idx) => ({
+                id: p.user_id || idx,
+                name: p.full_name || p.name || `Rider ${p.user_id || idx}`,
+                color: colorPalette[idx % colorPalette.length],
+              }));
+
+              const newCarLat = parseFloat(trackData.carLatitude) || DEFAULT_COORDS.latitude;
+              const newCarLng = parseFloat(trackData.carLongitude) || DEFAULT_COORDS.longitude;
+              const newDropoffLat = parseFloat(trackData.dropoffLatitude) || 8.9985;
+              const newDropoffLng = parseFloat(trackData.dropoffLongitude) || 38.7855;
 
               setRideDetails({
                 corridor: trackData.corridor || "Transit Axis Corridor",
@@ -84,74 +219,67 @@ export default function TripInProgressScreen({ navigation, route }) {
                 vehicleInfo: trackData.vehicleInfo || "Vehicle Syncing...",
                 driverRating: trackData.driverRating || "4.9",
                 fixedPrice: trackData.finalPrice || statusData.finalPrice || 80,
-                coRidersCount:
-                  trackData.passengersCount ??
-                  (Array.isArray(trackData.passengers) ? trackData.passengers.length : 1),
-                carLat: parseFloat(trackData.carLatitude) || 9.0115,
-                carLng: parseFloat(trackData.carLongitude) || 38.7945,
-                pickupLat: parseFloat(trackData.pickupLatitude) || 9.0115,
-                pickupLng: parseFloat(trackData.pickupLongitude) || 38.7945,
-                dropoffLat: parseFloat(trackData.dropoffLatitude) || 8.9985,
-                dropoffLng: parseFloat(trackData.dropoffLongitude) || 38.7855,
+                coRiders: formattedCoRiders,
+                carLat: newCarLat,
+                carLng: newCarLng,
+                carHeading: trackData.heading || 0,
+                pickupLat: parseFloat(trackData.pickupLatitude) || DEFAULT_COORDS.latitude,
+                pickupLng: parseFloat(trackData.pickupLongitude) || DEFAULT_COORDS.longitude,
+                dropoffLat: newDropoffLat,
+                dropoffLng: newDropoffLng,
                 etaMinutes: trackData.etaMinutes ?? "--",
                 distanceRemainingKm: trackData.distanceRemainingKm ?? "--",
               });
+
+              // 🎥 Dynamic Camera Tracking with Viewport Padding Offset
+              if (mapRef.current) {
+                const bottomPaddingOffset = isDrawerExpanded ? height * 0.45 : height * 0.22;
+                if (!hasInitializedCamera.current) {
+                  try {
+                    mapRef.current.fitToCoordinates(
+                      [
+                        { latitude: newCarLat, longitude: newCarLng },
+                        { latitude: newDropoffLat, longitude: newDropoffLng }
+                      ],
+                      {
+                        edgePadding: { top: 80, right: 50, bottom: bottomPaddingOffset, left: 50 },
+                        animated: true,
+                      }
+                    );
+                    hasInitializedCamera.current = true;
+                  } catch (e) {}
+                } else {
+                  try {
+                    mapRef.current.animateCamera(
+                      {
+                        center: { latitude: newCarLat, longitude: newCarLng },
+                        zoom: 15.5,
+                        pitch: 25,
+                      },
+                      { duration: 1000 }
+                    );
+                  } catch (e) {}
+                }
+              }
             }
           }
           setLoading(false);
         }
       } catch (err) {
-        console.log("⚠️ Error loading real-time data metrics stream:", err);
+        console.log("⚠️ Error loading real-time telemetry stream:", err);
       }
     }
 
     streamLiveTripMetrics();
-    const syncInterval = setInterval(streamLiveTripMetrics, 4000);
+    const syncInterval = setInterval(streamLiveTripMetrics, 3500);
 
     return () => {
       isMounted = false;
       clearInterval(syncInterval);
     };
-  }, [userId, initialRideOfferId]);
+  }, [userId, initialRideOfferId, isDrawerExpanded]);
 
-  const isTripFinished = tripStatus === "completed";
-
-  // 3. MAP CAMERA CONTROLLER
-  useEffect(() => {
-    if (mapRef.current && !loading) {
-      const coordinatesToFit = [
-        { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
-        { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
-      ];
-
-      if (!isTripFinished) {
-        coordinatesToFit.push({ latitude: rideDetails.carLat, longitude: rideDetails.carLng });
-      }
-
-      const validCoords = coordinatesToFit.filter((c) => c.latitude && c.longitude);
-
-      if (validCoords.length > 1) {
-        mapRef.current.fitToCoordinates(validCoords, {
-          edgePadding: {
-            top: 80,
-            right: 50,
-            bottom: height * 0.55,
-            left: 50,
-          },
-          animated: true,
-        });
-      }
-    }
-  }, [
-    rideDetails.carLat,
-    rideDetails.carLng,
-    rideDetails.pickupLat,
-    rideDetails.dropoffLat,
-    loading,
-    isTripFinished,
-  ]);
-
-  // 4. CHECKOUT HANDLER
+  // 5. CHECKOUT HANDLER
   const handlePaymentCheckout = async () => {
     try {
       navigation.replace("TripPayment", {
@@ -170,7 +298,7 @@ export default function TripInProgressScreen({ navigation, route }) {
   if (loading) {
     return (
       <View style={styles.fallbackLoadingBox}>
-        <ActivityIndicator size="large" color="#10B981" />
+        <ActivityIndicator size="large" color="#059669" />
         <Text style={styles.fallbackLoadingText}>Connecting live tracking telemetry...</Text>
       </View>
     );
@@ -200,75 +328,39 @@ export default function TripInProgressScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* 2. PRODUCTION MAP VIEW */}
+      {/* 2. UBER-STYLE PRODUCTION MAP */}
       <View style={styles.mapContainer}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: rideDetails.carLat || 9.0115,
-            longitude: rideDetails.carLng || 38.7945,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-          customMapStyle={cleanMinimalMapStyle}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          showsCompass={false}
-          toolbarEnabled={false}
-          pitchEnabled={false}
-          moveOnMarkerPress={false}
-        >
-          {/* Route Polyline */}
-          <Polyline
-            coordinates={[
-              { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
-              { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
-            ]}
-            strokeColor={isTripFinished ? "#9CA3AF" : "#10B981"}
-            strokeWidth={4}
-            geodesic={true}
-          />
-
-          {/* Pickup Marker */}
-          <Marker
-            coordinate={{ latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng }}
-            tracksViewChanges={false}
-          >
-            <View style={styles.originMarkerPoint} />
-          </Marker>
-
-          {/* Drop-off Marker */}
-          <Marker
-            coordinate={{ latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }}
-            tracksViewChanges={false}
-          >
-            <View style={styles.destinationMarkerWrapper}>
-              <View style={styles.destinationMarkerPin}>
-                <Ionicons name="location-sharp" size={14} color="#FFFFFF" />
-              </View>
-            </View>
-          </Marker>
-
-          {/* Active Moving Vehicle Marker */}
-          {!isTripFinished && (
-            <Marker
-              coordinate={{ latitude: rideDetails.carLat, longitude: rideDetails.carLng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              zIndex={999}
-            >
-              <View style={styles.activeCarWrapper}>
-                <FontAwesome5 name="car" size={14} color="#FFFFFF" />
-              </View>
-            </Marker>
-          )}
-        </MapView>
+        <MemoizedTripMap rideDetails={rideDetails} isTripFinished={isTripFinished} mapRef={mapRef} />
       </View>
 
-      {/* 3. SLIDING INFORMATION DRAWER */}
-      <View style={styles.slidingPanelDrawer}>
-        <ScrollView showsVerticalScrollIndicator={false}>
+      {/* 3. COLLAPSIBLE SLIDING INFORMATION DRAWER WITH SAFE ANDROID BOTTOM INSETS */}
+      <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
+        {/* Drag Handle & Header Tap Area to Toggle Expansion */}
+        <Pressable 
+          style={styles.dragHandleContainer} 
+          onPress={() => setIsDrawerExpanded(!isDrawerExpanded)}
+        >
+          <View style={styles.dragHandle} />
+          <View style={styles.drawerHeaderPreview}>
+            <View style={styles.previewLeftCluster}>
+              <FontAwesome5 name="car-side" size={14} color="#059669" />
+              <Text style={styles.previewTitleText}>
+                {isTripFinished ? "Trip Completed • Tap to Pay" : `${rideDetails.etaMinutes} mins to destination`}
+              </Text>
+            </View>
+            <View style={styles.expandToggleBadge}>
+              <Text style={styles.expandToggleText}>{isDrawerExpanded ? "Collapse" : "Details"}</Text>
+              <Ionicons name={isDrawerExpanded ? "chevron-down" : "chevron-up"} size={14} color="#059669" />
+            </View>
+          </View>
+        </Pressable>
+
+        {/* Scrollable Body Content */}
+        <ScrollView 
+          showsVerticalScrollIndicator={false} 
+          style={styles.drawerScrollBody}
+          contentContainerStyle={{ paddingBottom: 16 }}
+        >
           {/* Real-time Distance & Arrival Metrics Header */}
           <View style={styles.transitSummaryHeader}>
             <View style={styles.metricColumn}>
@@ -291,7 +383,7 @@ export default function TripInProgressScreen({ navigation, route }) {
             </View>
           </View>
 
-          <Text style={styles.sectionHeaderLabel}>Pool Information</Text>
+          <Text style={styles.sectionHeaderLabel}>Driver Information</Text>
 
           {/* Driver Identity Card */}
           <View style={styles.driverProfileCard}>
@@ -323,20 +415,25 @@ export default function TripInProgressScreen({ navigation, route }) {
             <View style={styles.manifestRow}>
               <View style={styles.leftLabelCluster}>
                 <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Passengers On Board</Text>
+                <Text style={styles.manifestRouteLabel}>Co-Riders on Board</Text>
               </View>
-              <Text style={styles.manifestValueText}>{rideDetails.coRidersCount} Passengers</Text>
+              <Text style={styles.manifestValueText}>{rideDetails.coRiders.length} Passengers</Text>
             </View>
 
-            <View style={styles.horizontalLineDivider} />
-
-            <View style={styles.manifestRow}>
-              <View style={styles.leftLabelCluster}>
-                <Ionicons name="navigate-outline" size={16} color="#9CA3AF" />
-                <Text style={styles.manifestRouteLabel}>Remaining Distance</Text>
+            {/* Render Co-Rider Names if present */}
+            {rideDetails.coRiders.length > 0 && (
+              <View style={styles.coRidersListContainer}>
+                {rideDetails.coRiders.map((rider) => (
+                  <View key={rider.id} style={styles.coRiderRowItem}>
+                    <View style={[styles.miniAvatar, { backgroundColor: rider.color }]}>
+                      <Text style={styles.miniAvatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.coRiderNameText}>{rider.name}</Text>
+                    <Text style={styles.coRiderStatusTag}>ON BOARD</Text>
+                  </View>
+                ))}
               </View>
-              <Text style={styles.manifestValueText}>{rideDetails.distanceRemainingKm} km left</Text>
-            </View>
+            )}
 
             <View style={styles.horizontalLineDivider} />
 
@@ -345,43 +442,49 @@ export default function TripInProgressScreen({ navigation, route }) {
                 <Ionicons name="wallet-sharp" size={16} color="#9CA3AF" />
                 <Text style={styles.manifestRouteLabel}>Split Rate Billing</Text>
               </View>
-              <Text style={[styles.manifestValueText, { color: "#10B981", fontWeight: "700" }]}>
+              <Text style={[styles.manifestValueText, { color: "#059669", fontWeight: "700" }]}>
                 ETB {rideDetails.fixedPrice} Fixed
               </Text>
             </View>
           </View>
-
-          {/* Action / Checkout Button */}
-          {isTripFinished ? (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.paymentButtonBg]}
-              activeOpacity={0.85}
-              onPress={handlePaymentCheckout}
-            >
-              <View style={styles.buttonInternalGroup}>
-                <Ionicons name="wallet" size={18} color="#FFFFFF" />
-                <Text style={styles.actionButtonText}>PAY ETB {rideDetails.fixedPrice}.00 NOW</Text>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <View style={[styles.actionButton, styles.disabledButtonBg]}>
-              <View style={styles.buttonInternalGroup}>
-                <ActivityIndicator size="small" color="#9CA3AF" style={{ marginRight: 8 }} />
-                <Text style={[styles.actionButtonText, { color: "#9CA3AF" }]}>TRIP IN PROGRESS...</Text>
-              </View>
-            </View>
-          )}
         </ScrollView>
+
+        {/* Sticky Action / Checkout Button Footer (Safely padded above Android Navigation Bar) */}
+        {isDrawerExpanded && (
+          <View style={styles.drawerFooterSticky}>
+            {isTripFinished ? (
+              <TouchableOpacity
+                style={[styles.actionButton, styles.paymentButtonBg]}
+                activeOpacity={0.85}
+                onPress={handlePaymentCheckout}
+              >
+                <View style={styles.buttonInternalGroup}>
+                  <Ionicons name="wallet" size={18} color="#FFFFFF" />
+                  <Text style={styles.actionButtonText}>PAY ETB {rideDetails.fixedPrice}.00 NOW</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={[styles.actionButton, styles.disabledButtonBg]}>
+                <View style={styles.buttonInternalGroup}>
+                  <ActivityIndicator size="small" color="#9CA3AF" style={{ marginRight: 8 }} />
+                  <Text style={[styles.actionButtonText, { color: "#9CA3AF" }]}>TRIP IN PROGRESS...</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
 const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { elementType: "geometry", stylers: [{ color: "#F9FAFB" }] },
   { featureType: "poi", stylers: [{ visibility: "off" }] },
+  { featureType: "transit", elementType: "labels.icon", stylers: [{ visibility: "off" }] },
   { featureType: "road", elementType: "geometry", stylers: [{ color: "#FFFFFF" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#D2E4F9" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#FEF3C7" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#E0F2FE" }] },
 ];
 
 const styles = StyleSheet.create({
@@ -392,38 +495,80 @@ const styles = StyleSheet.create({
   bannerFinishedBg: { backgroundColor: "#1F2937" },
   statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
   statusPulseWave: { position: "absolute", width: 24, height: 24, borderRadius: 12, backgroundColor: "#FFFFFF" },
-  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", zIndex: 2 },
+  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", zIndex: 2 },
   coreDotFinishedBg: { backgroundColor: "#10B981" },
   statusTextContainer: { flex: 1 },
   statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
   statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
   mapContainer: { flex: 1 },
-  originMarkerPoint: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#9CA3AF", borderWidth: 2, borderColor: "#FFFFFF" },
-  destinationMarkerWrapper: { justifyContent: "center", alignItems: "center" },
-  destinationMarkerPin: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#EF4444", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF" },
-  activeCarWrapper: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#111827", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 },
-  slidingPanelDrawer: { position: "absolute", bottom: 0, width: width, maxHeight: "52%", backgroundColor: "#F9FAFB", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 16, paddingBottom: 20, borderWidth: 1, borderColor: "#E5E7EB" },
-  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 12, marginBottom: 16 },
+  originMarkerPoint: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#9CA3AF", borderWidth: 2, borderColor: "#FFFFFF", elevation: 2 },
+  destinationMarkerContainer: { alignItems: "center" },
+  destinationPinBubble: { backgroundColor: "#EF4444", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  destinationPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#EF4444", marginTop: -1 },
+  activeCarWrapper: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
+  carInnerBubble: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#111827", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 6 },
+  
+  // Drawer States with Safe Bottom Inset Padding for Android Navigation Bars
+  slidingPanelDrawer: { 
+    position: "absolute", 
+    bottom: 0, 
+    width: width, 
+    backgroundColor: "#F9FAFB", 
+    borderTopLeftRadius: 24, 
+    borderTopRightRadius: 24, 
+    paddingTop: 8, 
+    paddingHorizontal: 16, 
+    borderWidth: 1, 
+    borderColor: "#E5E7EB", 
+    elevation: 15 
+  },
+  drawerCollapsed: { height: 130 },
+  drawerExpanded: { height: height * 0.72 },
+  
+  dragHandleContainer: { paddingBottom: 10, width: "100%" },
+  dragHandle: { width: 40, height: 4, backgroundColor: "#D1D5DB", borderRadius: 2, alignSelf: "center", marginBottom: 8 },
+  drawerHeaderPreview: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  previewLeftCluster: { flexDirection: "row", alignItems: "center" },
+  previewTitleText: { marginLeft: 8, fontSize: 14, fontWeight: "700", color: "#111111" },
+  expandToggleBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  expandToggleText: { fontSize: 12, fontWeight: "700", color: "#059669", marginRight: 4 },
+
+  drawerScrollBody: { flex: 1 },
+  drawerFooterSticky: { 
+    paddingVertical: 12, 
+    paddingBottom: Platform.OS === 'android' ? 24 : 12, // Extra padding to clear Android navigation buttons/gestures
+    borderTopWidth: 1, 
+    borderTopColor: "#E5E7EB", 
+    backgroundColor: "#F9FAFB" 
+  },
+
+  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 12, marginBottom: 16, marginTop: 4 },
   metricColumn: { flex: 1, alignItems: "center", justifyContent: "center" },
   verticalSplitter: { width: 1, backgroundColor: "#E5E7EB" },
   metricLabel: { fontSize: 9, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
   metricValueHighlight: { fontSize: 15, fontWeight: "800", color: "#111111", marginTop: 2 },
   sectionHeaderLabel: { fontSize: 12, fontWeight: "700", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10, marginLeft: 2 },
-  driverProfileCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 10 },
+  driverProfileCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginBottom: 14 },
   avatarHolder: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#ECFDF5", alignItems: "center", justifyContent: "center" },
   driverIdentityMeta: { flex: 1, marginLeft: 12 },
   driverName: { fontSize: 14, fontWeight: "700", color: "#111111" },
   vehicleDetails: { fontSize: 12, color: "#6B7280", marginTop: 1 },
   ratingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFBEB", borderWidth: 1, borderColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   ratingText: { fontSize: 12, fontWeight: "700", color: "#D97706", marginLeft: 4 },
-  manifestContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 18 },
+  manifestContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 12 },
   manifestRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
   leftLabelCluster: { flexDirection: "row", alignItems: "center" },
   manifestRouteLabel: { fontSize: 13, color: "#4B5563", marginLeft: 10 },
   manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111" },
   horizontalLineDivider: { height: 1, backgroundColor: "#F3F4F6" },
+  coRidersListContainer: { paddingBottom: 10, paddingLeft: 28 },
+  coRiderRowItem: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  miniAvatar: { width: 24, height: 24, borderRadius: 12, justifyContent: "center", alignItems: "center" },
+  miniAvatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
+  coRiderNameText: { flex: 1, marginLeft: 8, fontSize: 13, color: "#374151", fontWeight: "500" },
+  coRiderStatusTag: { fontSize: 10, fontWeight: "700", color: "#059669", backgroundColor: "#ECFDF5", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   actionButton: { borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center" },
-  paymentButtonBg: { backgroundColor: "#10B981" },
+  paymentButtonBg: { backgroundColor: "#059669" },
   disabledButtonBg: { backgroundColor: "#E5E7EB", borderWidth: 1, borderColor: "#D1D5DB" },
   buttonInternalGroup: { flexDirection: "row", alignItems: "center" },
   actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", marginLeft: 8, letterSpacing: 0.5 },
