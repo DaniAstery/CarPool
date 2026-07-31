@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -12,26 +12,35 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 import * as Location from 'expo-location';
+import io from "socket.io-client";
 
 const API_URL = "http://192.168.1.3:5000/api"; 
+const socket = io("http://192.168.1.3:5000");
 
 export default function PassengerScreen({ navigation }) {
   const { user, logoutSession } = useAuth();
 
-  // 🎯 Dynamically resolve the logged-in user ID (fallback to valid rider ID 12 if context is unhydrated)
   const currentUserId = user?.id || user?.userId || 12;
 
-  // 🛡️ GATEKEEPER & CORE SYSTEM STATES
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
   const [isLocating, setIsLocating] = useState(true);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
 
-  // LOCATIONS & RADIAL STATE METRICS
   const [userCoords, setUserCoords] = useState(null);
   const [selectedPickupHub, setSelectedPickupHub] = useState(null);
-  const [distanceToHub, setDistanceToHub] = useState(null); // in meters
+  const [distanceToHub, setDistanceToHub] = useState(null);
   const [routes, setRoutes] = useState([]);
   const [isSoloRide, setIsSoloRide] = useState(false); 
+
+  // 🔌 Reference hook to track active hub name cleanly across websocket scope
+  const activeHubNameRef = useRef(null);
+
+  // Keep ref synchronized whenever selectedPickupHub updates
+  useEffect(() => {
+    if (selectedPickupHub?.name) {
+      activeHubNameRef.current = selectedPickupHub.name;
+    }
+  }, [selectedPickupHub]);
 
   /* 🚪 FIRST THING ON LOAD: STACK INTERCEPT STATUS LIFECYCLE GATEKEEPER */
   useEffect(() => {
@@ -40,15 +49,11 @@ export default function PassengerScreen({ navigation }) {
     async function checkUserRoutingStatus() {
       try {
         console.log(`📡 [Gatekeeper] Fetching pure route_pool status for Passenger User: ${currentUserId}`);
-        
-        // Target the dedicated passenger status layout route
         const statusRes = await fetch(`${API_URL}/passenger/status/${currentUserId}`);
         if (!statusRes.ok) throw new Error("Macro status query rejected.");
         const statusData = await statusRes.json();
 
-        // 🎯 EXACT STATUS-TO-SCREEN ROUTING MATRIX
         if (statusData && statusData.status !== "idle" && statusData.status !== "completed") {
-          
           let targetScreen = null;
 
           if (statusData.status === "searching") {
@@ -91,6 +96,47 @@ export default function PassengerScreen({ navigation }) {
   }, [navigation]);
 
 
+  /* ⚡ REAL-TIME WEBSOCKET LISTENER: Mounted ONCE with stable ref bindings */
+  useEffect(() => {
+    function handleSocketConnect() {
+      console.log("🔌 Connected to real-time websocket stream, ID:", socket.id);
+    }
+
+    function handleRoutePoolUpdated(data) {
+      console.log("🚀 Real-time DB Trigger Caught on Client:", data);
+      
+      const targetHub = activeHubNameRef.current;
+      
+      if (targetHub) {
+        console.log(`🔄 Instant background refresh triggered for hub: ${targetHub}`);
+        fetchActiveCorridors(targetHub, false); // false = silent background update (no loader flicker)
+      } else {
+        console.log("⚠️ Socket trigger caught, but activeHubNameRef.current is unassigned.");
+      }
+    }
+
+    function handleSocketError(err) {
+      console.log("❌ Socket connection error:", err);
+    }
+
+    function handleSocketDisconnect() {
+      console.log("🔌 Disconnected from real-time websocket stream");
+    }
+
+    socket.on("connect", handleSocketConnect);
+    socket.on("route_pool_updated", handleRoutePoolUpdated);
+    socket.on("connect_error", handleSocketError);
+    socket.on("disconnect", handleSocketDisconnect);
+
+    return () => {
+      socket.off("connect", handleSocketConnect);
+      socket.off("route_pool_updated", handleRoutePoolUpdated);
+      socket.off("connect_error", handleSocketError);
+      socket.off("disconnect", handleSocketDisconnect);
+    };
+  }, []); // 👈 Empty dependency array ensures connection permanence and prevents event misses
+
+
   /* 📍 GEOLOCATION POOLING & DYNAMIC PROXIMITY HUB RESOLVER */
   useEffect(() => {
     let locationSubscription = null;
@@ -104,14 +150,11 @@ export default function PassengerScreen({ navigation }) {
           return;
         }
 
-        // 🎯 DEVELOPMENT OVERRIDE: Force initial check at Ayat (9.0220, 38.8450)
-        // This ensures you instantly unlock your new Ayat corridors without emulator GPS drift.
         const ayatLat = 9.0220;
         const ayatLng = 38.8450;
         setUserCoords({ latitude: ayatLat, longitude: ayatLng });
         await resolveClosestHub(ayatLat, ayatLng);
 
-        // Subscribing to location changes for passive matching updates
         locationSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.Balanced,
@@ -151,6 +194,7 @@ export default function PassengerScreen({ navigation }) {
       if (validationData && validationData.nearestHub) {
         const targetHub = validationData.nearestHub;
         setSelectedPickupHub(targetHub);
+        activeHubNameRef.current = targetHub.name;
         
         if (validationData.distanceInMeters) {
           setDistanceToHub(Math.round(validationData.distanceInMeters));
@@ -179,8 +223,8 @@ export default function PassengerScreen({ navigation }) {
     return R * c; 
   };
 
-  const fetchActiveCorridors = async (hubName) => {
-    setLoadingRoutes(true);
+  const fetchActiveCorridors = async (hubName, showLoader = true) => {
+    if (showLoader) setLoadingRoutes(true);
     try {
       const res = await fetch(`${API_URL}/routes/from/${encodeURIComponent(hubName)}`);
       const data = await res.json();
@@ -189,24 +233,21 @@ export default function PassengerScreen({ navigation }) {
       console.log("Route corridor compilation lookup error:", err);
       setRoutes([]);
     } finally {
-      setLoadingRoutes(false);
+      if (showLoader) setLoadingRoutes(false);
     }
   };
 
   /* 🚀 JOIN POOL PIPELINE & ROUTE TRANSITION */
-  /* 🚀 DIAGNOSTIC JOIN POOL PIPELINE & ROUTE TRANSITION */
   const joinPool = async (item) => {
     try {
-      // 1. Diagnostics Alert to verify the touch event triggers instantly
       console.log("👉 [Touch Trigger] joinPool function invoked for item:", item);
 
       if (!userCoords) {
-        // Fallback fallback coordinates if geolocation watch hasn't saved state yet
         console.log("⚠️ userCoords was null, applying Gerji Hub fallback coordinates for API compliance");
         setUserCoords({ latitude: 9.0022471, longitude: 38.8100596 });
       }
 
-      const pickupHubId = selectedPickupHub ? selectedPickupHub.id : 7; // Resolves null values instantly to your active hub ID (Gerji = 7)
+      const pickupHubId = selectedPickupHub ? selectedPickupHub.id : 7; 
       const targetRouteId = parseInt(item.route_id || item.id || item._id, 10);
       
       if (!targetRouteId || isNaN(targetRouteId)) {
@@ -226,7 +267,6 @@ export default function PassengerScreen({ navigation }) {
 
       console.log("📡 [Network Dispatch] Sending payload to backend:", JSON.stringify(payload));
 
-      // 2. Wrap fetch in a timeout promise to prevent silent stalls if the server drops requests
       const fetchPromise = fetch(`${API_URL}/routes/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -237,7 +277,6 @@ export default function PassengerScreen({ navigation }) {
         setTimeout(() => reject(new Error("Network Timeout")), 4000)
       );
 
-      // Race them!
       const res = await Promise.race([fetchPromise, timeoutPromise]);
 
       console.log(`📥 [Server Response Received] Status Code: ${res.status}`);
@@ -274,7 +313,6 @@ export default function PassengerScreen({ navigation }) {
     } catch (err) {
       console.error("❌ Join Pool Exception caught:", err);
       
-      // 3. Fallback Navigation Bypass if the backend drops the connection
       Alert.alert(
         "Backend Offline / Timeout",
         `Could not reach ${API_URL}/routes/join. Would you like to force navigate to MatchingScreen for UI layout testing?`,
@@ -302,6 +340,7 @@ export default function PassengerScreen({ navigation }) {
       );
     }
   };
+
   if (checkingGatekeeper) {
     return (
       <View style={styles.gatekeeperContainer}>
@@ -419,9 +458,10 @@ export default function PassengerScreen({ navigation }) {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 40 }}
           >
-            {routes.map((route, index) => {
-              const seatCount = route.filled_seats || 0;
-              const maxSeats = route.capacity || 4;
+           {routes.map((route, index) => {
+              // 🚀 Read directly from the backend-calculated fields
+              const seatCount = parseInt(route.filled_seats, 10) || 0;
+              const maxSeats = parseInt(route.capacity, 10) || 4;
               const hasActiveQueue = seatCount > 0;
 
               return (
@@ -461,7 +501,7 @@ export default function PassengerScreen({ navigation }) {
                       </Text>
                     </View>
                   </View>
-
+                  
                   <View style={styles.cardFooter}>
                     <View style={styles.priceContainer}>
                       <Text style={styles.priceLabel}>ESTIMATED FARE</Text>
