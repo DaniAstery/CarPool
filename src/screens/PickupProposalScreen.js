@@ -180,7 +180,7 @@ export default function PickupProposalScreen({ navigation }) {
             return; // Exit early & stop polling
           }
 
-          if (Array.isArray(passengers)) {
+         if (Array.isArray(passengers)) {
             const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
             const parsedCoRiders = passengers
               .filter(p => parseInt(p.user_id, 10) !== currentUserId)
@@ -192,7 +192,8 @@ export default function PickupProposalScreen({ navigation }) {
 
                 return {
                   id: pId,
-                  name: `Rider ${pId}`,
+                  // 🔍 Fallback chain: Checks backend row for full_name/name, defaults to ID if missing
+                  name: p.full_name || p.name || `Rider ${pId}`,
                   status: riderEffectiveStatus.toUpperCase(),
                   color: colorPalette[idx % colorPalette.length],
                 };
@@ -216,11 +217,6 @@ export default function PickupProposalScreen({ navigation }) {
       if (timerId) clearTimeout(timerId);
     };
   }, [currentUserId, navigateToTracking, navigation, userAccepted]);
-
-      useEffect(() => {
-          console.log("🔍 [PickupProposal Mount] Raw Auth user object:", user);
-          console.log("🎯 [PickupProposal Mount] Resolved currentUserId:", currentUserId);
-        }, [user, currentUserId]);
 
 
   const handleAcceptProposal = async () => {
@@ -283,11 +279,14 @@ export default function PickupProposalScreen({ navigation }) {
         <View style={styles.rosterContainer}>
           <Text style={styles.sectionHeader}>Matching Corridor Pool</Text>
           
-          <View style={styles.riderRow}>
+     <View style={styles.riderRow}>
             <View style={[styles.avatar, { backgroundColor: "#2F4F4F" }]}>
               <Text style={styles.avatarText}>YOU</Text>
             </View>
-            <Text style={styles.riderName}>You (User {currentUserId})</Text>
+            {/* 👤 Use user's real name from Auth context or row data */}
+            <Text style={styles.riderName}>
+              You ({user?.full_name || user?.name || `User ${currentUserId}`})
+            </Text>
             <Text style={[
               styles.statusTag, 
               myDbStatus === "accepted" ? styles.statusAccepted : 
@@ -301,7 +300,10 @@ export default function PickupProposalScreen({ navigation }) {
           {coRiders.map((rider) => (
             <View key={rider.id} style={styles.riderRow}>
               <View style={[styles.avatar, { backgroundColor: rider.color }]}>
-                <Text style={styles.avatarText}>{rider.id}</Text>
+                {/* Display initials instead of ID if name exists */}
+                <Text style={styles.avatarText}>
+                  {rider.name !== `Rider ${rider.id}` ? rider.name.charAt(0).toUpperCase() : rider.id}
+                </Text>
               </View>
               <Text style={styles.riderName}>{rider.name}</Text>
               <Text style={[
