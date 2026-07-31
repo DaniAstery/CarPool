@@ -7,10 +7,18 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  BackHandler,
+  Alert,
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { useAuth } from '../../AuthContext';
+
+const API_URL = "http://192.168.1.3:5000";
 
 export default function WaitingForRidersScreen({ route, navigation }) {
+  const { user } = useAuth();
+  const currentDriverId = user?.id || user?.user_id || route?.params?.driverId;
+
   // Pull parameters directly. If navigation params fail, fall back safely to Route 1 / Hub 1 
   // to prevent running lookups against mismatched offline default states
   const routeId = route?.params?.routeId || 1; 
@@ -24,13 +32,20 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   const [hubNameDisplay, setHubNameDisplay] = useState("Loading...");
   const [destinationDisplay, setDestinationDisplay] = useState("...");
 
+  // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
+  useEffect(() => {
+    const backAction = () => true;
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => backHandler.remove();
+  }, []);
+
   useEffect(() => {
     console.log(`📡 Streaming routepool updates for Route: [${routeId}] | Hub ID: [${currentPickupHubId}]`);
 
     async function checkCorridorStatus() {
       try {
         const response = await fetch(
-          `http://192.168.1.3:5000/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
+          `${API_URL}/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
         );
         
         if (!response.ok) {
@@ -79,7 +94,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         if (totalMatched >= 2 || currentActiveHeadcount >= 2) {
           console.log("🚀 Match threshold satisfied directly via server! Advancing to ProposalDriver.");
           clearInterval(syncInterval);
-          navigation.navigate("ProposalDriver", { routeId: serverRouteId, hubId: currentPickupHubId });
+          navigation.replace("ProposalDriver", { routeId: serverRouteId, hubId: currentPickupHubId });
         }
 
       } catch (err) {
@@ -93,6 +108,50 @@ export default function WaitingForRidersScreen({ route, navigation }) {
 
     return () => clearInterval(syncInterval);
   }, [currentPickupHubId, routeId, navigation]);
+
+  // 📴 GO OFFLINE HANDLER WITH BACKEND CLEANUP
+  const executeGoOffline = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/rides/go-offline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ driver_id: currentDriverId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        Alert.alert("Error", data.error || "Could not go offline.");
+        return;
+      }
+
+      navigation.replace("CreateCorridor");
+    } catch (err) {
+      console.log("❌ Network exception during go offline:", err);
+      Alert.alert("Network Error", "Failed to connect to server. Please try again.");
+    }
+  };
+
+  const handleGoOfflinePress = () => {
+    if (seatsFilled > 0) {
+      Alert.alert(
+        "Active Riders in Pool",
+        "Are you sure you want to go offline? You have passengers in your corridor pool. Going offline will unassign them and return them to the open search queue.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Yes, Go Offline", style: "destructive", onPress: executeGoOffline }
+        ]
+      );
+    } else {
+      Alert.alert(
+        "Go Offline",
+        "Are you sure you want to close this corridor session?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Go Offline", onPress: executeGoOffline }
+        ]
+      );
+    }
+  };
 
   if (loading) {
     return (
@@ -166,7 +225,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         <TouchableOpacity 
           style={styles.goOfflineOutlinedButton}
           activeOpacity={0.7}
-          onPress={() => navigation.navigate("CreateCorridor")}
+          onPress={handleGoOfflinePress}
         >
           <Text style={styles.goOfflineOutlinedButtonText}>GO OFFLINE</Text>
         </TouchableOpacity>

@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   StatusBar,
+  BackHandler,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -34,6 +35,13 @@ export default function CreateCorridorScreen({ navigation }) {
   // Lists from Backend
   const [predefinedCorridors, setPredefinedCorridors] = useState([]);
   const [passengerRequests, setPassengerRequests] = useState([]);
+
+  // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
+  useEffect(() => {
+    const backAction = () => true;
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
+    return () => backHandler.remove();
+  }, []);
 
   // 🚦 2. GATEKEEPER LOCK: Active Driver Session Recovery
   useEffect(() => {
@@ -97,7 +105,7 @@ export default function CreateCorridorScreen({ navigation }) {
     }
 
     checkActiveDriverSession();
-  }, [currentDriverId, isAuthLoading]);
+  }, [currentDriverId, isAuthLoading, navigation]);
 
   // 🌍 3. AUTO-LOCATION DISCOVERY ENGINE
   useEffect(() => {
@@ -169,9 +177,7 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
-  
   // 🚀 5. LIVE DISPATCH / GO ONLINE TRIGGER
- // 🚀 5. LIVE DISPATCH / GO ONLINE TRIGGER
   const handleGoOnline = async () => {
     if (!currentDriverId) {
       Alert.alert("Session Error", "Authentication expired. Please log in again.");
@@ -188,10 +194,7 @@ export default function CreateCorridorScreen({ navigation }) {
       return;
     }
 
-    // 1. Start location is strictly the driver's current hub ID
     const startHubId = Number(currentHub.id);
-
-    // 2. Extract end location hub ID from the selected corridor route object
     const endHubId = Number(
       selectedRoute.end_hub_id || 
       selectedRoute.destination_hub_id || 
@@ -255,7 +258,6 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
-  
   if (isAuthLoading) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
@@ -334,12 +336,10 @@ export default function CreateCorridorScreen({ navigation }) {
           </View>
         ) : (
          predefinedCorridors.map((route, index) => {
-            // 🛠️ 1. Match selection by BOTH route_id AND end_hub_id so only ONE card gets selected
             const isSelected = 
               selectedRoute?.route_id === route.route_id && 
               selectedRoute?.end_hub_id === route.end_hub_id;
 
-            // 🛠️ 2. Combine properties to create a unique key for React (e.g. "1-1-4-0")
             const uniqueKey = `${route.route_id}-${route.start_hub_id}-${route.end_hub_id}-${index}`;
 
             return (
@@ -418,7 +418,6 @@ const styles = StyleSheet.create({
   centered: { justifyContent: "center", alignItems: "center" },
   loadingText: { marginTop: 10, color: "#4B5563", fontSize: 13, fontWeight: "600" },
   
-  // Header
   headerBlock: { 
     flexDirection: "row", 
     justifyContent: "space-between", 
@@ -437,7 +436,6 @@ const styles = StyleSheet.create({
   contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
   boldText: { fontWeight: "800", color: "#111827" },
 
-  // Gps Tracker Banner
   gpsBanner: { backgroundColor: "#FFFFFF", borderRadius: 12, padding: 14, marginBottom: 15, borderWidth: 1, borderColor: "#E5E7EB" },
   gpsLoadingWrapper: { flexDirection: "row", alignItems: "center", gap: 10 },
   gpsStatusText: { fontSize: 13, color: "#4B5563", fontWeight: "600" },
@@ -445,10 +443,8 @@ const styles = StyleSheet.create({
   gpsIndicatorDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#10B981" },
   gpsHubText: { fontSize: 13, color: "#4B5563", fontWeight: "500" },
 
-  // Form Controls
   sectionHeading: { fontSize: 11, fontWeight: "800", color: "#4B5563", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 },
 
-  // Demand indicators
   demandIndicatorBadge: { 
     flexDirection: "row", 
     alignItems: "center", 
@@ -465,7 +461,6 @@ const styles = StyleSheet.create({
   highDemandPill: { backgroundColor: "#D97706", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   highDemandText: { color: "#FFFFFF", fontSize: 8, fontWeight: "900" },
 
-  // Corridor Cards
   skeletonContainer: { paddingVertical: 30, alignItems: "center", gap: 10 },
   skeletonText: { color: "#6B7280", fontSize: 12, fontWeight: "500" },
   fallbackContainer: { paddingVertical: 30, alignItems: "center", gap: 8 },
@@ -492,7 +487,6 @@ const styles = StyleSheet.create({
   selectedItemBorder: { borderColor: "#10B981", borderWidth: 2, backgroundColor: "#F0FDF4" },
   selectedCheckCircle: { backgroundColor: "#10B981", width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 
-  // Capacity Counter
   detailsContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 20 },
   detailRowItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 14 },
   labelGroup: { flexDirection: "column" },
@@ -502,7 +496,6 @@ const styles = StyleSheet.create({
   counterButton: { width: 32, height: 32, backgroundColor: "#FFFFFF", borderRadius: 8, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E5E7EB" },
   counterValueText: { fontSize: 14, fontWeight: "800", paddingHorizontal: 16 },
 
-  // Launch Controls
   goOnlineActionButton: { backgroundColor: "#10B981", borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center", marginTop: 10 },
   disabledButton: { backgroundColor: "#D1D5DB" },
   btnContentRow: { flexDirection: "row", alignItems: "center" },
