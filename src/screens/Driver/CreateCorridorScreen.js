@@ -44,7 +44,7 @@ const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
 // ------------------------------------------------------------------
 // MEMOIZED DISPATCH MAP VIEW (Full Screen Canvas with Car Avatar & Top Hubs)
 // ------------------------------------------------------------------
-const DispatchMap = memo(({ driverCoords, targetHubForLine, topHubs, currentHub, nearestHub, mapRef, isDrawerExpanded, onSelectHub }) => {
+const DispatchMap = memo(({ driverCoords, targetHubForLine, topHubs, currentHub, nearestHub, mapRef, isDrawerExpanded, onSelectHub, showRadiusCircle, onToggleRadius, currentDriverDistance }) => {
   useEffect(() => {
     if (mapRef.current && driverCoords?.latitude && targetHubForLine?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
@@ -62,71 +62,110 @@ const DispatchMap = memo(({ driverCoords, targetHubForLine, topHubs, currentHub,
   }, [driverCoords, targetHubForLine, mapRef, isDrawerExpanded]);
 
   return (
-    <MapView
-      ref={mapRef}
-      style={StyleSheet.absoluteFillObject}
-      provider={PROVIDER_DEFAULT}
-      initialRegion={driverCoords || DEFAULT_LOCATION}
-      showsUserLocation={false}
-      showsMyLocationButton={false}
-      showsCompass={false}
-    >
-      {/* 1. Render ONLY the Top 4 Nearest System Hubs */}
-      {topHubs.map((hub) => {
-        const isSelectedActive = currentHub && currentHub.id === hub.id;
-        const isNearest = nearestHub && nearestHub.id === hub.id;
-        return (
-          <React.Fragment key={`hub-${hub.id}`}>
-            <Marker
-              coordinate={{ latitude: hub.latitude, longitude: hub.longitude }}
-              title={hub.name}
-              description={`${hub.distanceKm ? hub.distanceKm.toFixed(1) : "?"} km away`}
-              onPress={() => onSelectHub(hub)}
-              tracksViewChanges={false}
-            >
-              <View style={[styles.hubWaypointMarker, (isSelectedActive || isNearest) && styles.activeHubWaypointMarker]}>
-                <View style={styles.hubWaypointDot} />
+    <View style={StyleSheet.absoluteFillObject}>
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFillObject}
+        provider={PROVIDER_DEFAULT}
+        initialRegion={driverCoords || DEFAULT_LOCATION}
+        showsUserLocation={false}
+        showsMyLocationButton={false}
+        showsCompass={false}
+      >
+        {/* 1. Render Top Hubs */}
+        {topHubs.map((hub) => {
+          const isSelectedActive = currentHub && currentHub.id === hub.id;
+          const isNearest = nearestHub && nearestHub.id === hub.id;
+          return (
+            <React.Fragment key={`hub-${hub.id}`}>
+              <Marker
+                coordinate={{ latitude: hub.latitude, longitude: hub.longitude }}
+                title={hub.name}
+                description={`${hub.distanceKm ? hub.distanceKm.toFixed(1) : "?"} km away`}
+                onPress={() => onSelectHub(hub)}
+                tracksViewChanges={false}
+              >
+                <View style={[styles.hubWaypointMarker, (isSelectedActive || isNearest) && styles.activeHubWaypointMarker]}>
+                  {isSelectedActive && (
+                    <View style={styles.glowingTargetBadge}>
+                      <Text style={styles.glowingTargetText}>TARGET HUB</Text>
+                    </View>
+                  )}
+                  <View style={styles.hubWaypointDot} />
+                </View>
+              </Marker>
+
+              {/* Working Radius Circle Radar (Toggleable) */}
+              {isSelectedActive && showRadiusCircle && (
+                <Circle
+                  center={{ latitude: hub.latitude, longitude: hub.longitude }}
+                  radius={2000} 
+                  strokeColor="#10B981"
+                  fillColor="rgba(16, 185, 129, 0.12)"
+                  strokeWidth={2}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
+
+        {/* 2. Pinned Driver GPS Location Marker */}
+        {driverCoords && (
+          <Marker coordinate={driverCoords} title="Your Vehicle Location" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={styles.driverPinnedContainer}>
+              <View style={styles.driverPinBadge}>
+                <Text style={styles.driverPinText}>YOU</Text>
               </View>
-            </Marker>
-
-            {isSelectedActive && (
-              <Circle
-                center={{ latitude: hub.latitude, longitude: hub.longitude }}
-                radius={2000} 
-                strokeColor="#10B981"
-                fillColor="rgba(16, 185, 129, 0.12)"
-                strokeWidth={2}
-              />
-            )}
-          </React.Fragment>
-        );
-      })}
-
-      {/* 2. Driver Device GPS Location Car Avatar Marker */}
-      {driverCoords && (
-        <Marker coordinate={driverCoords} title="Your Vehicle Location" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-          <View style={styles.driverMarkerHalo}>
-            <View style={styles.driverMarkerBubble}>
-              <MaterialCommunityIcons name="car-side" size={16} color="#FFFFFF" />
+              <View style={styles.glowingDriverHalo}>
+                <View style={styles.driverMarkerBubble}>
+                  <MaterialCommunityIcons name="car-side" size={16} color="#FFFFFF" />
+                </View>
+              </View>
             </View>
-          </View>
-        </Marker>
-      )}
+          </Marker>
+        )}
 
-      {/* 3. Route Approach Polyline */}
-      {driverCoords && targetHubForLine && targetHubForLine.latitude && (
-        <Polyline
-          coordinates={[
-            driverCoords,
-            { latitude: targetHubForLine.latitude, longitude: targetHubForLine.longitude }
-          ]}
-          strokeColor="#10B981"
-          strokeWidth={4}
-          lineDashPattern={[8, 4]}
-          geodesic={true}
-        />
-      )}
-    </MapView>
+        {/* 3. Route Approach Polyline to Pickup */}
+        {driverCoords && targetHubForLine && targetHubForLine.latitude && (
+          <Polyline
+            coordinates={[
+              driverCoords,
+              { latitude: targetHubForLine.latitude, longitude: targetHubForLine.longitude }
+            ]}
+            strokeColor="#10B981"
+            strokeWidth={4}
+            lineDashPattern={[8, 4]}
+            geodesic={true}
+          />
+        )}
+      </MapView>
+
+      {/* 📏 Always-Visible Floating Distance Banner */}
+     {/* 📏 Always-Visible Fixed Distance Banner */}
+{targetHubForLine && typeof currentDriverDistance === "number" && (
+  <View style={styles.persistentDistanceBanner}>
+    <Ionicons name="navigate" size={14} color="#10B981" style={{ marginRight: 6 }} />
+    <Text style={styles.persistentDistanceText}>
+      Distance to <Text style={styles.boldText}>{targetHubForLine.name || "Hub"}</Text>:{" "}
+      <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#EF4444" }]}>
+        {currentDriverDistance.toFixed(2)} km
+      </Text>
+    </Text>
+  </View>
+)}
+
+      {/* Floating Map Radar Toggle Button */}
+      <TouchableOpacity 
+        style={styles.radarToggleFloatingButton} 
+        onPress={onToggleRadius}
+        activeOpacity={0.8}
+      >
+        <Ionicons name={showRadiusCircle ? "radio" : "radio-outline"} size={16} color={showRadiusCircle ? "#10B981" : "#6B7280"} />
+        <Text style={[styles.radarToggleText, showRadiusCircle && { color: "#10B981", fontWeight: "700" }]}>
+          {showRadiusCircle ? "Radar: ON" : "Radar: OFF"}
+        </Text>
+      </TouchableOpacity>
+    </View>
   );
 });
 
@@ -151,6 +190,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const [allHubs, setAllHubs] = useState([]);
   const [predefinedCorridors, setPredefinedCorridors] = useState([]);
   const [passengerRequests, setPassengerRequests] = useState([]);
+  const [showRadiusCircle, setShowRadiusCircle] = useState(true);
 
   const mapRef = useRef(null);
 
@@ -327,10 +367,11 @@ export default function CreateCorridorScreen({ navigation }) {
     setLoadingCorridors(true);
     
     try {
-      const [corridorRes, requestsRes] = await Promise.all([
-        fetch(`${API_URL}/api/routes/from/${encodeURIComponent(hub.name)}`),
-        fetch(`${API_URL}/api/corridors/passenger-requests`)
-      ]);
+          const [corridorRes, requestsRes] = await Promise.all([
+          fetch(`${API_URL}/api/routes/live-corridors/${encodeURIComponent(hub.name)}`),
+          fetch(`${API_URL}/api/corridors/passenger-requests`)
+        ]);
+
 
       const corridorsData = await corridorRes.json();
       const requestsData = await requestsRes.json();
@@ -391,7 +432,7 @@ export default function CreateCorridorScreen({ navigation }) {
     const startHubId = Number(currentHub.id);
     const endHubId = Number(
       selectedRoute.end_hub_id || 
-      selectedRoute.destination_hub_id || 
+      selectedRoute.drop_off_hub_id || 
       selectedRoute.end_hub?.id ||
       (Array.isArray(selectedRoute.hub_ids) ? selectedRoute.hub_ids[selectedRoute.hub_ids.length - 1] : null) ||
       (Array.isArray(selectedRoute.stop_ids) ? selectedRoute.stop_ids[selectedRoute.stop_ids.length - 1] : null) ||
@@ -460,16 +501,19 @@ export default function CreateCorridorScreen({ navigation }) {
       
       {/* 🗺️ FULL SCREEN MAP CANVAS (Top 4 Hubs Only) */}
       <View style={styles.mapContainer}>
-        <DispatchMap 
-          driverCoords={driverCoords}
-          targetHubForLine={targetHubForLine}
-          topHubs={topHubs}
-          currentHub={currentHub}
-          nearestHub={nearestHub}
-          mapRef={mapRef}
-          isDrawerExpanded={isDrawerExpanded}
-          onSelectHub={handleHubSelection}
-        />
+       <DispatchMap 
+
+            driverCoords={driverCoords}
+            targetHubForLine={targetHubForLine}
+            topHubs={topHubs}
+            currentHub={currentHub}
+            nearestHub={nearestHub}
+            mapRef={mapRef}
+            isDrawerExpanded={isDrawerExpanded}
+            onSelectHub={handleHubSelection}
+            showRadiusCircle={showRadiusCircle}
+            onToggleRadius={() => setShowRadiusCircle(!showRadiusCircle)}
+          />
       </View>
 
       {/* 👑 TOP FLOATING POWER BUTTON HEADER */}
@@ -562,70 +606,88 @@ export default function CreateCorridorScreen({ navigation }) {
             </View>
           )}
 
-          {/* 🛣️ CORRIDORS & DRIVER QUEUES */}
-          <Text style={styles.sectionHeadingLabel}>Corridors & Driver Queues</Text>
-          {loadingCorridors ? (
-            <View style={styles.skeletonContainer}>
-              <ActivityIndicator size="small" color="#10B981" />
-              <Text style={styles.skeletonText}>Loading corridor blueprints & queues...</Text>
+         {/* 🛣️ CORRIDORS & DRIVER QUEUES */}
+<Text style={styles.sectionHeadingLabel}>Corridors & Driver Queues</Text>
+{loadingCorridors ? (
+  <View style={styles.skeletonContainer}>
+    <ActivityIndicator size="small" color="#10B981" />
+    <Text style={styles.skeletonText}>Loading corridor blueprints & queues...</Text>
+  </View>
+) : predefinedCorridors.length === 0 ? (
+  <View style={styles.fallbackContainer}>
+    <Ionicons name="map-outline" size={32} color="#9CA3AF" />
+    <Text style={styles.fallbackText}>No active corridors mapped out from {currentHub?.name || 'this hub'}.</Text>
+  </View>
+) : (
+    predefinedCorridors.map((route, index) => {
+      // 🕵️‍♂️ DEBUG LOG: Check what the backend is actually sending for each route
+      console.log(`🔍 Route [${route.route_id}] Payload:`, {
+        driver_queue_count: route.driver_queue_count,
+        waiting_drivers_count: route.waiting_drivers_count,
+        full_route: route
+      });
+
+      // 🛡️ Safe property normalization for flat schema fields
+      const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
+      const passThroughName = route.pass_through_hub_name || route.pass_through_name;
+      const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
+      const dropOffId = route.drop_off_hub_id || route.end_hub_id;
+
+      const isSelected = 
+        selectedRoute?.route_id === route.route_id && 
+        (selectedRoute?.drop_off_hub_id === dropOffId || selectedRoute?.end_hub_id === dropOffId);
+
+      const uniqueKey = `${route.route_id}-${route.pickup_hub_id || 'p'}-${dropOffId || 'd'}-${index}`;
+      
+      const queueCount = Number(route.driver_queue_count ?? route.waiting_drivers_count ?? 0);
+      const estimatedFare = route.recommended_base_price || 100;
+    return (
+      <TouchableOpacity 
+        key={uniqueKey} 
+        style={[styles.routeCard, isSelected && styles.selectedItemBorder]}
+        onPress={() => setSelectedRoute(route)}
+        activeOpacity={0.8}
+      >
+        <View style={styles.routeCardTopRow}>
+          <View style={styles.routeCardLeft}>
+            <View style={[styles.routeIconFrame, isSelected && styles.selectedIconFrame]}>
+              <MaterialCommunityIcons name="bus-side" size={20} color={isSelected ? "#10B981" : "#4B5563"} />
             </View>
-          ) : predefinedCorridors.length === 0 ? (
-            <View style={styles.fallbackContainer}>
-              <Ionicons name="map-outline" size={32} color="#9CA3AF" />
-              <Text style={styles.fallbackText}>No active corridors mapped out from {currentHub?.name || 'this hub'}.</Text>
+            <View style={styles.routeDetails}>
+              <Text style={[styles.routeText, isSelected && styles.selectedRouteText]} numberOfLines={1}>
+                {passThroughName 
+                  ? `${pickupName} ➔ ${passThroughName} ➔ ${dropOffName}`
+                  : `${pickupName} ➔ ${dropOffName}`}
+              </Text>
+              <Text style={styles.routeSubPrice}>Estimated Fare: {estimatedFare} ETB</Text>
             </View>
-          ) : (
-            predefinedCorridors.map((route, index) => {
-              const isSelected = 
-                selectedRoute?.route_id === route.route_id && 
-                selectedRoute?.end_hub_id === route.end_hub_id;
-
-              const uniqueKey = `${route.route_id}-${route.start_hub_id}-${route.end_hub_id}-${index}`;
-              const queueCount = route.driver_queue_count || Math.floor(Math.random() * 4);
-
-              return (
-                <TouchableOpacity 
-                  key={uniqueKey} 
-                  style={[styles.routeCard, isSelected && styles.selectedItemBorder]}
-                  onPress={() => setSelectedRoute(route)}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.routeCardTopRow}>
-                    <View style={styles.routeCardLeft}>
-                      <View style={[styles.routeIconFrame, isSelected && styles.selectedIconFrame]}>
-                        <MaterialCommunityIcons name="bus-side" size={20} color={isSelected ? "#10B981" : "#4B5563"} />
-                      </View>
-                      <View style={styles.routeDetails}>
-                       <Text style={[styles.routeText, isSelected && styles.selectedRouteText]} numberOfLines={1}>
-                          {route.pass_through_name 
-                            ? `${route.pickup_hub_name} ➔ ${route.pass_through_name} ➔ ${route.destination_name}`
-                            : `${route.pickup_hub_name} ➔ ${route.destination_name}`}
-                        </Text>
-                      <Text style={styles.routeSubPrice}>Estimated Fare: {route.current_price || route.recommended_base_price} ETB</Text>
-                      </View>
-                    </View>
-                    {isSelected && (
-                      <View style={styles.selectedCheckCircle}>
-                        <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Driver Queue & Stats Footer inside Corridor Card */}
-                  <View style={styles.queueStatsFooter}>
-                    <View style={styles.queueInfoBadge}>
-                      <Ionicons name="people" size={13} color="#6B7280" />
-                      <Text style={styles.queueInfoText}>Driver Queue: <Text style={styles.boldText}>{queueCount} online</Text></Text>
-                    </View>
-                    <View style={styles.queueInfoBadge}>
-                      <Ionicons name="time" size={13} color="#6B7280" />
-                      <Text style={styles.queueInfoText}>Avg Wait: <Text style={styles.boldText}>{queueCount === 0 ? "Instant" : "~3 mins"}</Text></Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            })
+          </View>
+          {isSelected && (
+            <View style={styles.selectedCheckCircle}>
+              <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+            </View>
           )}
+        </View>
+
+        {/* Driver Queue & Stats Footer inside Corridor Card */}
+        <View style={styles.queueStatsFooter}>
+          <View style={styles.queueInfoBadge}>
+            <Ionicons name="people" size={13} color="#6B7280" />
+            <Text style={styles.queueInfoText}>
+              Driver Queue: <Text style={styles.boldText}>{queueCount} online</Text>
+            </Text>
+          </View>
+          <View style={styles.queueInfoBadge}>
+            <Ionicons name="time" size={13} color="#6B7280" />
+            <Text style={styles.queueInfoText}>
+              Avg Wait: <Text style={styles.boldText}>{queueCount === 0 ? "Instant" : "~3 mins"}</Text>
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  })
+)}
 
           {/* 💡 RECOMMENDED DRIVER DETAILS & INSIGHTS */}
           <Text style={[styles.sectionHeadingLabel, { marginTop: 15 }]}>Driver Recommendations & Tips</Text>
@@ -718,6 +780,41 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     zIndex: 20,
   },
+// Floating Radar Toggle Button on Map
+  radarToggleFloatingButton: {
+    position: "absolute",
+    top: 115,
+    right: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    zIndex: 10,
+  },
+  radarToggleText: { fontSize: 11, color: "#6B7280", marginLeft: 5, fontWeight: "600" },
+
+  // Recommended Target Badge on Hub Marker
+  recommendedBadgeOverlay: {
+    position: "absolute",
+    top: -22,
+    backgroundColor: "#10B981",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#FFFFFF",
+    elevation: 4,
+  },
+  recommendedBadgeText: { fontSize: 8, fontWeight: "800", color: "#FFFFFF" },
   headerLeftCluster: { flexDirection: "column" },
   headerTitleText: { fontSize: 14, fontWeight: "800", color: "#111827" },
   headerSubtext: { fontSize: 11, color: "#6B7280", fontWeight: "500" },
