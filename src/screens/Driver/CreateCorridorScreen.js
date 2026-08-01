@@ -596,10 +596,12 @@ export default function CreateCorridorScreen({ navigation }) {
                         <MaterialCommunityIcons name="bus-side" size={20} color={isSelected ? "#10B981" : "#4B5563"} />
                       </View>
                       <View style={styles.routeDetails}>
-                        <Text style={[styles.routeText, isSelected && styles.selectedRouteText]} numberOfLines={1}>
-                          {Array.isArray(route.stops) ? route.stops.join(" ➔ ") : "Corridor Route"}
+                       <Text style={[styles.routeText, isSelected && styles.selectedRouteText]} numberOfLines={1}>
+                          {route.pass_through_name 
+                            ? `${route.pickup_hub_name} ➔ ${route.pass_through_name} ➔ ${route.destination_name}`
+                            : `${route.pickup_hub_name} ➔ ${route.destination_name}`}
                         </Text>
-                        <Text style={styles.routeSubPrice}>Estimated Fare: {route.base_price || 100} ETB</Text>
+                      <Text style={styles.routeSubPrice}>Estimated Fare: {route.current_price || route.recommended_base_price} ETB</Text>
                       </View>
                     </View>
                     {isSelected && (
