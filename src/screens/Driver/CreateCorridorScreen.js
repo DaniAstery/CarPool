@@ -22,7 +22,7 @@ import { io } from "socket.io-client";
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://192.168.1.3:5000";
 
-const DEFAULT_LOCATION = {
+const FALLBACK_LOCATION = {
   latitude: 9.0220,
   longitude: 38.8450,
   latitudeDelta: 0.03,
@@ -141,19 +141,18 @@ const DispatchMap = memo(({ driverCoords, targetHubForLine, topHubs, currentHub,
         )}
       </MapView>
 
-      {/* 📏 Always-Visible Floating Distance Banner */}
-     {/* 📏 Always-Visible Fixed Distance Banner */}
-{targetHubForLine && typeof currentDriverDistance === "number" && (
-  <View style={styles.persistentDistanceBanner}>
-    <Ionicons name="navigate" size={14} color="#10B981" style={{ marginRight: 6 }} />
-    <Text style={styles.persistentDistanceText}>
-      Distance to <Text style={styles.boldText}>{targetHubForLine.name || "Hub"}</Text>:{" "}
-      <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#EF4444" }]}>
-        {currentDriverDistance.toFixed(2)} km
-      </Text>
-    </Text>
-  </View>
-)}
+      {/* 📏 Always-Visible Fixed Distance Banner */}
+      {targetHubForLine && typeof currentDriverDistance === "number" && (
+        <View style={styles.persistentDistanceBanner}>
+          <Ionicons name="navigate" size={14} color="#10B981" style={{ marginRight: 6 }} />
+          <Text style={styles.persistentDistanceText}>
+            Distance to <Text style={styles.boldText}>{targetHubForLine.name || "Hub"}</Text>:{" "}
+            <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#EF4444" }]}>
+              {currentDriverDistance.toFixed(2)} km
+            </Text>
+          </Text>
+        </View>
+      )}
 
       {/* Floating Map Radar Toggle Button */}
       <TouchableOpacity 
@@ -195,11 +194,64 @@ export default function CreateCorridorScreen({ navigation }) {
 
   const mapRef = useRef(null);
 
+  const [currentRegion, setCurrentRegion] = useState(null);
+  const [loadingLocation, setLoadingLocation] = useState(true);
+
   // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
   useEffect(() => {
     const backAction = () => true;
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
+  }, []);
+
+  // 🌍 DEDICATED DRIVER GPS AUTO-LOCATION & VALIDATION
+  useEffect(() => {
+    let isMounted = true;
+
+    async function fetchDeviceLocation() {
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        
+        if (status !== 'granted') {
+          console.warn('Location permission denied. Using fallback location.');
+          if (isMounted) {
+            setCurrentRegion(FALLBACK_LOCATION);
+            setLoadingLocation(false);
+          }
+          return;
+        }
+
+        let location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        if (isMounted && location) {
+          const coords = {
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.03,
+            longitudeDelta: 0.03,
+          };
+          setCurrentRegion(coords);
+          setDriverCoords(coords);
+        }
+      } catch (error) {
+        console.error('Error fetching device location:', error);
+        if (isMounted) {
+          setCurrentRegion(FALLBACK_LOCATION);
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingLocation(false);
+        }
+      }
+    }
+
+    fetchDeviceLocation();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // 🌍 FETCH SYSTEM HUBS ON MOUNT
@@ -304,93 +356,29 @@ export default function CreateCorridorScreen({ navigation }) {
     checkActiveDriverSession();
   }, [currentDriverId, isAuthLoading, navigation]);
 
-    // 🔌 Real-time Socket.io Sync for Live Queue & Wait Time Updates
-      useEffect(() => {
-        if (!currentHub || !currentHub.name) return;
-
-        const socket = io(API_URL);
-
-        socket.on("connect", () => {
-          console.log("🟢 Connected to live dispatcher socket");
-          // Join the specific room for this hub name
-          socket.emit("join_hub", { hub_name: currentHub.name });
-        });
-
-        // Listen for live database push updates
-        socket.on("queue_update", (updatedCorridors) => {
-          if (Array.isArray(updatedCorridors)) {
-            console.log("🔥 Received live queue update via socket");
-            setPredefinedCorridors(updatedCorridors);
-          }
-        });
-
-        return () => {
-          socket.disconnect();
-          console.log("🔴 Disconnected dispatcher socket");
-        };
-      }, [currentHub]);
-
-
-
-
-  // 🌍 DEDICATED DRIVER GPS AUTO-LOCATION & VALIDATION
+  // 🔌 Real-time Socket.io Sync for Live Queue & Wait Time Updates
   useEffect(() => {
-    if (!currentDriverId) return;
+    if (!currentHub || !currentHub.name) return;
 
-    const autoLocateDriver = async () => {
-      setIsLocating(true);
-      try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          setIsLocating(false);
-          setGpsWarningText("Location permission denied. Enable GPS.");
-          return;
-        }
+    const socket = io(API_URL);
 
-        let location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        
-        const coords = {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.03,
-          longitudeDelta: 0.03,
-        };
-        setDriverCoords(coords);
+    socket.on("connect", () => {
+      console.log("🟢 Connected to live dispatcher socket");
+      socket.emit("join_hub", { hub_name: currentHub.name });
+    });
 
-        const response = await fetch(`${API_URL}/api/driver/validate-location`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            user_lat: coords.latitude,
-            user_lng: coords.longitude,
-            user_id: currentDriverId,
-          }),
-        });
-
-        const data = await response.json();
-        
-        if (response.ok && data.nearestHub) {
-          setNearestHub(data.nearestHub);
-          setDistanceToHubKm(data.distanceKm || null);
-          if (data.inRange) {
-            handleHubSelection(data.nearestHub);
-          } else {
-            setGpsWarningText(`Out of range (~${data.distanceKm || "?"} km from ${data.closestHubName || data.nearestHub.name}). Must be within 2km.`);
-          }
-        }
-      } catch (err) {
-        setGpsWarningText("Failed to retrieve GPS location.");
-      } finally {
-        setIsLocating(false);
+    socket.on("queue_update", (updatedCorridors) => {
+      if (Array.isArray(updatedCorridors)) {
+        console.log("🔥 Received live queue update via socket");
+        setPredefinedCorridors(updatedCorridors);
       }
+    });
+
+    return () => {
+      socket.disconnect();
+      console.log("🔴 Disconnected dispatcher socket");
     };
-
-    autoLocateDriver();
-  }, [currentDriverId]);
-
-
+  }, [currentHub]);
 
   // 📍 HUB SELECTION ENGINE
   const handleHubSelection = useCallback(async (hub) => {
@@ -399,11 +387,10 @@ export default function CreateCorridorScreen({ navigation }) {
     setLoadingCorridors(true);
     
     try {
-          const [corridorRes, requestsRes] = await Promise.all([
-          fetch(`${API_URL}/api/routes/live-corridors/${encodeURIComponent(hub.name)}`),
-          fetch(`${API_URL}/api/corridors/passenger-requests`)
-        ]);
-
+      const [corridorRes, requestsRes] = await Promise.all([
+        fetch(`${API_URL}/api/routes/live-corridors/${encodeURIComponent(hub.name)}`),
+        fetch(`${API_URL}/api/corridors/passenger-requests`)
+      ]);
 
       const corridorsData = await corridorRes.json();
       const requestsData = await requestsRes.json();
@@ -452,7 +439,6 @@ export default function CreateCorridorScreen({ navigation }) {
       return;
     }
 
-    // 🔒 STRICT ALLOWABLE RANGE RULE ENFORCEMENT
     if (!isInRangeOfSelected) {
       Alert.alert(
         "Out of Allowable Range", 
@@ -517,11 +503,11 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
-  if (isAuthLoading) {
+  if (isAuthLoading || loadingLocation || !currentRegion) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
         <ActivityIndicator size="large" color="#10B981" />
-        <Text style={styles.loadingText}>Synchronizing profiles...</Text>
+        <Text style={styles.loadingText}>Detecting your location & profiles...</Text>
       </SafeAreaView>
     );
   }
@@ -533,19 +519,19 @@ export default function CreateCorridorScreen({ navigation }) {
       
       {/* 🗺️ FULL SCREEN MAP CANVAS (Top 4 Hubs Only) */}
       <View style={styles.mapContainer}>
-       <DispatchMap 
-
-            driverCoords={driverCoords}
-            targetHubForLine={targetHubForLine}
-            topHubs={topHubs}
-            currentHub={currentHub}
-            nearestHub={nearestHub}
-            mapRef={mapRef}
-            isDrawerExpanded={isDrawerExpanded}
-            onSelectHub={handleHubSelection}
-            showRadiusCircle={showRadiusCircle}
-            onToggleRadius={() => setShowRadiusCircle(!showRadiusCircle)}
-          />
+        <DispatchMap 
+          driverCoords={driverCoords}
+          targetHubForLine={targetHubForLine}
+          topHubs={topHubs}
+          currentHub={currentHub}
+          nearestHub={nearestHub}
+          mapRef={mapRef}
+          isDrawerExpanded={isDrawerExpanded}
+          onSelectHub={handleHubSelection}
+          showRadiusCircle={showRadiusCircle}
+          onToggleRadius={() => setShowRadiusCircle(!showRadiusCircle)}
+          currentDriverDistance={currentDriverDistance}
+        />
       </View>
 
       {/* 👑 TOP FLOATING POWER BUTTON HEADER */}
@@ -638,20 +624,20 @@ export default function CreateCorridorScreen({ navigation }) {
             </View>
           )}
 
-         {/* 🛣️ CORRIDORS & DRIVER QUEUES */}
-<Text style={styles.sectionHeadingLabel}>Corridors & Driver Queues</Text>
-{loadingCorridors ? (
-  <View style={styles.skeletonContainer}>
-    <ActivityIndicator size="small" color="#10B981" />
-    <Text style={styles.skeletonText}>Loading corridor blueprints & queues...</Text>
-  </View>
-) : predefinedCorridors.length === 0 ? (
-  <View style={styles.fallbackContainer}>
-    <Ionicons name="map-outline" size={32} color="#9CA3AF" />
-    <Text style={styles.fallbackText}>No active corridors mapped out from {currentHub?.name || 'this hub'}.</Text>
-  </View>
-) : (
-predefinedCorridors.map((route, index) => {
+          {/* 🛣️ CORRIDORS & DRIVER QUEUES */}
+          <Text style={styles.sectionHeadingLabel}>Corridors & Driver Queues</Text>
+          {loadingCorridors ? (
+            <View style={styles.skeletonContainer}>
+              <ActivityIndicator size="small" color="#10B981" />
+              <Text style={styles.skeletonText}>Loading corridor blueprints & queues...</Text>
+            </View>
+          ) : predefinedCorridors.length === 0 ? (
+            <View style={styles.fallbackContainer}>
+              <Ionicons name="map-outline" size={32} color="#9CA3AF" />
+              <Text style={styles.fallbackText}>No active corridors mapped out from {currentHub?.name || 'this hub'}.</Text>
+            </View>
+          ) : (
+            predefinedCorridors.map((route, index) => {
               const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
               const passThroughName = route.pass_through_hub_name || route.pass_through_name;
               const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
@@ -662,23 +648,17 @@ predefinedCorridors.map((route, index) => {
                 (selectedRoute?.drop_off_hub_id === dropOffId ||
                   selectedRoute?.end_hub_id === dropOffId);
 
-              const uniqueKey = `${route.route_id}-${route.pickup_hub_id || "p"}-${
-                dropOffId || "d"
-              }-${index}`;
-
-            
+              const uniqueKey = `${route.route_id}-${route.pickup_hub_id || "p"}-${dropOffId || "d"}-${index}`;
               const estimatedFare = route.recommended_base_price || 100;
               
-              // Dynamic wait calculation
               const queueCount = Number(route.driver_queue_count ?? 0);
-                const avgWaitMins = Number(route.average_wait_mins ?? 0);
+              const avgWaitMins = Number(route.average_wait_mins ?? 0);
+              const dynamicWaitTime = queueCount === 0 
+                ? "Instant" 
+                : avgWaitMins > 0 
+                  ? `~${avgWaitMins} mins` 
+                  : `~${Math.round(queueCount * 2.5)} mins`;
 
-                // If queue is 0, show "Instant". If we have a historical average, use it; otherwise fallback to a queue-size multiplier.
-                const dynamicWaitTime = queueCount === 0 
-                  ? "Instant" 
-                  : avgWaitMins > 0 
-                    ? `~${avgWaitMins} mins` 
-                    : `~${Math.round(queueCount * 2.5)} mins`;
               return (
                 <TouchableOpacity
                   key={uniqueKey}
@@ -716,16 +696,10 @@ predefinedCorridors.map((route, index) => {
 
                   <View style={styles.queueStatsFooter}>
                     <View style={styles.queueInfoBadge}>
-                      {/* 🟢 Turns green when drivers are online */}
                       <Ionicons name="people" size={13} color={queueCount > 0 ? "#10B981" : "#6B7280"} />
                       <Text style={styles.queueInfoText}>
                         Driver Queue:{" "}
-                        <Text
-                          style={[
-                            styles.boldText,
-                            { color: queueCount > 0 ? "#10B981" : "#1F2937" },
-                          ]}
-                        >
+                        <Text style={[styles.boldText, { color: queueCount > 0 ? "#10B981" : "#1F2937" }]}>
                           {queueCount} online
                         </Text>
                       </Text>
@@ -734,16 +708,14 @@ predefinedCorridors.map((route, index) => {
                       <Ionicons name="time" size={13} color="#6B7280" />
                       <Text style={styles.queueInfoText}>
                         Avg Wait:{" "}
-                        <Text style={styles.boldText}>
-                          {dynamicWaitTime}F
-                        </Text>
+                        <Text style={styles.boldText}>{dynamicWaitTime}</Text>
                       </Text>
                     </View>
                   </View>
                 </TouchableOpacity>
               );
             })
-)}
+          )}
 
           {/* 💡 RECOMMENDED DRIVER DETAILS & INSIGHTS */}
           <Text style={[styles.sectionHeadingLabel, { marginTop: 15 }]}>Driver Recommendations & Tips</Text>
@@ -754,291 +726,499 @@ predefinedCorridors.map((route, index) => {
             </View>
             <View style={styles.recommendationItem}>
               <Ionicons name="shield-checkmark" size={16} color="#3B82F6" />
-              <Text style={styles.recommendationText}>
-                {isInRangeOfSelected 
-                  ? `You are within range (${currentDriverDistance?.toFixed(1)} km) to go online.` 
-                  : `Selected hub is out of range (~${currentDriverDistance?.toFixed(1)} km). Move within 2.0 km.`}
-              </Text>
-            </View>
-          </View>
-
-          {/* 👥 CAPACITY CONTROLLER */}
-          <Text style={[styles.sectionHeadingLabel, { marginTop: 15 }]}>Vehicle Pool Limits</Text>
-          <View style={styles.detailsContainerCard}>
-            <View style={styles.detailRowItem}>
-              <View style={styles.labelGroup}>
-                <Text style={styles.detailRowLabel}>Seats Available</Text>
-                <Text style={styles.detailRowSubtitle}>Maximum passenger threshold</Text>
-              </View>
-              <View style={styles.counterControlWrapper}>
-                <TouchableOpacity style={styles.counterButton} onPress={() => setCapacity(p => Math.max(1, p - 1))} activeOpacity={0.7}>
-                  <Ionicons name="remove" size={16} color="#1F2937" />
-                </TouchableOpacity>
-                <Text style={styles.counterValueText}>{capacity}</Text>
-                <TouchableOpacity style={styles.counterButton} onPress={() => setCapacity(p => p + 1)} activeOpacity={0.7}>
-                  <Ionicons name="add" size={16} color="#1F2937" />
-                </TouchableOpacity>
-              </View>
+              <Text style={styles.recommendationText}>Ensure passenger verification matches the digital badge before departure.</Text>
             </View>
           </View>
         </ScrollView>
 
-        {/* Action Button */}
-        {isDrawerExpanded && (
-          <TouchableOpacity 
-            style={[styles.actionButton, (!selectedRoute || !currentHub || !isInRangeOfSelected || isPublishing) && styles.actionButtonDisabled]}
+        {/* 🚀 LAUNCH DISPATCH / GO ONLINE BUTTON FOOTER */}
+        <View style={styles.drawerFooterBar}>
+          <TouchableOpacity
+            style={[
+              styles.goOnlineButton,
+              (!selectedRoute || !isInRangeOfSelected || isPublishing) && styles.disabledGoOnlineButton
+            ]}
             onPress={handleGoOnline}
-            disabled={isPublishing || !selectedRoute || !currentHub || !isInRangeOfSelected}
-            activeOpacity={0.9}
+            activeOpacity={0.85}
+            disabled={!selectedRoute || !isInRangeOfSelected || isPublishing}
           >
             {isPublishing ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <View style={styles.btnContentRow}>
-                <Ionicons name="radio" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.actionButtonText}>
-                  {isInRangeOfSelected ? "GO ONLINE" : "OUT OF HUB RANGE"}
+              <>
+                <Ionicons name="flash" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.goOnlineButtonText}>
+                  {!isInRangeOfSelected ? "Move Closer to Hub" : "Go Online & Broadcast"}
                 </Text>
-              </View>
+              </>
             )}
           </TouchableOpacity>
-        )}
+        </View>
+
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F8F9FA" },
-  centered: { justifyContent: "center", alignItems: "center" },
-  loadingText: { marginTop: 10, color: "#4B5563", fontSize: 13, fontWeight: "600" },
-  mapContainer: { flex: 1 },
-
-  // Top Floating Header
+  container: {
+    flex: 1,
+    backgroundColor: "#F3F4F6",
+  },
+  centered: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#4B5563",
+    fontWeight: "500",
+  },
+  mapContainer: {
+    flex: 1,
+  },
   topFloatingHeader: {
     position: "absolute",
-    top: Platform.OS === 'ios' ? 50 : 20,
-    left: 20,
-    right: 20,
+    top: Platform.OS === "ios" ? 50 : 25,
+    left: 16,
+    right: 16,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     backgroundColor: "rgba(255, 255, 255, 0.95)",
-    paddingHorizontal: 16,
     paddingVertical: 10,
+    paddingHorizontal: 16,
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    elevation: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.15,
     shadowRadius: 4,
-    zIndex: 20,
-  },
-// Floating Radar Toggle Button on Map
-  radarToggleFloatingButton: {
-    position: "absolute",
-    top: 115,
-    right: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    elevation: 4,
     zIndex: 10,
   },
-  radarToggleText: { fontSize: 11, color: "#6B7280", marginLeft: 5, fontWeight: "600" },
-
-  // Recommended Target Badge on Hub Marker
-  recommendedBadgeOverlay: {
+  headerLeftCluster: {
+    flexDirection: "column",
+  },
+  headerTitleText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  headerSubtext: {
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  logoutIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#FEE2E2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  slidingPanelDrawer: {
     position: "absolute",
-    top: -22,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 10,
+    zIndex: 20,
+  },
+  drawerExpanded: {
+    height: height * 0.58,
+  },
+  drawerCollapsed: {
+    height: 110,
+  },
+  dragHandleContainer: {
+    paddingTop: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  dragHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D1D5DB",
+    alignSelf: "center",
+    marginBottom: 8,
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  previewLeftCluster: {
+    flex: 1,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  subtitle: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 2,
+  },
+  badgeArrived: {
+    backgroundColor: "#D1FAE5",
+  },
+  badgeOutOfRange: {
+    backgroundColor: "#FEE2E2",
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  expandToggleBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  expandToggleText: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginRight: 2,
+  },
+  drawerScrollBody: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  sectionHeadingLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#6B7280",
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  hubChipsScroll: {
+    marginBottom: 16,
+  },
+  hubChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginRight: 8,
+  },
+  hubChipSelected: {
     backgroundColor: "#10B981",
+    borderColor: "#10B981",
+  },
+  hubChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#374151",
+    marginLeft: 6,
+  },
+  hubChipTextSelected: {
+    color: "#FFFFFF",
+  },
+  hubChipSubText: {
+    fontSize: 10,
+    color: "#6B7280",
+    marginLeft: 6,
+  },
+  demandIndicatorBadge: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#FEF3C7",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+  },
+  badgeLeftRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  demandIndicatorText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#92400E",
+    marginLeft: 6,
+  },
+  highDemandPill: {
+    backgroundColor: "#D97706",
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 6,
+    borderRadius: 4,
+  },
+  highDemandText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  skeletonContainer: {
+    padding: 20,
+    alignItems: "center",
+  },
+  skeletonText: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 6,
+  },
+  fallbackContainer: {
+    padding: 20,
+    alignItems: "center",
+  },
+  fallbackText: {
+    fontSize: 12,
+    color: "#6B7280",
+    textAlign: "center",
+    marginTop: 6,
+  },
+  routeCard: {
+    backgroundColor: "#F9FAFB",
     borderWidth: 1,
-    borderColor: "#FFFFFF",
+    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  selectedItemBorder: {
+    borderColor: "#10B981",
+    backgroundColor: "#ECFDF5",
+  },
+  routeCardTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  routeCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 8,
+  },
+  routeIconFrame: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: "#E5E7EB",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 10,
+  },
+  selectedIconFrame: {
+    backgroundColor: "#D1FAE5",
+  },
+  routeDetails: {
+    flex: 1,
+  },
+  routeText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1F2937",
+  },
+  selectedRouteText: {
+    color: "#065F46",
+    fontWeight: "700",
+  },
+  routeSubPrice: {
+    fontSize: 11,
+    color: "#4B5563",
+    marginTop: 2,
+  },
+  selectedCheckCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#10B981",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  queueStatsFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+    paddingTop: 8,
+  },
+  queueInfoBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  queueInfoText: {
+    fontSize: 11,
+    color: "#4B5563",
+    marginLeft: 4,
+  },
+  boldText: {
+    fontWeight: "700",
+  },
+  recommendationsCard: {
+    backgroundColor: "#F9FAFB",
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  recommendationItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 8,
+  },
+  recommendationText: {
+    fontSize: 11,
+    color: "#4B5563",
+    marginLeft: 8,
+    flex: 1,
+  },
+  drawerFooterBar: {
+    padding: 16,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: "#F3F4F6",
+  },
+  goOnlineButton: {
+    backgroundColor: "#10B981",
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderRadius: 14,
+    shadowColor: "#10B981",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
     elevation: 4,
   },
-  recommendedBadgeText: { fontSize: 8, fontWeight: "800", color: "#FFFFFF" },
-  headerLeftCluster: { flexDirection: "column" },
-  headerTitleText: { fontSize: 14, fontWeight: "800", color: "#111827" },
-  headerSubtext: { fontSize: 11, color: "#6B7280", fontWeight: "500" },
-  logoutIconButton: { backgroundColor: "#FEF2F2", padding: 8, borderRadius: 8 },
-
-  // Driver Car Avatar Marker
-  driverMarkerHalo: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(16, 185, 129, 0.25)", justifyContent: "center", alignItems: "center" },
-  driverMarkerBubble: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
-
-  // Hub Waypoint Marker
+  disabledGoOnlineButton: {
+    backgroundColor: "#9CA3AF",
+    shadowOpacity: 0,
+  },
+  goOnlineButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  persistentDistanceBanner: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 110 : 85,
+    alignSelf: "center",
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 10,
+  },
+  persistentDistanceText: {
+    fontSize: 12,
+    color: "#374151",
+  },
+  radarToggleFloatingButton: {
+    position: "absolute",
+    right: 16,
+    top: Platform.OS === "ios" ? 110 : 85,
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 10,
+  },
+  radarToggleText: {
+    fontSize: 11,
+    color: "#4B5563",
+    marginLeft: 4,
+  },
   hubWaypointMarker: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: "rgba(107, 114, 128, 0.3)",
     alignItems: "center",
     justifyContent: "center",
   },
   activeHubWaypointMarker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(16, 185, 129, 0.35)",
+    transform: [{ scale: 1.2 }],
+  },
+  glowingTargetBadge: {
+    backgroundColor: "#059669",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 2,
+  },
+  glowingTargetText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "700",
   },
   hubWaypointDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: "#10B981",
     borderWidth: 2,
     borderColor: "#FFFFFF",
   },
-
-  // Sliding Panel Drawer
-  slidingPanelDrawer: { 
-    position: "absolute", 
-    bottom: 0, 
-    width: width, 
-    backgroundColor: "#FFF", 
-    borderTopLeftRadius: 24, 
-    borderTopRightRadius: 24, 
-    paddingTop: 8, 
-    paddingHorizontal: 20, 
-    elevation: 15,
-    shadowColor: "#000", 
-    shadowOffset: { width: 0, height: -3 }, 
-    shadowOpacity: 0.1, 
-    shadowRadius: 6,
-    zIndex: 30 
-  },
-  drawerCollapsed: { height: 125 },
-  drawerExpanded: { maxHeight: height * 0.70 },
-
-  dragHandleContainer: { paddingBottom: 8, width: "100%" },
-  dragHandle: { width: 40, height: 4, backgroundColor: "#E0E0E0", borderRadius: 2, alignSelf: "center", marginBottom: 10 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  previewLeftCluster: { flex: 1 },
-  title: { fontSize: 18, fontWeight: "700", color: "#1A1A1A" },
-  subtitle: { fontSize: 12, color: "#666", marginTop: 2 },
-  boldText: { fontWeight: "700", color: "#111827" },
-  
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginBottom: 4 },
-  badgeArrived: { backgroundColor: "#E8F5E9" },
-  badgeOutOfRange: { backgroundColor: "#FEF2F2" },
-  badgeText: { fontSize: 11, fontWeight: "700", color: "#10B981" },
-
-  expandToggleBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end" },
-  expandToggleText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginRight: 2 },
-
-  drawerScrollBody: { flexGrow: 0 },
-
-  hubChipsScroll: { marginBottom: 15 },
-  hubChip: {
-    flexDirection: "row",
+  driverPinnedContainer: {
     alignItems: "center",
-    backgroundColor: "#F3F4F6",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    gap: 8,
   },
-  hubChipSelected: {
+  driverPinBadge: {
+    backgroundColor: "#111827",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 2,
+  },
+  driverPinText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  glowingDriverHalo: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(16, 185, 129, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  driverMarkerBubble: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: "#10B981",
-    borderColor: "#059669",
-  },
-  hubChipText: { fontSize: 12, fontWeight: "700", color: "#4B5563" },
-  hubChipSubText: { fontSize: 10, fontWeight: "500", color: "#6B7280", marginTop: 1 },
-  hubChipTextSelected: { color: "#FFFFFF" },
-
-  demandIndicatorBadge: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    justifyContent: "space-between", 
-    backgroundColor: "#FFFBEB", 
-    padding: 12, 
-    borderRadius: 12, 
-    marginBottom: 15, 
-    borderWidth: 1, 
-    borderColor: "#FDE68A" 
-  },
-  badgeLeftRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  demandIndicatorText: { color: "#B45309", fontSize: 12, fontWeight: "700" },
-  highDemandPill: { backgroundColor: "#D97706", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  highDemandText: { color: "#FFFFFF", fontSize: 8, fontWeight: "900" },
-
-  sectionHeadingLabel: { fontSize: 11, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8, marginLeft: 2 },
-  
-  skeletonContainer: { paddingVertical: 20, alignItems: "center", gap: 10 },
-  skeletonText: { color: "#6B7280", fontSize: 12, fontWeight: "500" },
-  fallbackContainer: { paddingVertical: 20, alignItems: "center", gap: 8 },
-  fallbackText: { color: "#9CA3AF", fontSize: 12, fontWeight: "500", textAlign: "center", paddingHorizontal: 20 },
-
-  routeCard: { 
-    backgroundColor: "#FFFFFF", 
-    padding: 14, 
-    borderRadius: 12, 
-    marginBottom: 10, 
-    borderWidth: 1, 
-    borderColor: "#E5E7EB" 
-  },
-  routeCardTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  routeCardLeft: { flexDirection: "row", alignItems: "center", flex: 1 },
-  routeIconFrame: { backgroundColor: "#F3F4F6", padding: 8, borderRadius: 10, marginRight: 12 },
-  selectedIconFrame: { backgroundColor: "#ECFDF5" },
-  routeDetails: { flex: 1 },
-  routeText: { fontSize: 14, fontWeight: "700", color: "#1F2937" },
-  selectedRouteText: { color: "#065F46" },
-  routeSubPrice: { fontSize: 11, color: "#6B7280", marginTop: 3, fontWeight: "500" },
-  selectedItemBorder: { borderColor: "#10B981", borderWidth: 2, backgroundColor: "#F0FDF4" },
-  selectedCheckCircle: { backgroundColor: "#10B981", width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-
-  queueStatsFooter: {
-    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#F3F4F6",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
-  queueInfoBadge: { flexDirection: "row", alignItems: "center", gap: 5 },
-  queueInfoText: { fontSize: 11, color: "#4B5563" },
-
-  recommendationsCard: {
-    backgroundColor: "#F0FDF4",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#BBF7D0",
-    padding: 12,
-    gap: 8,
-  },
-  recommendationItem: { flexDirection: "row", alignItems: "center", gap: 8 },
-  recommendationText: { fontSize: 12, color: "#166534", fontWeight: "500", flex: 1 },
-
-  detailsContainerCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 14, marginBottom: 15 },
-  detailRowItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 14 },
-  labelGroup: { flexDirection: "column" },
-  detailRowLabel: { fontSize: 13, color: "#111827", fontWeight: "700" },
-  detailRowSubtitle: { fontSize: 11, color: "#6B7280", marginTop: 2, fontWeight: "400" },
-  counterControlWrapper: { flexDirection: "row", alignItems: "center", backgroundColor: "#F3F4F6", padding: 3, borderRadius: 10 },
-  counterButton: { width: 32, height: 32, backgroundColor: "#FFFFFF", borderRadius: 8, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E5E7EB" },
-  counterValueText: { fontSize: 14, fontWeight: "800", paddingHorizontal: 16 },
-
-  actionButton: { backgroundColor: "#10B981", paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 10, marginBottom: Platform.OS === 'android' ? 20 : 10, marginHorizontal: 20 },
-  actionButtonDisabled: { backgroundColor: "#A0B2B2" },
-  btnContentRow: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  actionButtonText: { color: "#FFF", fontSize: 15, fontWeight: "700", letterSpacing: 0.5 },
 });

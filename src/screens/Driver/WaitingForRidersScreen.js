@@ -19,18 +19,16 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   const { user } = useAuth();
   const currentDriverId = user?.id || user?.user_id || route?.params?.driverId;
 
-  // Pull parameters directly. If navigation params fail, fall back safely to Route 1 / Hub 1 
-  // to prevent running lookups against mismatched offline default states
-  const routeId = route?.params?.routeId || 1; 
-  const currentPickupHubId = route?.params?.hubId || 1; 
-
   const [loading, setLoading] = useState(true);
   const [seatsFilled, setSeatsFilled] = useState(0);
   const [statusText, setStatusText] = useState("Waiting for riders to join");
   const [activityLogs, setActivityLogs] = useState([]);
 
-  const [hubNameDisplay, setHubNameDisplay] = useState("Loading...");
-  const [destinationDisplay, setDestinationDisplay] = useState("...");
+  const [hubNameDisplay, setHubNameDisplay] = useState("Loading Hub...");
+  const [destinationDisplay, setDestinationDisplay] = useState("Loading Destination...");
+  const [pricePerSeat, setPricePerSeat] = useState(150);
+  const [routeId, setRouteId] = useState(null);
+  const [currentPickupHubId, setCurrentPickupHubId] = useState(null);
 
   // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
   useEffect(() => {
@@ -40,12 +38,17 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   }, []);
 
   useEffect(() => {
-    console.log(`📡 Streaming routepool updates for Route: [${routeId}] | Hub ID: [${currentPickupHubId}]`);
+    if (!currentDriverId) {
+      setLoading(false);
+      return;
+    }
 
-    async function checkCorridorStatus() {
+    console.log(`📡 Streaming waiting pool status for Driver ID: [${currentDriverId}]`);
+
+    async function checkWaitingPoolStatus() {
       try {
         const response = await fetch(
-          `${API_URL}/api/rides/corridor-pool-status?routeId=${routeId}&hubId=${currentPickupHubId}`
+          `${API_URL}/api/rides/waiting-pool-status/${currentDriverId}`
         );
         
         if (!response.ok) {
@@ -57,16 +60,13 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         const totalSearching = data.totalSearching || 0;
         const totalMatched = data.totalMatched || 0;
         const matchedRiders = data.matchedRiders || [];
-        const serverRouteId = data.routeId || routeId;
 
-        // Dynamic header resolution driven by what the server path yields
-        if (currentPickupHubId === 1 || serverRouteId === 1) {
-          setHubNameDisplay("Megenagna");
-          setDestinationDisplay("Piassa");
-        } else {
-          setHubNameDisplay("Mexico");
-          setDestinationDisplay("Bole");
-        }
+        // Update dynamic states from backend database record
+        if (data.hubName) setHubNameDisplay(data.hubName);
+        if (data.destinationName) setDestinationDisplay(data.destinationName);
+        if (data.pricePerSeat) setPricePerSeat(data.pricePerSeat);
+        if (data.routeId) setRouteId(data.routeId);
+        if (data.hubId) setCurrentPickupHubId(data.hubId);
 
         // 🎯 TOTAL CAPACITY ACCUMULATION: Combined headcount footprint
         const currentActiveHeadcount = totalSearching + totalMatched;
@@ -88,13 +88,18 @@ export default function WaitingForRidersScreen({ route, navigation }) {
           setStatusText("Waiting for riders to join");
         }
 
-        // 🚀 CRITICAL DISPATCH OVERHAUL:
-        // Trigger progression if either 2 passengers have matched, OR the combined 
-        // queue pool headcount reaches the target threshold to execute a full stream.
+        // 🚀 CRITICAL DISPATCH ADVANCEMENT:
         if (totalMatched >= 2 || currentActiveHeadcount >= 2) {
-          console.log("🚀 Match threshold satisfied directly via server! Advancing to ProposalDriver.");
+          console.log("🚀 Match threshold satisfied! Advancing to ProposalDriver.");
           clearInterval(syncInterval);
-          navigation.replace("ProposalDriver", { routeId: serverRouteId, hubId: currentPickupHubId });
+          navigation.replace("ProposalDriver", { 
+            routeId: data.routeId, 
+            rideOfferId: data.rideOfferId,
+            driverId: currentDriverId,
+            hubId: data.hubId,
+            hubName: data.hubName,
+            destinationName: data.destinationName 
+          });
         }
 
       } catch (err) {
@@ -103,11 +108,11 @@ export default function WaitingForRidersScreen({ route, navigation }) {
       }
     }
 
-    checkCorridorStatus();
-    const syncInterval = setInterval(checkCorridorStatus, 2500);
+    checkWaitingPoolStatus();
+    const syncInterval = setInterval(checkWaitingPoolStatus, 2500);
 
     return () => clearInterval(syncInterval);
-  }, [currentPickupHubId, routeId, navigation]);
+  }, [currentDriverId, navigation]);
 
   // 📴 GO OFFLINE HANDLER WITH BACKEND CLEANUP
   const executeGoOffline = async () => {
@@ -196,7 +201,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
 
           <View style={styles.priceSummaryRow}>
             <Text style={styles.priceLabelText}>Price per seat</Text>
-            <Text style={styles.priceValueText}>{routeId === 2 ? "ETB 180" : "ETB 150"}</Text>
+            <Text style={styles.priceValueText}>ETB {pricePerSeat}</Text>
           </View>
         </View>
 
