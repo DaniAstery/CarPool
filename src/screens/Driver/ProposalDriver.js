@@ -81,11 +81,34 @@ export default function ProposalDriver({ navigation, route }) {
     })();
   }, []);
 
+  // Helper function using component state as source of truth
+  const handleDriverTimeout = async () => {
+    try {
+      const offerId = offerDetails?.ride_offer_id || offerDetails?.id || activeRideOfferIdRef.current;
+      if (!offerId) return;
+
+      await fetch(`${API_URL}/rides/driver-expired`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ride_offer_id: offerId,
+          driver_id: currentDriverId,
+          route_id: routeId,
+        }),
+      });
+    } catch (err) {
+      console.error("❌ Error notifying backend of driver expiration:", err);
+    }
+  };
+
   // Dispatch Timer
   useEffect(() => {
     if (!hasMinimumRequiredPassengers || isOfferLockedIn) return;
 
     if (timeLeft <= 0 && !driverAccepted) {
+      // Trigger expiration endpoint immediately
+      handleDriverTimeout();
+
       Alert.alert(
         "Offer Expired",
         "The dispatch window for this cluster has expired. Reassigning run.",
@@ -97,7 +120,7 @@ export default function ProposalDriver({ navigation, route }) {
                 index: 0,
                 routes: [
                   {
-                    name: "DriverDashboardScreen",
+                    name: "WaitingForPassengers",
                     params: { driverId: currentDriverId },
                   },
                 ],
@@ -109,14 +132,16 @@ export default function ProposalDriver({ navigation, route }) {
       return;
     }
 
-    const timer = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
+    const timer = setTimeout(() => setTimeLeft((t) => t - 1), 500);
     return () => clearTimeout(timer);
-  }, [
+  }, [                                                                                                                                                                
     timeLeft,
     hasMinimumRequiredPassengers,
     driverAccepted,
     isOfferLockedIn,
     currentDriverId,
+    routeId,
+    offerDetails,
   ]);
 
   // Live Database Polling Pipeline using AuthContext driver ID
@@ -267,7 +292,7 @@ export default function ProposalDriver({ navigation, route }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ride_offer_id: activeRideOfferIdRef.current,
-          driver_id: currentDriverId, // AuthContext driver ID
+          driver_id: currentDriverId,
         }),
       });
 
@@ -321,7 +346,7 @@ export default function ProposalDriver({ navigation, route }) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  driver_id: currentDriverId, // AuthContext driver ID
+                  driver_id: currentDriverId,
                   ride_offer_id: activeRideOfferIdRef.current,
                 }),
               });
