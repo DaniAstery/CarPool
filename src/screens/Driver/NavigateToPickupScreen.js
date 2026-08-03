@@ -34,8 +34,8 @@ export default function NavigateToPickup({ navigation, route }) {
   const [driverLocation, setDriverLocation] = useState(null);
   
   const [pickupLocation, setPickupLocation] = useState({
-    latitude: 9.0227, 
-    longitude: 38.8000, 
+    latitude: 9.0105, 
+    longitude: 38.7935, 
   });
 
   const [offerDetails, setOfferDetails] = useState(null);
@@ -94,8 +94,13 @@ export default function NavigateToPickup({ navigation, route }) {
 
         setOfferDetails(data);
 
-        // Update hub location if backend provides it
-        if (data.hub_latitude && data.hub_longitude) {
+        // Update hub location coordinates using exact backend response fields
+        if (data.pickup_lat && data.pickup_lng) {
+          setPickupLocation({
+            latitude: parseFloat(data.pickup_lat),
+            longitude: parseFloat(data.pickup_lng),
+          });
+        } else if (data.hub_latitude && data.hub_longitude) {
           setPickupLocation({
             latitude: parseFloat(data.hub_latitude),
             longitude: parseFloat(data.hub_longitude),
@@ -108,7 +113,7 @@ export default function NavigateToPickup({ navigation, route }) {
           setHasArrived(true);
         }
 
-        // 1. Clean parse of arrived_passengers array (Handles Postgres text arrays like "{14}" or JS arrays)
+        // 1. Clean parse of arrived_passengers array
         let cleanArrivedIds = [];
         if (data.arrived_passengers) {
           if (Array.isArray(data.arrived_passengers)) {
@@ -144,7 +149,6 @@ export default function NavigateToPickup({ navigation, route }) {
             ? rider.status.toString().trim().toLowerCase()
             : "accepted";
 
-          // Force status to "arrived" if ID is present in arrived array or marked arrived in DB
           let finalStatus =
             cleanArrivedIds.includes(userId) || rawDbStatus === "arrived"
               ? "arrived"
@@ -177,86 +181,83 @@ export default function NavigateToPickup({ navigation, route }) {
   }, [currentDriverId]);
 
   // 🎯 5. ACTION HANDLERS (Arrival & Trip Start)
-    const handleArrived = async () => {
-      setIsActionLoading(true);
-      try {
-        const res = await fetch(`${API_URL}/api/rides/arrive`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            driver_id: currentDriverId, // 👈 Only driver_id is needed now
-          }),
-        });
-
-        const data = await res.json();
-
-        if (res.ok) {
-          console.log("✅ Driver arrival recorded:", data);
-          // Proceed to update local state or UI
-        } else {
-          console.warn("⚠️ Arrival update failed:", data.error);
-        }
-      } catch (err) {
-        console.error("❌ Network error sending arrival update:", err.message);
-      } finally {
-        setIsActionLoading(false);
-      }
-    };
-
-const handleStartTrip = async () => {
-  setIsActionLoading(true);
-  try {
-    const res = await fetch(`${API_URL}/api/rides/start-trip`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        driver_id: currentDriverId, // 👈 Only driver_id is required now
-      }),
-    });
-
-    const responseData = await res.json();
-
-    if (res.ok) {
-      // 🎯 Safely parse ride_offer ID & route ID returned directly by Express/Postgres
-      const finalRideOfferId = parseInt(
-        responseData.ride_offer?.id || responseData.rideOfferId || rideOfferId,
-        10
-      );
-      const activeRouteId = responseData.ride_offer?.routeId || routeId;
-
-      console.log(`🚀 [Start Trip Success] Transitioning to TripInProgress for Ride Offer #${finalRideOfferId}`);
-
-      // Navigate to Trip In Progress Screen
-      navigation.replace("TripInProgress", {
-        routeId: activeRouteId,
-        route_id: activeRouteId,
-        rideOfferId: finalRideOfferId,
-        ride_offer_id: finalRideOfferId,
-        driverId: currentDriverId,
+  const handleArrived = async () => {
+    setIsActionLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/rides/arrive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driver_id: currentDriverId,
+        }),
       });
-    } else {
-      Alert.alert(
-        "Start Trip Failed", 
-        responseData.error || "Could not launch trip sequence."
-      );
+
+      const data = await res.json();
+
+      if (res.ok) {
+        console.log("✅ Driver arrival recorded:", data);
+        setHasArrived(true);
+      } else {
+        console.warn("⚠️ Arrival update failed:", data.error);
+      }
+    } catch (err) {
+      console.error("❌ Network error sending arrival update:", err.message);
+    } finally {
+      setIsActionLoading(false);
     }
-  } catch (error) {
-    console.error("❌ Network error starting trip:", error);
-    Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
-  } finally {
-    setIsActionLoading(false);
-  }
-};
+  };
 
-const handleMainActionButton = () => {
-  if (!hasArrived) {
-    handleArrived();
-  } else {
-    handleStartTrip();
-  }
-};
+  const handleStartTrip = async () => {
+    setIsActionLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/rides/start-trip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          driver_id: currentDriverId,
+        }),
+      });
 
-  // Helper for status badge rendering
+      const responseData = await res.json();
+
+      if (res.ok) {
+        const finalRideOfferId = parseInt(
+          responseData.ride_offer?.id || responseData.rideOfferId || rideOfferId,
+          10
+        );
+        const activeRouteId = responseData.ride_offer?.routeId || routeId;
+
+        console.log(`🚀 [Start Trip Success] Transitioning to TripInProgress for Ride Offer #${finalRideOfferId}`);
+
+        navigation.replace("TripInProgress", {
+          routeId: activeRouteId,
+          route_id: activeRouteId,
+          rideOfferId: finalRideOfferId,
+          ride_offer_id: finalRideOfferId,
+          driverId: currentDriverId,
+        });
+      } else {
+        Alert.alert(
+          "Start Trip Failed", 
+          responseData.error || "Could not launch trip sequence."
+        );
+      }
+    } catch (error) {
+      console.error("❌ Network error starting trip:", error);
+      Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  const handleMainActionButton = () => {
+    if (!hasArrived) {
+      handleArrived();
+    } else {
+      handleStartTrip();
+    }
+  };
+
   const renderStatusBadge = (status) => {
     const normStatus = (status || "matched").toLowerCase();
 
@@ -325,7 +326,7 @@ const handleMainActionButton = () => {
             </Marker>
           )}
 
-          {/* Pickup Hub Marker */}
+          {/* Actual Pickup Hub Marker */}
           <Marker coordinate={pickupLocation} zIndex={1}>
             <View style={styles.hubMarkerContainer}>
               <View style={styles.hubMarkerPin}>
@@ -362,7 +363,7 @@ const handleMainActionButton = () => {
       {/* RIDE MANIFEST CARD */}
       <View style={styles.proposalCard}>
         <ScrollView showsVerticalScrollIndicator={false}>
-          {/* LOCATION DETAILS */}
+          {/* LOCATION DETAILS WITH RESOLVED HUB NAME */}
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}>
               <Ionicons
@@ -373,7 +374,7 @@ const handleMainActionButton = () => {
             </View>
             <View style={styles.locationTextWrapper}>
               <Text style={styles.locationTitle}>
-                {offerDetails?.start_location || "Megenagna Departure Hub"}
+                {offerDetails?.hubName || offerDetails?.start_location || "Departure Staging Hub"}
               </Text>
               <Text style={styles.locationSubtitle}>
                 {hasArrived

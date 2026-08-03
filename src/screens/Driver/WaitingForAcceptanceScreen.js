@@ -42,16 +42,16 @@ export default function ProposalDriver({ navigation, route }) {
   const routeId = route?.params?.routeId || "1";
   const activeRideOfferIdRef = useRef(null);
 
-  // 💸 FARE CALCULATIONS
+  // 💸 FARE & SEAT CALCULATIONS
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
-  
-  // 💰 DYNAMIC ADDITION: Price increases on button only when passengers accept
   const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
+  
+  const totalSeats = offerDetails?.total_seats || 3;
+  const availableSeats = offerDetails?.available_seats !== undefined ? offerDetails.available_seats : totalSeats;
 
   // 🔐 STRICT ACCEPTANCE VALIDATIONS (At least 2 riders must be "accepted" in the DB)
   const hasMinimumTwoPassengersAccepted = strictlyAcceptedCount >= 2;
   const isDriverButtonUnlocked = hasMinimumTwoPassengersAccepted;
-
   const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
 
   // Initialize Location Engine Frame
@@ -133,7 +133,6 @@ export default function ProposalDriver({ navigation, route }) {
           if (Array.isArray(data.accepted_passengers)) {
             acceptedIds = data.accepted_passengers.map(id => parseInt(id, 10));
           } else if (typeof data.accepted_passengers === "string") {
-            // Clean up database representation e.g. "{1, 2}" or "1,2"
             acceptedIds = data.accepted_passengers
               .replace(/{|}/g, "")
               .split(",")
@@ -162,12 +161,9 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
           : [];
 
-        // 3️⃣ MAP POOL MEMBERS DIRECTLY WITHOUT FILTERING
-        // Compare user_id to the accepted list, and update status dynamically
+        // 3️⃣ MAP POOL MEMBERS DIRECTLY
         const visibleRoster = cleanPoolArray.map(passenger => {
           const uId = parseInt(passenger.user_id, 10);
-          
-          // Verify if they exist in acceptedIds array OR if status is already flagged in the object
           const isExplicitlyAccepted = acceptedIds.includes(uId) || passenger.status === "accepted";
           
           return {
@@ -177,7 +173,7 @@ export default function ProposalDriver({ navigation, route }) {
           };
         });
 
-        // 4️⃣ TRACK ACCEPTED COUNT (For button state triggers and pricing logic)
+        // 4️⃣ TRACK ACCEPTED COUNT
         const finalAcceptedCount = visibleRoster.filter(p => p.status === "accepted").length;
         
         setStrictlyAcceptedCount(finalAcceptedCount);
@@ -307,9 +303,15 @@ export default function ProposalDriver({ navigation, route }) {
       <View style={styles.proposalCard}>
         <ScrollView showsVerticalScrollIndicator={false}>
           
-          {/* Dynamic Payout Display Frame */}
+          {/* Dynamic Payout & Seat Matrix Card */}
           <View style={styles.priceTierCard}>
-            <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
+            <View style={styles.priceHeaderRow}>
+              <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
+              <View style={styles.seatIndicatorBadge}>
+                <Ionicons name="people-outline" size={12} color="#0284C7" />
+                <Text style={styles.seatIndicatorText}>{`${availableSeats} / ${totalSeats} Seats Available`}</Text>
+              </View>
+            </View>
             <View style={styles.priceRow}>
               <Text style={styles.mainPriceText}>
                 {`ETB ${currentDriverPayout}.00`}
@@ -342,12 +344,12 @@ export default function ProposalDriver({ navigation, route }) {
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}><Ionicons name="git-commit-sharp" size={20} color="#10B981" /></View>
             <View style={styles.locationTextWrapper}>
-              <Text style={styles.locationTitle}>{offerDetails?.start_location || "Megenagna Departure Hub"}</Text>
-              <Text style={styles.locationSubtitle}>{`Destination: ${offerDetails?.end_location || "Piassa"}`}</Text>
+              <Text style={styles.locationTitle}>{offerDetails?.hubName || "Megenagna Departure Hub"}</Text>
+              <Text style={styles.locationSubtitle}>{`Destination: ${offerDetails?.destinationName || "Piassa"}`}</Text>
             </View>
           </View>
 
-          {/* MANIFEST LIST (MATCHED & ACCEPTED VISIBLE TOGETHER) */}
+          {/* MANIFEST LIST */}
           <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length})`}</Text>
           <View style={styles.statusTable}>
             {poolPassengers.length === 0 ? (
@@ -437,7 +439,10 @@ const styles = StyleSheet.create({
   hubMarkerPulse: { position: "absolute", width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(16, 185, 129, 0.2)" },
   proposalCard: { position: "absolute", bottom: 0, width: width, maxHeight: "75%", backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 16, paddingHorizontal: 20, paddingBottom: 24, elevation: 10 },
   priceTierCard: { backgroundColor: "#F9FAFB", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, padding: 14, marginBottom: 12 },
+  priceHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   priceTierHeading: { fontSize: 11, fontWeight: "700", color: "#6B7280", letterSpacing: 0.5 },
+  seatIndicatorBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#E0F2FE", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  seatIndicatorText: { fontSize: 10, fontWeight: "700", color: "#0369A1", marginLeft: 3 },
   priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 },
   mainPriceText: { fontSize: 22, fontWeight: "800", color: "#111111" },
   tierBadge: { backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
@@ -459,17 +464,15 @@ const styles = StyleSheet.create({
   tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
   tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500" },
   badge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, minWidth: 95, alignItems: "center" },
-  badgePending: { backgroundColor: "#EFF6FF" },
   badgeMatched: { backgroundColor: "#E0F2FE" },
   badgeAccepted: { backgroundColor: "#ECFDF5" },
   badgeText: { fontSize: 12, fontWeight: "600" },
-  textPending: { color: "#3B82F6" },
   textMatched: { color: "#0284C7" },
   textAccepted: { color: "#10B981" },
   actionButtonContainer: { marginTop: 4 },
   buttonButtonGroup: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
   declineButton: { width: "30%", borderWidth: 1, borderColor: "#EF4444", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   declineButtonText: { color: "#EF4444", fontWeight: "700" },
-  acceptButton: { width: "66%", backgroundColor: "#10B981", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
+  acceptButton: { width: "66%", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   acceptButtonText: { color: "#FFFFFF", fontWeight: "700" }
 });

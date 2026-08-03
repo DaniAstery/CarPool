@@ -46,10 +46,15 @@ export default function ProposalDriver({ navigation, route }) {
     ? parseFloat(offerDetails.price_per_seat)
     : 80.0;
   const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
+  
   const totalSeats = offerDetails?.total_seats
     ? parseInt(offerDetails.total_seats, 10)
     : 4;
-  const availableSeats = Math.max(0, totalSeats - strictlyAcceptedCount);
+  
+  // Directly read available seats from backend endpoint response with safety fallback
+  const availableSeats = offerDetails?.available_seats !== undefined && offerDetails?.available_seats !== null
+    ? parseInt(offerDetails.available_seats, 10)
+    : Math.max(0, totalSeats - strictlyAcceptedCount);
 
   // Strict check: Driver needs at least 2 ACCEPTED riders to unlock accept button
   const hasMinimumRequiredPassengers = strictlyAcceptedCount >= 2;
@@ -106,7 +111,6 @@ export default function ProposalDriver({ navigation, route }) {
     if (!hasMinimumRequiredPassengers || isOfferLockedIn) return;
 
     if (timeLeft <= 0 && !driverAccepted) {
-      // Trigger expiration endpoint immediately
       handleDriverTimeout();
 
       Alert.alert(
@@ -132,7 +136,7 @@ export default function ProposalDriver({ navigation, route }) {
       return;
     }
 
-    const timer = setTimeout(() => setTimeLeft((t) => t - 1), 500);
+    const timer = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
     return () => clearTimeout(timer);
   }, [                                                                                                                                                                
     timeLeft,
@@ -203,7 +207,6 @@ export default function ProposalDriver({ navigation, route }) {
           ? rawPoolArray.filter((p) => p && (p.user_id !== null || p.id !== null))
           : [];
 
-        // Strict Single-Source Status Mapping with Accepted Array Synchronization
         const poolUserIds = cleanPoolArray.map((p) =>
           parseInt(p.user_id || p.id, 10)
         );
@@ -442,14 +445,22 @@ export default function ProposalDriver({ navigation, route }) {
 
       <View style={styles.proposalCard}>
         <ScrollView showsVerticalScrollIndicator={false}>
+          
+          {/* Dynamic Payout & Seat Matrix Card */}
           <View style={styles.priceTierCard}>
-            <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
+            <View style={styles.priceHeaderRow}>
+              <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
+              <View style={styles.seatIndicatorBadge}>
+                <Ionicons name="people-outline" size={12} color="#0369A1" />
+                <Text style={styles.seatIndicatorText}>{`${availableSeats} / ${totalSeats} Seats Available`}</Text>
+              </View>
+            </View>
             <View style={styles.priceRow}>
               <Text style={styles.mainPriceText}>
                 {`ETB ${currentDriverPayout}.00`}
               </Text>
               <View style={styles.tierBadge}>
-                <Text style={styles.tierBadgeText}>{`${availableSeats} Seats Available`}</Text>
+                <Text style={styles.tierBadgeText}>{`${strictlyAcceptedCount} Accepted`}</Text>
               </View>
             </View>
             <View style={styles.priceBreakdownBox}>
@@ -458,7 +469,7 @@ export default function ProposalDriver({ navigation, route }) {
                 <Text style={{ fontWeight: "700", color: "#10B981" }}>
                   {`ETB ${pricePerSeat}`}
                 </Text>{" "}
-                per accepted seat ({strictlyAcceptedCount} accepted).
+                per accepted seat lock.
               </Text>
             </View>
           </View>
@@ -506,17 +517,18 @@ export default function ProposalDriver({ navigation, route }) {
             </Text>
           </View>
 
+          {/* Resolved Pickup Hub & Destination Name Rendering */}
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}>
               <Ionicons name="git-commit-sharp" size={20} color="#10B981" />
             </View>
             <View style={styles.locationTextWrapper}>
               <Text style={styles.locationTitle}>
-                {offerDetails?.start_location || "Megenagna Departure Hub"}
+                {offerDetails?.hubName || offerDetails?.start_location || "Megenagna Departure Hub"}
               </Text>
-              <Text style={styles.locationSubtitle}>{`Destination: ${
-                offerDetails?.end_location || "Piassa"
-              }`}</Text>
+              <Text style={styles.locationSubtitle}>
+                {`Destination: ${offerDetails?.destinationName || offerDetails?.end_location || "Piassa"}`}
+              </Text>
             </View>
           </View>
 
@@ -673,11 +685,30 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
+  priceHeaderRow: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center" 
+  },
   priceTierHeading: {
     fontSize: 11,
     fontWeight: "700",
     color: "#6B7280",
     letterSpacing: 0.5,
+  },
+  seatIndicatorBadge: { 
+    flexDirection: "row", 
+    alignItems: "center", 
+    backgroundColor: "#E0F2FE", 
+    paddingHorizontal: 6, 
+    paddingVertical: 2, 
+    borderRadius: 4 
+  },
+  seatIndicatorText: { 
+    fontSize: 10, 
+    fontWeight: "700", 
+    color: "#0369A1", 
+    marginLeft: 3 
   },
   priceRow: {
     flexDirection: "row",
