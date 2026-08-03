@@ -8,18 +8,23 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Image,
+  Linking,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { useAuth } from "../../AuthContext";
 
 const API_BASE_URL = "http://192.168.1.3:5000/api";
 const { height } = Dimensions.get("window");
 
 export default function TripInProgressScreen({ navigation, route }) {
   const mapRef = useRef(null);
+  const { user } = useAuth();
 
-  // Inherit route properties from the stack context parameters
+  // 🔐 1. System Parameters
+  const currentDriverId = route?.params?.driverId || user?.id || user?.driver_id || 10;
   const routeId = route?.params?.routeId || route?.params?.route_id || "1";
   const rideOfferId = route?.params?.rideOfferId || route?.params?.rideId || 1;
 
@@ -28,11 +33,11 @@ export default function TripInProgressScreen({ navigation, route }) {
   const [passengerStates, setPassengerStates] = useState([]);
   const [rideMetrics, setRideMetrics] = useState(null);
 
-  // Default coordinate path markers (Staging Megenagna -> Piassa Transit)
+  // 📍 2. Dynamic Map Coordinates
   const [driverLocation, setDriverLocation] = useState({ latitude: 9.0115, longitude: 38.7945 });
-  const destinationLocation = { latitude: 9.0125, longitude: 38.7535 }; 
+  const [destinationLocation, setDestinationLocation] = useState({ latitude: 9.0125, longitude: 38.7535 }); 
 
-  // 📡 Telemetry Loop: Poll the live manifest endpoint to update location and rider statuses
+  // 📡 3. Telemetry Polling Loop
   useEffect(() => {
     let isMounted = true;
     console.log(`🚗 Transit tracking telemetry initialized for Corridor Offer ID: [${rideOfferId}]`);
@@ -50,28 +55,45 @@ export default function TripInProgressScreen({ navigation, route }) {
 
         setRideMetrics(data);
 
-        // Map live moving driver coordinates from backend tracking
+        // Update Driver Location
         if (data.driverLocation) {
-          const newDriverLoc = {
+          setDriverLocation({
             latitude: parseFloat(data.driverLocation.latitude),
             longitude: parseFloat(data.driverLocation.longitude)
-          };
-          setDriverLocation(newDriverLoc);
-
-          if (mapRef.current) {
-            mapRef.current.fitToCoordinates([newDriverLoc, destinationLocation], {
-              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-              animated: true,
-            });
-          }
+          });
         }
 
-        // Map active users on-board
+        // Update Destination Dropoff Location
+        if (data.destinationLocation) {
+          setDestinationLocation({
+            latitude: parseFloat(data.destinationLocation.latitude),
+            longitude: parseFloat(data.destinationLocation.longitude)
+          });
+        }
+
+        // Fit map bounds to show trajectory
+        if (mapRef.current && data.driverLocation && data.destinationLocation) {
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: parseFloat(data.driverLocation.latitude), longitude: parseFloat(data.driverLocation.longitude) },
+              { latitude: parseFloat(data.destinationLocation.latitude), longitude: parseFloat(data.destinationLocation.longitude) }
+            ],
+            {
+              edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+              animated: true,
+            }
+          );
+        }
+
+        // Parse fully enriched passenger roster
         if (data.passengers && Array.isArray(data.passengers)) {
           const parsedPassengers = data.passengers.map((p) => ({
             id: parseInt(p.userId || p.user_id || p.id, 10),
-            name: p.name || `Rider #${p.userId || p.id}`,
-            status: (p.status || "in-progress").toLowerCase()
+            name: p.full_name || p.name || `Rider #${p.userId || p.id}`,
+            phone: p.phone_number || "",
+            rating: p.rating || "5.00",
+            profilePhoto: p.profile_photo_url || "",
+            status: (p.status || "in_trip").toLowerCase()
           }));
           setPassengerStates(parsedPassengers);
         }
@@ -92,29 +114,35 @@ export default function TripInProgressScreen({ navigation, route }) {
     };
   }, [rideOfferId]);
 
+  // 📞 Phone Dialer Utility
+  const handleCallPassenger = (phoneNumber) => {
+    if (!phoneNumber) {
+      Alert.alert("Contact Unavailable", "Passenger has no registered phone number.");
+      return;
+    }
+    Linking.openURL(`tel:${phoneNumber}`);
+  };
+
   // 🏁 Core Action Function: Hits app.post("/api/rides/complete")
   const handleFinishTrip = async () => {
     setSubmitting(true);
     try {
-      console.log(`📡 Sending transaction closeout matrix for Driver ID: [${driverId}]`);
+      console.log(`📡 Sending transaction closeout matrix for Driver ID: [${currentDriverId}]`);
 
       const response = await fetch(`${API_BASE_URL}/rides/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ driver_id: driverId }), // Switched from ride_offer_id to driver_id
+        body: JSON.stringify({ driver_id: currentDriverId }),
       });
 
-      // Safely grab text payload to verify if we hit HTML or valid JSON data signatures
       const rawText = await response.text();
 
       if (response.ok) {
         const result = JSON.parse(rawText);
         console.log("🏁 Ledger entry processed successfully on server engine layer.");
         
-        // Extract the resolved ride offer ID from backend response safely
         const resolvedRideOfferId = result.rideOffer?.id || rideOfferId;
 
-        // Push driver smoothly onto the earnings breakdown view screen card
         navigation.replace("TripEarningsSummary", {
           rideOfferId: resolvedRideOfferId,
           routeId: routeId,
@@ -123,24 +151,20 @@ export default function TripInProgressScreen({ navigation, route }) {
         });
       } else {
         let errorMessage = "Could not finalize transition parameters.";
-        if (rawText.startsWith("<")) {
-          console.error("🛑 HTML Crash layout caught:", rawText.slice(0, 300));
-          errorMessage = `Server processing fault [Status ${response.status}]. Check backend logs.`;
-        } else {
-          try {
-            const errObj = JSON.parse(rawText);
-            errorMessage = errObj.error || errorMessage;
-          } catch (e) {}
-        }
+        try {
+          const errObj = JSON.parse(rawText);
+          errorMessage = errObj.error || errorMessage;
+        } catch (e) {}
         Alert.alert("Execution Error", errorMessage);
       }
     } catch (err) {
-      Alert.alert("Network Failure", "Unable to establish communication with the backend gateway matrix.");
+      Alert.alert("Network Failure", "Unable to establish communication with backend gateway matrix.");
       console.error(err);
     } finally {
       setSubmitting(false);
     }
   };
+
   if (loading) {
     return (
       <View style={styles.centeredLoadingScreen}>
@@ -151,7 +175,8 @@ export default function TripInProgressScreen({ navigation, route }) {
   }
 
   const activeCount = passengerStates.length;
-  const pricePerSeat = parseFloat(rideMetrics?.price_per_seat) || 100;
+  const totalSeats = rideMetrics?.total_seats || 4;
+  const pricePerSeat = parseFloat(rideMetrics?.price_per_seat) || 80;
   const totalEarnings = activeCount * pricePerSeat;
 
   return (
@@ -163,7 +188,7 @@ export default function TripInProgressScreen({ navigation, route }) {
           <View style={styles.pulseLiveDot} />
           <Text style={styles.headerTitleText}>Trip In Progress</Text>
         </View>
-        <Text style={styles.routeCodeText}>Corridor #CR-{routeId}</Text>
+        <Text style={styles.routeCodeText}>Corridor #{rideMetrics?.route_id || routeId}</Text>
       </View>
 
       {/* Live Map Canvas Component */}
@@ -180,14 +205,14 @@ export default function TripInProgressScreen({ navigation, route }) {
           customMapStyle={transitMapStyle}
         >
           {/* Destination Dropoff Station Terminal Pin */}
-          <Marker coordinate={destinationLocation}>
+          <Marker coordinate={destinationLocation} title={rideMetrics?.destinationName || "Destination Hub"}>
             <View style={styles.destinationMarkerPin}>
               <Ionicons name="flag-sharp" size={12} color="#FFFFFF" />
             </View>
           </Marker>
 
           {/* Active Driver Moving Car Pin */}
-          <Marker coordinate={driverLocation}>
+          <Marker coordinate={driverLocation} title="Driver Position">
             <View style={styles.movingCarMarkerPin}>
               <FontAwesome5 name="car-side" size={12} color="#FFFFFF" />
             </View>
@@ -208,41 +233,62 @@ export default function TripInProgressScreen({ navigation, route }) {
         <ScrollView showsVerticalScrollIndicator={false}>
           
           <View style={styles.transitStatusBanner}>
-            <MaterialCommunityIcons name="bus-clock" size={16} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.transitStatusBannerText}>
-              En-route to drop-off station hub terminals
+            <MaterialCommunityIcons name="navigation-variant" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+            <Text style={styles.transitStatusBannerText} numberOfLines={1}>
+              En-route to: {rideMetrics?.destinationName || "Piassa Transit Terminal"}
             </Text>
           </View>
 
           {/* Active Passengers Manifest Grid List */}
-          <Text style={styles.sectionHeadingLabel}>On-Board Manifest Registry</Text>
+          <Text style={styles.sectionHeadingLabel}>On-Board Manifest Registry ({activeCount})</Text>
           <View style={styles.manifestContainer}>
             {passengerStates.length === 0 ? (
-              <Text style={styles.emptyManifestText}>No active passengers signed into transit registry layout arrays.</Text>
+              <Text style={styles.emptyManifestText}>No active passengers signed into transit registry.</Text>
             ) : (
               passengerStates.map((passenger, index) => (
                 <View key={`transit-rider-${passenger.id}-${index}`} style={styles.passengerRow}>
                   <View style={styles.passengerIdentityRow}>
-                    <View style={styles.avatarWrapperCircle}>
-                      <FontAwesome5 name="user-friends" size={11} color="#2563EB" />
+                    {passenger.profilePhoto ? (
+                      <Image source={{ uri: passenger.profilePhoto }} style={styles.avatarImage} />
+                    ) : (
+                      <View style={styles.avatarWrapperCircle}>
+                        <FontAwesome5 name="user" size={11} color="#2563EB" />
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.passengerNameText} numberOfLines={1}>{passenger.name}</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
+                        <Ionicons name="star" size={11} color="#F59E0B" />
+                        <Text style={styles.passengerRatingText}>{passenger.rating}</Text>
+                        {passenger.phone ? (
+                          <Text style={styles.passengerPhoneText}> • {passenger.phone}</Text>
+                        ) : null}
+                      </View>
                     </View>
-                    <Text style={styles.passengerNameText}>{passenger.name}</Text>
                   </View>
                   
-                  <View style={styles.transitBadgePill}>
-                    <Text style={styles.transitBadgePillText}>TRANSIT</Text>
+                  <View style={styles.passengerRightCluster}>
+                    <TouchableOpacity 
+                      style={styles.callIconButton} 
+                      onPress={() => handleCallPassenger(passenger.phone)}
+                    >
+                      <Ionicons name="call" size={14} color="#10B981" />
+                    </TouchableOpacity>
+                    <View style={styles.transitBadgePill}>
+                      <Text style={styles.transitBadgePillText}>IN TRIP</Text>
+                    </View>
                   </View>
                 </View>
               ))
             )}
           </View>
 
-          {/* Realtime Ledger Ledger Block Balance */}
+          {/* Realtime Ledger Block Balance with Accurate Occupied Seats */}
           <Text style={styles.sectionHeadingLabel}>Live Corridor Balance Ledger</Text>
           <View style={styles.ledgerCard}>
             <View style={styles.ledgerRow}>
               <Text style={styles.ledgerLabel}>Active Seats Occupied</Text>
-              <Text style={styles.ledgerValue}>{activeCount} / 4 seats</Text>
+              <Text style={styles.ledgerValue}>{activeCount} / {totalSeats} seats</Text>
             </View>
             <View style={styles.horizontalDivider} />
             <View style={styles.ledgerRow}>
@@ -299,15 +345,21 @@ const styles = StyleSheet.create({
   
   slidingPanelDrawer: { flex: 1, backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, paddingTop: 16, borderWidth: 1, borderColor: "#E5E7EB", marginTop: -12 },
   transitStatusBanner: { flexDirection: "row", alignItems: "center", backgroundColor: "#3B82F6", borderRadius: 10, padding: 12, marginBottom: 20 },
-  transitStatusBannerText: { color: "#FFFFFF", fontSize: 13, fontWeight: "600" },
+  transitStatusBannerText: { color: "#FFFFFF", fontSize: 13, fontWeight: "600", flex: 1 },
   
   sectionHeadingLabel: { fontSize: 11, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8, marginLeft: 2 },
   manifestContainer: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, paddingHorizontal: 14, marginBottom: 20 },
   emptyManifestText: { paddingVertical: 16, textAlign: "center", color: "#9CA3AF", fontSize: 13 },
-  passengerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 14, borderBottomWidth: 1, borderColor: "#F3F4F6" },
-  passengerIdentityRow: { flexDirection: "row", alignItems: "center" },
-  avatarWrapperCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: "#EFF6FF", justifyContent: "center", alignItems: "center", marginRight: 10 },
+  passengerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, borderColor: "#F3F4F6" },
+  passengerIdentityRow: { flexDirection: "row", alignItems: "center", flex: 1, marginRight: 8 },
+  avatarWrapperCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#EFF6FF", justifyContent: "center", alignItems: "center", marginRight: 10 },
+  avatarImage: { width: 32, height: 32, borderRadius: 16, marginRight: 10, backgroundColor: "#E5E7EB" },
   passengerNameText: { fontSize: 13, fontWeight: "600", color: "#374151" },
+  passengerRatingText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginLeft: 4 },
+  passengerPhoneText: { fontSize: 11, color: "#9CA3AF" },
+  
+  passengerRightCluster: { flexDirection: "row", alignItems: "center" },
+  callIconButton: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#ECFDF5", justifyContent: "center", alignItems: "center", marginRight: 8, borderWidth: 1, borderColor: "#A7F3D0" },
   transitBadgePill: { backgroundColor: "#EFF6FF", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: "#BFDBFE" },
   transitBadgePillText: { color: "#2563EB", fontSize: 10, fontWeight: "700" },
   
