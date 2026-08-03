@@ -17,6 +17,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT, Circle } from "react-nativ
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
+import { io } from "socket.io-client";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://192.168.1.3:5000";
@@ -303,6 +304,35 @@ export default function CreateCorridorScreen({ navigation }) {
     checkActiveDriverSession();
   }, [currentDriverId, isAuthLoading, navigation]);
 
+    // 🔌 Real-time Socket.io Sync for Live Queue & Wait Time Updates
+      useEffect(() => {
+        if (!currentHub || !currentHub.name) return;
+
+        const socket = io(API_URL);
+
+        socket.on("connect", () => {
+          console.log("🟢 Connected to live dispatcher socket");
+          // Join the specific room for this hub name
+          socket.emit("join_hub", { hub_name: currentHub.name });
+        });
+
+        // Listen for live database push updates
+        socket.on("queue_update", (updatedCorridors) => {
+          if (Array.isArray(updatedCorridors)) {
+            console.log("🔥 Received live queue update via socket");
+            setPredefinedCorridors(updatedCorridors);
+          }
+        });
+
+        return () => {
+          socket.disconnect();
+          console.log("🔴 Disconnected dispatcher socket");
+        };
+      }, [currentHub]);
+
+
+
+
   // 🌍 DEDICATED DRIVER GPS AUTO-LOCATION & VALIDATION
   useEffect(() => {
     if (!currentDriverId) return;
@@ -359,6 +389,8 @@ export default function CreateCorridorScreen({ navigation }) {
 
     autoLocateDriver();
   }, [currentDriverId]);
+
+
 
   // 📍 HUB SELECTION ENGINE
   const handleHubSelection = useCallback(async (hub) => {
@@ -619,74 +651,98 @@ export default function CreateCorridorScreen({ navigation }) {
     <Text style={styles.fallbackText}>No active corridors mapped out from {currentHub?.name || 'this hub'}.</Text>
   </View>
 ) : (
-    predefinedCorridors.map((route, index) => {
-      // 🕵️‍♂️ DEBUG LOG: Check what the backend is actually sending for each route
-      console.log(`🔍 Route [${route.route_id}] Payload:`, {
-        driver_queue_count: route.driver_queue_count,
-        waiting_drivers_count: route.waiting_drivers_count,
-        full_route: route
-      });
+predefinedCorridors.map((route, index) => {
+              const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
+              const passThroughName = route.pass_through_hub_name || route.pass_through_name;
+              const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
+              const dropOffId = route.drop_off_hub_id || route.end_hub_id;
 
-      // 🛡️ Safe property normalization for flat schema fields
-      const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
-      const passThroughName = route.pass_through_hub_name || route.pass_through_name;
-      const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
-      const dropOffId = route.drop_off_hub_id || route.end_hub_id;
+              const isSelected =
+                selectedRoute?.route_id === route.route_id &&
+                (selectedRoute?.drop_off_hub_id === dropOffId ||
+                  selectedRoute?.end_hub_id === dropOffId);
 
-      const isSelected = 
-        selectedRoute?.route_id === route.route_id && 
-        (selectedRoute?.drop_off_hub_id === dropOffId || selectedRoute?.end_hub_id === dropOffId);
+              const uniqueKey = `${route.route_id}-${route.pickup_hub_id || "p"}-${
+                dropOffId || "d"
+              }-${index}`;
 
-      const uniqueKey = `${route.route_id}-${route.pickup_hub_id || 'p'}-${dropOffId || 'd'}-${index}`;
-      
-      const queueCount = Number(route.driver_queue_count ?? route.waiting_drivers_count ?? 0);
-      const estimatedFare = route.recommended_base_price || 100;
-    return (
-      <TouchableOpacity 
-        key={uniqueKey} 
-        style={[styles.routeCard, isSelected && styles.selectedItemBorder]}
-        onPress={() => setSelectedRoute(route)}
-        activeOpacity={0.8}
-      >
-        <View style={styles.routeCardTopRow}>
-          <View style={styles.routeCardLeft}>
-            <View style={[styles.routeIconFrame, isSelected && styles.selectedIconFrame]}>
-              <MaterialCommunityIcons name="bus-side" size={20} color={isSelected ? "#10B981" : "#4B5563"} />
-            </View>
-            <View style={styles.routeDetails}>
-              <Text style={[styles.routeText, isSelected && styles.selectedRouteText]} numberOfLines={1}>
-                {passThroughName 
-                  ? `${pickupName} ➔ ${passThroughName} ➔ ${dropOffName}`
-                  : `${pickupName} ➔ ${dropOffName}`}
-              </Text>
-              <Text style={styles.routeSubPrice}>Estimated Fare: {estimatedFare} ETB</Text>
-            </View>
-          </View>
-          {isSelected && (
-            <View style={styles.selectedCheckCircle}>
-              <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-            </View>
-          )}
-        </View>
+            
+              const estimatedFare = route.recommended_base_price || 100;
+              
+              // Dynamic wait calculation
+              const queueCount = Number(route.driver_queue_count ?? 0);
+                const avgWaitMins = Number(route.average_wait_mins ?? 0);
 
-        {/* Driver Queue & Stats Footer inside Corridor Card */}
-        <View style={styles.queueStatsFooter}>
-          <View style={styles.queueInfoBadge}>
-            <Ionicons name="people" size={13} color="#6B7280" />
-            <Text style={styles.queueInfoText}>
-              Driver Queue: <Text style={styles.boldText}>{queueCount} online</Text>
-            </Text>
-          </View>
-          <View style={styles.queueInfoBadge}>
-            <Ionicons name="time" size={13} color="#6B7280" />
-            <Text style={styles.queueInfoText}>
-              Avg Wait: <Text style={styles.boldText}>{queueCount === 0 ? "Instant" : "~3 mins"}</Text>
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
-  })
+                // If queue is 0, show "Instant". If we have a historical average, use it; otherwise fallback to a queue-size multiplier.
+                const dynamicWaitTime = queueCount === 0 
+                  ? "Instant" 
+                  : avgWaitMins > 0 
+                    ? `~${avgWaitMins} mins` 
+                    : `~${Math.round(queueCount * 2.5)} mins`;
+              return (
+                <TouchableOpacity
+                  key={uniqueKey}
+                  style={[styles.routeCard, isSelected && styles.selectedItemBorder]}
+                  onPress={() => setSelectedRoute(route)}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.routeCardTopRow}>
+                    <View style={styles.routeCardLeft}>
+                      <View style={[styles.routeIconFrame, isSelected && styles.selectedIconFrame]}>
+                        <MaterialCommunityIcons
+                          name="bus-side"
+                          size={20}
+                          color={isSelected ? "#10B981" : "#4B5563"}
+                        />
+                      </View>
+                      <View style={styles.routeDetails}>
+                        <Text
+                          style={[styles.routeText, isSelected && styles.selectedRouteText]}
+                          numberOfLines={1}
+                        >
+                          {passThroughName
+                            ? `${pickupName} ➔ ${passThroughName} ➔ ${dropOffName}`
+                            : `${pickupName} ➔ ${dropOffName}`}
+                        </Text>
+                        <Text style={styles.routeSubPrice}>Estimated Fare: {estimatedFare} ETB</Text>
+                      </View>
+                    </View>
+                    {isSelected && (
+                      <View style={styles.selectedCheckCircle}>
+                        <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.queueStatsFooter}>
+                    <View style={styles.queueInfoBadge}>
+                      {/* 🟢 Turns green when drivers are online */}
+                      <Ionicons name="people" size={13} color={queueCount > 0 ? "#10B981" : "#6B7280"} />
+                      <Text style={styles.queueInfoText}>
+                        Driver Queue:{" "}
+                        <Text
+                          style={[
+                            styles.boldText,
+                            { color: queueCount > 0 ? "#10B981" : "#1F2937" },
+                          ]}
+                        >
+                          {queueCount} online
+                        </Text>
+                      </Text>
+                    </View>
+                    <View style={styles.queueInfoBadge}>
+                      <Ionicons name="time" size={13} color="#6B7280" />
+                      <Text style={styles.queueInfoText}>
+                        Avg Wait:{" "}
+                        <Text style={styles.boldText}>
+                          {dynamicWaitTime}F
+                        </Text>
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
 )}
 
           {/* 💡 RECOMMENDED DRIVER DETAILS & INSIGHTS */}
