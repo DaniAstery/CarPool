@@ -15,34 +15,55 @@ import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 
-const { width } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window");
 
 // 🌐 NETWORK HOST CONFIGURATION & API KEY
 const API_URL = "http://192.168.1.3:5000/api";
-const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao"; // Replace with your mobile-configured API key
+const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
+
+const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
 
 export default function NavigateToPickup({ navigation, route }) {
   // 🔐 1. AUTH & SYSTEM PARAMETERS
   const { user } = useAuth();
   const currentDriverId =
     route?.params?.driverId || user?.id || user?.driver_id || 10;
-  const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id || 1;
+  const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id || null;
   const routeId = route?.params?.routeId || route?.params?.route_id || "1";
 
   // 📍 2. STATE MATRIX
   const mapRef = useRef(null);
   const [driverLocation, setDriverLocation] = useState(null);
-  
-  const [pickupLocation, setPickupLocation] = useState({
-    latitude: 9.0105, 
-    longitude: 38.7935, 
-  });
+  const [mapHubData, setMapHubData] = useState(null);
 
   const [offerDetails, setOfferDetails] = useState(null);
   const [poolPassengers, setPoolPassengers] = useState([]);
   const [hasArrived, setHasArrived] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [networkError, setNetworkError] = useState(null);
+  const [isSheetCollapsed, setIsSheetCollapsed] = useState(false);
+
+  // 📍 Resolved Hub Coordinates & Name from Dedicated /api/rides/map_coordinates Endpoint
+  const pickupLocation = {
+    latitude: parseFloat(mapHubData?.start_latitude || 9.0105),
+    longitude: parseFloat(mapHubData?.start_longitude || 38.7935),
+    name: mapHubData?.start_hub_name || "Pickup Terminal"
+  };
+
+  // Compute live distance between device GPS and pickup hub in km
+  const currentDriverDistance = driverLocation && pickupLocation
+    ? getDistanceFromLatLonInKm(driverLocation.latitude, driverLocation.longitude, pickupLocation.latitude, pickupLocation.longitude)
+    : null;
 
   // 📡 3. GPS LIVE TRACKING
   useEffect(() => {
@@ -78,7 +99,35 @@ export default function NavigateToPickup({ navigation, route }) {
     };
   }, []);
 
-  // 🔄 4. PASSENGER MANIFEST & STATUS POLLING
+  // 🗺️ 4. FETCH MAP COORDINATES & HUB DATA FROM DEDICATED ENDPOINT
+  useEffect(() => {
+    if (!currentDriverId) return;
+
+    async function fetchMapCoordinates() {
+      try {
+        const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
+        const res = await fetch(`${API_URL}/rides/map_coordinates?${queryParam}`);
+        
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          return;
+        }
+
+        const data = await res.json();
+        if (res.ok && data.success && data.coordinates) {
+          setMapHubData(data.coordinates);
+        }
+      } catch (err) {
+        console.error("Error fetching map coordinates:", err);
+      }
+    }
+
+    fetchMapCoordinates();
+    const interval = setInterval(fetchMapCoordinates, 4000);
+    return () => clearInterval(interval);
+  }, [currentDriverId, rideOfferId]);
+
+  // 🔄 5. PASSENGER MANIFEST & STATUS POLLING
   useEffect(() => {
     async function syncRideManifest() {
       try {
@@ -93,19 +142,6 @@ export default function NavigateToPickup({ navigation, route }) {
         if (!data) return;
 
         setOfferDetails(data);
-
-        // Update hub location coordinates using exact backend response fields
-        if (data.pickup_lat && data.pickup_lng) {
-          setPickupLocation({
-            latitude: parseFloat(data.pickup_lat),
-            longitude: parseFloat(data.pickup_lng),
-          });
-        } else if (data.hub_latitude && data.hub_longitude) {
-          setPickupLocation({
-            latitude: parseFloat(data.hub_latitude),
-            longitude: parseFloat(data.hub_longitude),
-          });
-        }
 
         // Check backend status for arrival sync
         const currentStatus = data.status ? data.status.toString().trim().toLowerCase() : "";
@@ -180,7 +216,7 @@ export default function NavigateToPickup({ navigation, route }) {
     return () => clearInterval(pollInterval);
   }, [currentDriverId]);
 
-  // 🎯 5. ACTION HANDLERS (Arrival & Trip Start)
+  // 🎯 6. ACTION HANDLERS (Arrival & Trip Start)
   const handleArrived = async () => {
     setIsActionLoading(true);
     try {
@@ -317,27 +353,40 @@ export default function NavigateToPickup({ navigation, route }) {
           }}
           customMapStyle={cleanMinimalMapStyle}
         >
-          {/* Driver Location Marker */}
+          {/* Driver Circular Marker */}
           {driverLocation && (
-            <Marker coordinate={driverLocation} zIndex={2}>
-              <View style={styles.driverMarkerPin}>
-                <Ionicons name="car" size={18} color="#FFFFFF" />
+            <Marker coordinate={driverLocation} title="Your Vehicle Position" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={2}>
+              <View style={styles.driverPinnedContainer}>
+                <View style={styles.driverPinBadge}>
+                  <Text style={styles.driverPinText}>YOU</Text>
+                </View>
+                <View style={styles.glowingDriverHalo}>
+                  <View style={styles.driverMarkerBubble}>
+                    <MaterialCommunityIcons name="car-side" size={16} color="#FFFFFF" />
+                  </View>
+                </View>
               </View>
             </Marker>
           )}
 
-          {/* Actual Pickup Hub Marker */}
-          <Marker coordinate={pickupLocation} zIndex={1}>
-            <View style={styles.hubMarkerContainer}>
-              <View style={styles.hubMarkerPin}>
-                <Ionicons name="flag" size={16} color="#FFFFFF" />
+          {/* Pickup Hub Circular Marker */}
+          {pickupLocation?.latitude && pickupLocation?.longitude && (
+            <Marker coordinate={pickupLocation} title={pickupLocation.name} description="Assigned Staging Hub" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={1}>
+              <View style={styles.driverPinnedContainer}>
+                <View style={[styles.driverPinBadge, { backgroundColor: "#0284C7" }]}>
+                  <Text style={styles.driverPinText}>PICKUP</Text>
+                </View>
+                <View style={[styles.glowingDriverHalo, { backgroundColor: "rgba(2, 132, 199, 0.15)", borderColor: "rgba(2, 132, 199, 0.4)" }]}>
+                  <View style={[styles.driverMarkerBubble, { backgroundColor: "#0284C7" }]}>
+                    <Ionicons name="location" size={16} color="#FFFFFF" />
+                  </View>
+                </View>
               </View>
-              <View style={styles.hubMarkerPulse} />
-            </View>
-          </Marker>
+            </Marker>
+          )}
 
           {/* Realistic Road Route Line */}
-          {driverLocation && pickupLocation && (
+          {driverLocation && pickupLocation?.latitude && (
             <MapViewDirections
               origin={driverLocation}
               destination={pickupLocation}
@@ -346,23 +395,51 @@ export default function NavigateToPickup({ navigation, route }) {
               strokeColor="#EF4444"
               optimizeWaypoints={true}
               onReady={(result) => {
+                const bottomPadding = isSheetCollapsed ? 150 : height * 0.45;
                 mapRef.current?.fitToCoordinates(result.coordinates, {
                   edgePadding: {
-                    right: 40,
-                    bottom: 380,
-                    left: 40,
-                    top: 80,
+                    right: 60,
+                    bottom: bottomPadding,
+                    left: 60,
+                    top: 100,
                   },
                 });
               }}
             />
           )}
         </MapView>
+
+        {/* 📏 Distance Banner */}
+        {currentDriverDistance !== null && (
+          <View style={styles.persistentDistanceBanner}>
+            <Ionicons name="navigate" size={14} color="#EF4444" style={{ marginRight: 6 }} />
+            <Text style={styles.persistentDistanceText}>
+              Distance to <Text style={styles.boldText}>{pickupLocation.name}</Text>:{" "}
+              <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#EF4444" }]}>
+                {currentDriverDistance.toFixed(2)} km
+              </Text>
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* RIDE MANIFEST CARD */}
-      <View style={styles.proposalCard}>
-        <ScrollView showsVerticalScrollIndicator={false}>
+      <View style={[styles.proposalCard, isSheetCollapsed && styles.proposalCardCollapsed]}>
+        <TouchableOpacity 
+          style={styles.dragHandleBarArea} 
+          activeOpacity={0.8}
+          onPress={() => setIsSheetCollapsed(!isSheetCollapsed)}
+        >
+          <View style={styles.dragHandleIndicator} />
+          <View style={styles.collapseToggleRow}>
+            <Text style={styles.collapseToggleTitle}>
+              {isSheetCollapsed ? "Tap to view manifest & details ↗" : "Swipe down or tap to expand map view ↙"}
+            </Text>
+            <Ionicons name={isSheetCollapsed ? "chevron-up" : "chevron-down"} size={18} color="#64748B" />
+          </View>
+        </TouchableOpacity>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollSheetContent}>
           {/* LOCATION DETAILS WITH RESOLVED HUB NAME */}
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}>
@@ -374,7 +451,7 @@ export default function NavigateToPickup({ navigation, route }) {
             </View>
             <View style={styles.locationTextWrapper}>
               <Text style={styles.locationTitle}>
-                {offerDetails?.hubName || offerDetails?.start_location || "Departure Staging Hub"}
+                {pickupLocation.name}
               </Text>
               <Text style={styles.locationSubtitle}>
                 {hasArrived
@@ -478,54 +555,97 @@ const styles = StyleSheet.create({
   },
   mapContainer: { flex: 1 },
   
-  // Map Markers
-  driverMarkerPin: {
+  // Clean Circular Map Marker Styles
+  driverPinnedContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  driverPinBadge: {
+    backgroundColor: "#0F172A",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginBottom: 4,
+  },
+  driverPinText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  glowingDriverHalo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.4)",
+  },
+  driverMarkerBubble: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#111111",
-    alignItems: "center",
+    backgroundColor: "#10B981",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  hubMarkerContainer: { alignItems: "center", justifyContent: "center" },
-  hubMarkerPin: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "#EF4444",
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  hubMarkerPulse: {
-    position: "absolute",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(239, 68, 68, 0.2)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
   },
 
-  // Bottom Card
+  persistentDistanceBanner: {
+    position: "absolute",
+    top: 15,
+    alignSelf: "center",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  persistentDistanceText: { fontSize: 12, color: "#1E293B", fontWeight: "600" },
+  boldText: { fontWeight: "800" },
+
+  // Bottom Card & Collapsible Sheet
   proposalCard: {
     position: "absolute",
     bottom: 0,
     width: width,
-    maxHeight: "65%",
+    maxHeight: "75%",
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingTop: 20,
     paddingHorizontal: 20,
     paddingBottom: 24,
     elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
   },
+  proposalCardCollapsed: { maxHeight: 90, overflow: "hidden" },
+  dragHandleBarArea: { paddingVertical: 10, alignItems: "center" },
+  dragHandleIndicator: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", marginBottom: 6 },
+  collapseToggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  collapseToggleTitle: { fontSize: 11, fontWeight: "700", color: "#64748B", marginRight: 4 },
+  scrollSheetContent: { paddingBottom: 20 },
+
   cardHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 16,
   },
   locationPinCircle: {
     width: 36,
@@ -541,7 +661,7 @@ const styles = StyleSheet.create({
   locationSubtitle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
   
   sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8, color: "#4B5563" },
-  statusTable: { marginBottom: 20 },
+  statusTable: { marginBottom: 16 },
   tableRow: {
     flexDirection: "row",
     justifyContent: "space-between",
