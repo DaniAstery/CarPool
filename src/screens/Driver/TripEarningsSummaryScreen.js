@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5, FontAwesome } from "@expo/vector-icons"; // <--- Ensure FontAwesome is included here
 import { useAuth } from "../../AuthContext";
+
 const { width } = Dimensions.get("window");
 
 // 🌐 NETWORK HOST CONFIGURATION
@@ -72,7 +73,7 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
   const handleReturnToCorridor = () => {
     navigation.reset({
       index: 0,
-      routes: [{ name: "createCorridorScreen" }],
+      routes: [{ name: "CreateCorridor" }], // <--- Must match your App.js exact screen name
     });
   };
 
