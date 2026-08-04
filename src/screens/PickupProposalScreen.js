@@ -27,10 +27,67 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.015,
 };
 
+// Fetch real street-level walking path from OSRM public walking router with urban grid fallback
+const fetchWalkingRoute = async (userLoc, hubLoc) => {
+  if (!userLoc || !hubLoc || !hubLoc.latitude) {
+    return { distance: null, duration: null, coordinates: [] };
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/foot/${userLoc.longitude},${userLoc.latitude};${hubLoc.longitude},${hubLoc.latitude}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.routes && data.routes[0]) {
+      const route = data.routes[0];
+      // OSRM returns [lng, lat], convert to {latitude, longitude} for react-native-maps
+      const coordinates = route.geometry.coordinates.map(coord => ({
+        latitude: coord[1],
+        longitude: coord[0]
+      }));
+
+      const distanceMeters = route.distance;
+      const distanceStr = distanceMeters >= 1000 
+        ? `${(distanceMeters / 1000).toFixed(1)} km` 
+        : `${Math.round(distanceMeters)}m`;
+
+      const durationMinutes = Math.max(1, Math.round(route.duration / 60));
+      const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
+
+      return { distance: distanceStr, duration: durationStr, coordinates };
+    }
+  } catch (err) {
+    console.log("⚠️ OSRM routing request failed, utilizing urban grid fallback");
+  }
+
+  // Fallback: 90-degree urban grid walking path (simulating sidewalk corners)
+  const midLat = (userLoc.latitude + hubLoc.latitude) / 2;
+  const gridCoordinates = [
+    userLoc,
+    { latitude: midLat, longitude: userLoc.longitude },
+    { latitude: midLat, longitude: hubLoc.longitude },
+    { latitude: hubLoc.latitude, longitude: hubLoc.longitude }
+  ];
+
+  // Calculate rough distance using Haversine for fallback
+  const toRad = (val) => (val * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(hubLoc.latitude - userLoc.latitude);
+  const dLon = toRad(hubLoc.longitude - userLoc.longitude);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(userLoc.latitude)) * Math.cos(toRad(hubLoc.latitude)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const distanceKm = R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  const distanceMeters = Math.round(distanceKm * 1000);
+  const distanceStr = distanceMeters >= 1000 ? `${(distanceMeters / 1000).toFixed(1)} km` : `${distanceMeters}m`;
+  const durationMinutes = Math.max(1, Math.round((distanceKm / 4.8) * 60));
+  const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
+
+  return { distance: distanceStr, duration: durationStr, coordinates: gridCoordinates };
+};
+
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Feres-Style GPS UI)
+// MEMOIZED MAP VIEW (Live Device GPS + Street-Level Walking Polyline)
 // ------------------------------------------------------------------
-const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
+const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordinates, mapRef }) => {
   return (
     <MapView
       ref={mapRef}
@@ -42,11 +99,11 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
       showsCompass={false}
       customMapStyle={cleanMinimalMapStyle}
     >
-      {/* 🔵 Feres-Style Live GPS Passenger Marker */}
+      {/* 🔵 Passenger Live Device GPS Marker */}
       {currentLocation && (
         <Marker 
           coordinate={currentLocation} 
-          title="Your Location" 
+          title="Your Current Location" 
           anchor={{ x: 0.5, y: 0.5 }}
           tracksViewChanges={false}
         >
@@ -56,7 +113,7 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
         </Marker>
       )}
 
-      {/* 📍 Meetup Hub Marker */}
+      {/* 📍 Database Pickup Hub Marker */}
       {meetupLocation && meetupLocation.latitude && (
         <Marker 
           coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
@@ -73,13 +130,10 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, mapRef }) => {
         </Marker>
       )}
 
-      {/* 🛣️ Route Line connecting Passenger to Hub */}
-      {currentLocation && meetupLocation && meetupLocation.latitude && (
+      {/* 🛣️ Real Street-Level Walking Route Polyline */}
+      {walkingRouteCoordinates && walkingRouteCoordinates.length > 0 && (
         <Polyline
-          coordinates={[
-            currentLocation, 
-            { latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }
-          ]}
+          coordinates={walkingRouteCoordinates}
           strokeColor="#059669"
           strokeWidth={4}
           geodesic={true}
@@ -101,9 +155,17 @@ export default function PickupProposalScreen({ navigation }) {
   const [coRiders, setCoRiders] = useState([]);
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
-  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
+  
+  // Real-time device GPS Location
+  const [currentLocation, setCurrentLocation] = useState(null);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   
+  // Walking metrics states
+  const [walkingDistance, setWalkingDistance] = useState(null);
+  const [walkingDuration, setWalkingDuration] = useState(null);
+  const [walkingCoordinates, setWalkingCoordinates] = useState([]);
+
+  // Pickup Hub from /api/rides/map_coordinates
   const [meetupHub, setMeetupHub] = useState({
     name: "Resolving Hub...",
     latitude: null,
@@ -111,7 +173,6 @@ export default function PickupProposalScreen({ navigation }) {
   });
 
   const mapRef = useRef(null);
-  const hasFramedMap = useRef(false);
 
   // 1. DISABLE ANDROID BACK BUTTON
   useEffect(() => {
@@ -124,17 +185,14 @@ export default function PickupProposalScreen({ navigation }) {
     navigation.replace("LiveTracking", { rideOfferId });
   }, [navigation]);
 
-  // 2. FETCH LIVE LOCATION
+  // 2. FETCH REAL-TIME DEVICE GPS LOCATION
   useEffect(() => {
     let isMounted = true;
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
-          const locationPromise = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1500));
-          const location = await Promise.race([locationPromise, timeoutPromise]);
-
+          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           if (location && isMounted) {
             setCurrentLocation({
               latitude: location.coords.latitude,
@@ -144,38 +202,76 @@ export default function PickupProposalScreen({ navigation }) {
             });
           }
         }
-      } catch (err) {}
+      } catch (err) {
+        console.log("⚠️ Could not fetch device location, using default.");
+      }
     })();
     return () => { isMounted = false; };
   }, []);
 
-  // 3. AUTO-FRAME MAP TO FIT BOTH USER AND HUB
+  // 3. FETCH PICKUP HUB FROM /api/rides/map_coordinates ENDPOINT
+  const fetchMapCoordinatesData = useCallback(async (rideOfferId) => {
+    if (!rideOfferId) return;
+    try {
+      const res = await fetch(`${API_URL}/api/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
+      const data = await res.json();
+      if (data.success && data.coordinates) {
+        const coords = data.coordinates;
+        setMeetupHub({
+          name: coords.start_hub_name || "Pickup Hub",
+          latitude: parseFloat(coords.start_latitude),
+          longitude: parseFloat(coords.start_longitude),
+        });
+      }
+    } catch (err) {
+      console.log("❌ Error fetching map coordinates:", err);
+    }
+  }, []);
+
+  // 4. FETCH REAL STREET WALKING ROUTE WHEN GPS & HUB ARE AVAILABLE
+  useEffect(() => {
+    let isMounted = true;
+    async function loadWalkingRoute() {
+      if (currentLocation && meetupHub?.latitude) {
+        const routeData = await fetchWalkingRoute(currentLocation, meetupHub);
+        if (isMounted) {
+          setWalkingDistance(routeData.distance);
+          setWalkingDuration(routeData.duration);
+          setWalkingCoordinates(routeData.coordinates);
+        }
+      }
+    }
+    loadWalkingRoute();
+    return () => { isMounted = false; };
+  }, [currentLocation, meetupHub]);
+
+  // 5. AUTO-FRAME MAP TO FIT DEVICE GPS AND WALKING ROUTE
   useEffect(() => {
     if (mapRef.current && currentLocation?.latitude && meetupHub?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       
-      mapRef.current.fitToCoordinates(
-        [
-          { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-          { latitude: meetupHub.latitude, longitude: meetupHub.longitude }
-        ],
-        {
-          edgePadding: { top: 80, right: 50, bottom: bottomPadding, left: 50 },
-          animated: true,
-        }
-      );
-      hasFramedMap.current = true;
-    }
-  }, [currentLocation, meetupHub, isDrawerExpanded]);
+      const coordsToFit = walkingCoordinates.length > 0 
+        ? walkingCoordinates 
+        : [
+            { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
+            { latitude: meetupHub.latitude, longitude: meetupHub.longitude }
+          ];
 
-  // 4. TIMER
+      mapRef.current.fitToCoordinates(coordsToFit, {
+        edgePadding: { top: 80, right: 50, bottom: bottomPadding, left: 50 },
+        animated: true,
+      });
+    }
+  }, [currentLocation, meetupHub, walkingCoordinates, isDrawerExpanded]);
+
+  // 6. TIMER
   useEffect(() => {
     if (timeLeft <= 0) return;
     const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // 5. DATA POLLING LOOP
+  // 7. PROPOSAL STATUS & RIDE OFFER ID POLLING LOOP
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -202,7 +298,10 @@ export default function PickupProposalScreen({ navigation }) {
           const data = await res.json();
           const passengers = data.passengers || [];
 
-          if (data.hub && data.hub.latitude) {
+          const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
+          if (activeRideOfferId) {
+            fetchMapCoordinatesData(activeRideOfferId);
+          } else if (data.hub && data.hub.latitude) {
             setMeetupHub(data.hub);
           }
 
@@ -219,7 +318,6 @@ export default function PickupProposalScreen({ navigation }) {
           const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
           setDriverState(currentDriverStatus);
 
-          const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
           if (currentDriverStatus === "accepted" && activeRideOfferId) {
             navigateToTracking(activeRideOfferId);
             return; 
@@ -258,7 +356,7 @@ export default function PickupProposalScreen({ navigation }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId, navigateToTracking, navigation, userAccepted]);
+  }, [currentUserId, navigateToTracking, navigation, userAccepted, fetchMapCoordinatesData]);
 
   const handleAcceptProposal = async () => {
     setUserAccepted(true);
@@ -297,14 +395,23 @@ export default function PickupProposalScreen({ navigation }) {
         </View>
         <View style={styles.statusTextContainer}>
           <Text style={styles.statusPrimaryText}>Pickup Proposal Active</Text>
-          <Text style={styles.statusSecondaryText}>Review meeting hub & confirm participation</Text>
+          <Text style={styles.statusSecondaryText}>
+            {walkingDistance && walkingDuration 
+              ? `Walk ${walkingDistance} (~${walkingDuration}) to pickup hub` 
+              : "Review meeting hub & confirm participation"}
+          </Text>
         </View>
       </View>
 
       {/* 2. MAP CONTAINER */}
       <View style={styles.mapContainer}>
         {initialCheckDone ? (
-          <MemoizedMap currentLocation={currentLocation} meetupLocation={meetupHub} mapRef={mapRef} />
+          <MemoizedMap 
+            currentLocation={currentLocation} 
+            meetupLocation={meetupHub} 
+            walkingRouteCoordinates={walkingCoordinates}
+            mapRef={mapRef} 
+          />
         ) : (
           <View style={styles.mapPlaceholder}>
             <ActivityIndicator size="small" color="#059669" />
@@ -327,6 +434,14 @@ export default function PickupProposalScreen({ navigation }) {
               <Text style={styles.subtitle}>
                 Meet at <Text style={styles.boldText}>{meetupHub.name}</Text>
               </Text>
+              {walkingDistance && walkingDuration && (
+                <View style={styles.walkingInfoPill}>
+                  <MaterialCommunityIcons name="walk" size={12} color="#059669" />
+                  <Text style={styles.walkingInfoText}>
+                    Walk {walkingDistance} • ~{walkingDuration} away
+                  </Text>
+                </View>
+              )}
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <View style={styles.timerBadge}>
@@ -470,7 +585,7 @@ const styles = StyleSheet.create({
     elevation: 15,
     zIndex: 30 
   },
-  drawerCollapsed: { height: 120 },
+  drawerCollapsed: { height: 130 },
   drawerExpanded: { maxHeight: height * 0.65 },
   
   dragHandleContainer: { paddingBottom: 10, width: "100%" },
@@ -481,6 +596,9 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 13, color: "#6B7280", marginTop: 2 },
   boldText: { fontWeight: "700", color: "#111111" },
   
+  walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 4, borderWidth: 1, borderColor: "#A7F3D0" },
+  walkingInfoText: { fontSize: 11, fontWeight: "600", color: "#059669", marginLeft: 4 },
+
   timerBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 6 },
   timerText: { fontSize: 12, fontWeight: "700", color: "#059669", marginLeft: 4 },
   
@@ -506,7 +624,7 @@ const styles = StyleSheet.create({
   // Footer
   drawerFooterSticky: { 
     paddingVertical: 10, 
-    paddingBottom: Platform.OS === 'android' ? 24 : 12, // Clears Android bottom nav
+    paddingBottom: Platform.OS === 'android' ? 24 : 12,
     borderTopWidth: 1, 
     borderTopColor: "#E5E7EB", 
     backgroundColor: "#F9FAFB" 
