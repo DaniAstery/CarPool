@@ -11,9 +11,8 @@ import {
   Dimensions,
   Image,
 } from "react-native";
-import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { MaterialCommunityIcons, Ionicons, FontAwesome5, FontAwesome } from "@expo/vector-icons"; // <--- Ensure FontAwesome is included here
 import { useAuth } from "../../AuthContext";
-
 const { width } = Dimensions.get("window");
 
 // 🌐 NETWORK HOST CONFIGURATION
