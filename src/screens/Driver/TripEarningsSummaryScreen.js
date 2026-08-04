@@ -9,6 +9,7 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Dimensions,
+  Image,
 } from "react-native";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
@@ -183,18 +184,39 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Passenger Manifest Summary */}
-        {passengers.length > 0 && (
-          <View style={styles.cardContainer}>
-            <Text style={styles.sectionHeadingLabel}>On-Board Passengers ({passengers.length})</Text>
-            {passengers.map((p, idx) => (
-              <View key={`summary-passenger-${idx}`} style={styles.passengerSummaryRow}>
-                <Text style={styles.summaryPassengerName} numberOfLines={1}>{p.fullName}</Text>
-                <Text style={styles.summarySeatLabel}>{p.seatLabel}</Text>
+       {/* Passenger Manifest Summary */}
+            {passengers.length > 0 && (
+              <View style={styles.cardContainer}>
+                <Text style={styles.sectionHeadingLabel}>On-Board Passengers ({passengers.length})</Text>
+                {passengers.map((p, idx) => (
+                  <View key={`summary-passenger-${idx}`} style={styles.passengerSummaryRow}>
+                    
+                    {/* Passenger Avatar / Fallback Initial */}
+                    {p.profilePhotoUrl ? (
+                      <Image source={{ uri: p.profilePhotoUrl }} style={styles.passengerAvatar} />
+                    ) : (
+                      <View style={styles.passengerAvatarFallback}>
+                        <Text style={styles.fallbackInitialText}>
+                          {p.fullName ? p.fullName.charAt(0).toUpperCase() : "R"}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Name & Phone Number */}
+                    <View style={{ flex: 1, marginLeft: 12, marginRight: 8 }}>
+                      <Text style={styles.summaryPassengerName} numberOfLines={1}>{p.fullName}</Text>
+                      <Text style={styles.summaryPhoneText}>{p.phoneNumber}</Text>
+                    </View>
+
+                    {/* Rating Badge */}
+                    <View style={styles.ratingBadge}>
+                      <FontAwesome name="star" size={11} color="#F59E0B" style={{ marginRight: 4 }} />
+                      <Text style={styles.summaryRatingText}>{p.rating}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
-            ))}
-          </View>
-        )}
+      )}
 
       </ScrollView>
 
