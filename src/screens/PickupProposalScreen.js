@@ -40,7 +40,6 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
 
     if (data.routes && data.routes[0]) {
       const route = data.routes[0];
-      // OSRM returns [lng, lat], convert to {latitude, longitude} for react-native-maps
       const coordinates = route.geometry.coordinates.map(coord => ({
         latitude: coord[1],
         longitude: coord[0]
@@ -60,7 +59,6 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
     console.log("⚠️ OSRM routing request failed, utilizing urban grid fallback");
   }
 
-  // Fallback: 90-degree urban grid walking path (simulating sidewalk corners)
   const midLat = (userLoc.latitude + hubLoc.latitude) / 2;
   const gridCoordinates = [
     userLoc,
@@ -69,7 +67,6 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
     { latitude: hubLoc.latitude, longitude: hubLoc.longitude }
   ];
 
-  // Calculate rough distance using Haversine for fallback
   const toRad = (val) => (val * Math.PI) / 180;
   const R = 6371;
   const dLat = toRad(hubLoc.latitude - userLoc.latitude);
@@ -85,7 +82,7 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Live Device GPS + Street-Level Walking Polyline)
+// MEMOIZED MAP VIEW (Pinned Device Location & Pinned Pickup Hub)
 // ------------------------------------------------------------------
 const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordinates, mapRef }) => {
   return (
@@ -99,21 +96,27 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       showsCompass={false}
       customMapStyle={cleanMinimalMapStyle}
     >
-      {/* 🔵 Passenger Live Device GPS Marker */}
+      {/* 🔵 Pinned Passenger Live Device GPS Marker */}
       {currentLocation && (
         <Marker 
           coordinate={currentLocation} 
           title="Your Current Location" 
-          anchor={{ x: 0.5, y: 0.5 }}
+          anchor={{ x: 0.5, y: 0.8 }}
           tracksViewChanges={false}
         >
-          <View style={styles.userLocationHalo}>
-            <View style={styles.userLocationDot} />
+          <View style={styles.passengerMarkerGroup}>
+            <View style={styles.passengerLabelBubble}>
+              <View style={styles.passengerBubbleDot} />
+              <Text style={styles.passengerBubbleText}>Your Location (You)</Text>
+            </View>
+            <View style={styles.userLocationHalo}>
+              <View style={styles.userLocationDot} />
+            </View>
           </View>
         </Marker>
       )}
 
-      {/* 📍 Database Pickup Hub Marker */}
+      {/* 📍 Pinned Database Pickup Hub Marker */}
       {meetupLocation && meetupLocation.latitude && (
         <Marker 
           coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
@@ -123,7 +126,10 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
         >
           <View style={styles.pickupMarkerContainer}>
             <View style={styles.pickupPinBubble}>
-              <MaterialCommunityIcons name="map-marker-radius" size={16} color="#FFFFFF" />
+              <MaterialCommunityIcons name="map-marker-radius" size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
+              <Text style={styles.pickupBubbleText} numberOfLines={1}>
+                {meetupLocation.name || "Pickup Hub"}
+              </Text>
             </View>
             <View style={styles.pickupPinTip} />
           </View>
@@ -148,7 +154,6 @@ export default function PickupProposalScreen({ navigation }) {
   const { user } = useAuth();
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
 
-  // States
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [userAccepted, setUserAccepted] = useState(false);
   const [myDbStatus, setMyDbStatus] = useState("searching");
@@ -156,16 +161,13 @@ export default function PickupProposalScreen({ navigation }) {
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
   
-  // Real-time device GPS Location
   const [currentLocation, setCurrentLocation] = useState(null);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   
-  // Walking metrics states
   const [walkingDistance, setWalkingDistance] = useState(null);
   const [walkingDuration, setWalkingDuration] = useState(null);
   const [walkingCoordinates, setWalkingCoordinates] = useState([]);
 
-  // Pickup Hub from /api/rides/map_coordinates
   const [meetupHub, setMeetupHub] = useState({
     name: "Resolving Hub...",
     latitude: null,
@@ -174,7 +176,6 @@ export default function PickupProposalScreen({ navigation }) {
 
   const mapRef = useRef(null);
 
-  // 1. DISABLE ANDROID BACK BUTTON
   useEffect(() => {
     const backAction = () => true; 
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
@@ -185,7 +186,6 @@ export default function PickupProposalScreen({ navigation }) {
     navigation.replace("LiveTracking", { rideOfferId });
   }, [navigation]);
 
-  // 2. FETCH REAL-TIME DEVICE GPS LOCATION
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -209,7 +209,6 @@ export default function PickupProposalScreen({ navigation }) {
     return () => { isMounted = false; };
   }, []);
 
-  // 3. FETCH PICKUP HUB FROM /api/rides/map_coordinates ENDPOINT
   const fetchMapCoordinatesData = useCallback(async (rideOfferId) => {
     if (!rideOfferId) return;
     try {
@@ -228,7 +227,6 @@ export default function PickupProposalScreen({ navigation }) {
     }
   }, []);
 
-  // 4. FETCH REAL STREET WALKING ROUTE WHEN GPS & HUB ARE AVAILABLE
   useEffect(() => {
     let isMounted = true;
     async function loadWalkingRoute() {
@@ -245,33 +243,30 @@ export default function PickupProposalScreen({ navigation }) {
     return () => { isMounted = false; };
   }, [currentLocation, meetupHub]);
 
-  // 5. AUTO-FRAME MAP TO FIT DEVICE GPS AND WALKING ROUTE
+  // Explicitly fit map bounds to keep BOTH the device location pin and pickup hub pin pinned and framed
   useEffect(() => {
     if (mapRef.current && currentLocation?.latitude && meetupHub?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       
-      const coordsToFit = walkingCoordinates.length > 0 
-        ? walkingCoordinates 
-        : [
-            { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-            { latitude: meetupHub.latitude, longitude: meetupHub.longitude }
-          ];
+      const coordsToFit = [
+        { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
+        { latitude: meetupHub.latitude, longitude: meetupHub.longitude },
+        ...walkingCoordinates
+      ];
 
       mapRef.current.fitToCoordinates(coordsToFit, {
-        edgePadding: { top: 80, right: 50, bottom: bottomPadding, left: 50 },
+        edgePadding: { top: 90, right: 60, bottom: bottomPadding, left: 60 },
         animated: true,
       });
     }
   }, [currentLocation, meetupHub, walkingCoordinates, isDrawerExpanded]);
 
-  // 6. TIMER
   useEffect(() => {
     if (timeLeft <= 0) return;
     const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
 
-  // 7. PROPOSAL STATUS & RIDE OFFER ID POLLING LOOP
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -561,13 +556,18 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1 },
   mapPlaceholder: { flex: 1, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center" },
   
-  // Feres-Style GPS User Marker
-  userLocationHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
-  userLocationDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+  // Pinned Passenger Marker Group
+  passengerMarkerGroup: { alignItems: "center" },
+  passengerLabelBubble: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 4, elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  passengerBubbleDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#A7F3D0", marginRight: 5 },
+  passengerBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
+  userLocationHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
+  userLocationDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
   
-  // Pickup Pin
+  // Pinned Pickup Hub Marker Group
   pickupMarkerContainer: { alignItems: "center" },
-  pickupPinBubble: { backgroundColor: "#111827", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  pickupPinBubble: { backgroundColor: "#111827", flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  pickupBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700", maxWidth: 140 },
   pickupPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#111827", marginTop: -1 },
 
   // Collapsible Sliding Panel

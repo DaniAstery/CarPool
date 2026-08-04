@@ -26,19 +26,44 @@ const DEFAULT_COORDS = {
   longitude: 38.7945,
 };
 
+// Fetch real street-level driving route from OSRM public driving router with fallback
+const fetchDrivingRoute = async (origin, destination) => {
+  if (!origin || !destination || !origin.latitude || !destination.latitude) {
+    return [];
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.routes && data.routes[0]) {
+      return data.routes[0].geometry.coordinates.map(coord => ({
+        latitude: coord[1],
+        longitude: coord[0]
+      }));
+    }
+  } catch (err) {
+    console.log("⚠️ OSRM driving route request failed, utilizing direct path fallback");
+  }
+
+  return [origin, destination];
+};
+
 // ------------------------------------------------------------------
-// MEMOIZED UBER-STYLE TRIP MAP
+// MEMOIZED UBER-STYLE PASSENGER TRANSIT MAP WITH STREET-LEVEL POLYLINES
 // ------------------------------------------------------------------
-const MemoizedTripMap = memo(({ rideDetails, isTripFinished, mapRef }) => {
+const MemoizedTripMap = memo(({ rideDetails, traveledRouteCoordinates, remainingRouteCoordinates, isTripFinished, mapRef }) => {
   return (
     <MapView
       ref={mapRef}
       provider={PROVIDER_GOOGLE}
       style={StyleSheet.absoluteFillObject}
       initialRegion={{
-        ...DEFAULT_COORDS,
-        latitudeDelta: 0.04,
-        longitudeDelta: 0.04,
+        latitude: rideDetails.pickupLat || DEFAULT_COORDS.latitude,
+        longitude: rideDetails.pickupLng || DEFAULT_COORDS.longitude,
+        latitudeDelta: 0.03,
+        longitudeDelta: 0.03,
       }}
       customMapStyle={cleanMinimalMapStyle}
       showsUserLocation={false}
@@ -48,42 +73,44 @@ const MemoizedTripMap = memo(({ rideDetails, isTripFinished, mapRef }) => {
       pitchEnabled={false}
       moveOnMarkerPress={false}
     >
-      {/* 🛣️ 1. Traveled Route Segment (Gray / Completed) */}
-      {!isTripFinished && rideDetails.carLat && rideDetails.carLng && (
+      {/* 🛣️ 1. Traveled Route Segment on Real Roads (Gray / Completed Path) */}
+      {!isTripFinished && traveledRouteCoordinates && traveledRouteCoordinates.length > 0 && (
         <Polyline
-          coordinates={[
-            { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng },
-            { latitude: rideDetails.carLat, longitude: rideDetails.carLng },
-          ]}
+          coordinates={traveledRouteCoordinates}
           strokeColor="#9CA3AF"
           strokeWidth={4}
           geodesic={true}
         />
       )}
 
-      {/* 🛣️ 2. Remaining Route Segment (Emerald Green / Active Path) */}
-      <Polyline
-        coordinates={[
-          isTripFinished || !rideDetails.carLat 
-            ? { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng } 
-            : { latitude: rideDetails.carLat, longitude: rideDetails.carLng },
-          { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
-        ]}
-        strokeColor={isTripFinished ? "#9CA3AF" : "#059669"}
-        strokeWidth={5}
-        geodesic={true}
-      />
+      {/* 🛣️ 2. Remaining Active Route Segment on Real Roads (Emerald Green Path to Destination) */}
+      {remainingRouteCoordinates && remainingRouteCoordinates.length > 0 && (
+        <Polyline
+          coordinates={remainingRouteCoordinates}
+          strokeColor={isTripFinished ? "#9CA3AF" : "#059669"}
+          strokeWidth={5}
+          geodesic={true}
+        />
+      )}
 
-      {/* 📍 Origin / Pickup Marker */}
+      {/* 📍 Explicitly Labeled Pickup Hub Marker (From map_coordinates endpoint) */}
       <Marker
         coordinate={{ latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng }}
         tracksViewChanges={false}
-        anchor={{ x: 0.5, y: 0.5 }}
+        anchor={{ x: 0.5, y: 1 }}
       >
-        <View style={styles.originMarkerPoint} />
+        <View style={styles.hubMarkerContainer}>
+          <View style={styles.hubPinBubble}>
+            <MaterialCommunityIcons name="map-marker-radius" size={12} color="#FFFFFF" style={{ marginRight: 3 }} />
+            <Text style={styles.hubBubbleText} numberOfLines={1}>
+              {rideDetails.startHubName || "Pickup Hub"}
+            </Text>
+          </View>
+          <View style={styles.hubPinTip} />
+        </View>
       </Marker>
 
-      {/* 🏁 Destination Marker */}
+      {/* 🏁 Explicitly Labeled Destination Marker (From map_coordinates endpoint) */}
       <Marker
         coordinate={{ latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng }}
         tracksViewChanges={false}
@@ -91,13 +118,16 @@ const MemoizedTripMap = memo(({ rideDetails, isTripFinished, mapRef }) => {
       >
         <View style={styles.destinationMarkerContainer}>
           <View style={styles.destinationPinBubble}>
-            <Ionicons name="flag" size={12} color="#FFFFFF" />
+            <Ionicons name="flag" size={12} color="#FFFFFF" style={{ marginRight: 3 }} />
+            <Text style={styles.destinationBubbleText} numberOfLines={1}>
+              {rideDetails.endHubName || "Destination"}
+            </Text>
           </View>
           <View style={styles.destinationPinTip} />
         </View>
       </Marker>
 
-      {/* 🚗 Active Moving Vehicle Marker */}
+      {/* 🚗 Active Moving Vehicle Marker on Road */}
       {!isTripFinished && rideDetails.carLat && rideDetails.carLng && (
         <Marker
           coordinate={{ latitude: rideDetails.carLat, longitude: rideDetails.carLng }}
@@ -121,10 +151,11 @@ export default function TripInProgressScreen({ navigation, route }) {
   const userId = route?.params?.userId || 1;
   const initialRideOfferId = route?.params?.rideOfferId;
 
-  // Core States
+  // Core States (Drawer expanded by default to show manifest)
   const [loading, setLoading] = useState(true);
   const [tripStatus, setTripStatus] = useState("in_trip");
-  const [isDrawerExpanded, setIsDrawerExpanded] = useState(false);
+  const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
+  
   const [rideDetails, setRideDetails] = useState({
     corridor: "Loading Corridor Axis...",
     driverName: "Assigning Driver...",
@@ -139,23 +170,24 @@ export default function TripInProgressScreen({ navigation, route }) {
     pickupLng: DEFAULT_COORDS.longitude,
     dropoffLat: 8.9985,
     dropoffLng: 38.7855,
+    startHubName: "Pickup Hub",
+    endHubName: "Destination",
     etaMinutes: "--",
     distanceRemainingKm: "--",
   });
 
+  // Street-level route coordinate arrays
+  const [traveledCoordinates, setTraveledCoordinates] = useState([]);
+  const [remainingCoordinates, setRemainingCoordinates] = useState([]);
+
   const [pulseAnim] = useState(new Animated.Value(0));
   const mapRef = useRef(null);
-  const hasInitializedCamera = useRef(false);
 
   const isTripFinished = tripStatus === "completed";
 
-  // 1. DISABLE ANDROID BACK BUTTON COMPLETELY DURING TRIP/CHECKOUT
+  // 1. DISABLE ANDROID BACK BUTTON DURING TRIP
   useEffect(() => {
-    const backAction = () => {
-      // Returning true blocks the default back button action
-      return true;
-    };
-
+    const backAction = () => true;
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
   }, []);
@@ -179,7 +211,89 @@ export default function TripInProgressScreen({ navigation, route }) {
     ).start();
   }, [pulseAnim]);
 
-  // 4. LIVE TELEMETRY & POLLING LOOP
+  // 4. FETCH PRECISE MAP COORDINATES FROM /api/rides/map_coordinates ENDPOINT
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchMapCoordinatesEndpoint(activeOfferId) {
+      if (!activeOfferId) return;
+      try {
+        const res = await fetch(`${API_URL}/rides/map_coordinates?ride_offer_id=${activeOfferId}`);
+        const data = await res.json();
+        if (data.success && data.coordinates && isMounted) {
+          const coords = data.coordinates;
+          setRideDetails(prev => ({
+            ...prev,
+            pickupLat: parseFloat(coords.start_latitude) || prev.pickupLat,
+            pickupLng: parseFloat(coords.start_longitude) || prev.pickupLng,
+            dropoffLat: parseFloat(coords.end_latitude) || prev.dropoffLat,
+            dropoffLng: parseFloat(coords.end_longitude) || prev.dropoffLng,
+            startHubName: coords.start_hub_name || prev.startHubName,
+            endHubName: coords.end_hub_name || prev.endHubName,
+            fixedPrice: coords.price_per_seat || prev.fixedPrice,
+          }));
+        }
+      } catch (err) {
+        console.log("⚠️ Failed to load map coordinates from endpoint:", err);
+      }
+    }
+
+    if (initialRideOfferId) {
+      fetchMapCoordinatesEndpoint(initialRideOfferId);
+    }
+
+    return () => { isMounted = false; };
+  }, [initialRideOfferId]);
+
+  // 5. UPDATE STREET-LEVEL DRIVING ROUTES WHENEVER CAR / PICKUP / DROPOFF CHANGES
+  useEffect(() => {
+    let isMounted = true;
+    async function updateStreetRoutes() {
+      const pickup = { latitude: rideDetails.pickupLat, longitude: rideDetails.pickupLng };
+      const car = { latitude: rideDetails.carLat, longitude: rideDetails.carLng };
+      const dropoff = { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng };
+
+      if (!isTripFinished && rideDetails.carLat && rideDetails.carLng) {
+        const traveled = await fetchDrivingRoute(pickup, car);
+        const remaining = await fetchDrivingRoute(car, dropoff);
+
+        if (isMounted) {
+          setTraveledCoordinates(traveled);
+          setRemainingCoordinates(remaining);
+        }
+      } else {
+        const fullRoute = await fetchDrivingRoute(pickup, dropoff);
+        if (isMounted) {
+          setTraveledCoordinates([]);
+          setRemainingCoordinates(fullRoute);
+        }
+      }
+    }
+
+    updateStreetRoutes();
+    return () => { isMounted = false; };
+  }, [rideDetails.carLat, rideDetails.carLng, rideDetails.pickupLat, rideDetails.pickupLng, rideDetails.dropoffLat, rideDetails.dropoffLng, isTripFinished]);
+
+  // 6. DYNAMIC CAMERA FRAMING EFFECT (Professional Transit View matching where we are)
+  useEffect(() => {
+    if (mapRef.current && rideDetails.carLat && rideDetails.dropoffLat) {
+      const bottomPaddingOffset = isDrawerExpanded ? height * 0.45 : height * 0.22;
+      
+      const coordsToFit = [
+        { latitude: rideDetails.carLat, longitude: rideDetails.carLng },
+        { latitude: rideDetails.dropoffLat, longitude: rideDetails.dropoffLng },
+        ...remainingCoordinates
+      ];
+
+      try {
+        mapRef.current.fitToCoordinates(coordsToFit, {
+          edgePadding: { top: 90, right: 60, bottom: bottomPaddingOffset, left: 60 },
+          animated: true,
+        });
+      } catch (e) {}
+    }
+  }, [rideDetails.carLat, rideDetails.carLng, rideDetails.dropoffLat, rideDetails.dropoffLng, remainingCoordinates, isDrawerExpanded]);
+
+  // 7. LIVE TELEMETRY & POLLING LOOP
   useEffect(() => {
     let isMounted = true;
 
@@ -210,57 +324,29 @@ export default function TripInProgressScreen({ navigation, route }) {
 
               const newCarLat = parseFloat(trackData.carLatitude) || DEFAULT_COORDS.latitude;
               const newCarLng = parseFloat(trackData.carLongitude) || DEFAULT_COORDS.longitude;
-              const newDropoffLat = parseFloat(trackData.dropoffLatitude) || 8.9985;
-              const newDropoffLng = parseFloat(trackData.dropoffLongitude) || 38.7855;
+              const newDropoffLat = parseFloat(trackData.dropoffLatitude) || trackData.end_latitude || 8.9985;
+              const newDropoffLng = parseFloat(trackData.dropoffLongitude) || trackData.end_longitude || 38.7855;
+              const newPickupLat = parseFloat(trackData.pickupLatitude) || trackData.start_latitude || DEFAULT_COORDS.latitude;
+              const newPickupLng = parseFloat(trackData.pickupLongitude) || trackData.start_longitude || DEFAULT_COORDS.longitude;
 
-              setRideDetails({
+              setRideDetails(prev => ({
+                ...prev,
                 corridor: trackData.corridor || "Transit Axis Corridor",
                 driverName: trackData.driverName || "Driver Assigned",
                 vehicleInfo: trackData.vehicleInfo || "Vehicle Syncing...",
                 driverRating: trackData.driverRating || "4.9",
-                fixedPrice: trackData.finalPrice || statusData.finalPrice || 80,
+                fixedPrice: trackData.finalPrice || statusData.finalPrice || prev.fixedPrice,
                 coRiders: formattedCoRiders,
                 carLat: newCarLat,
                 carLng: newCarLng,
                 carHeading: trackData.heading || 0,
-                pickupLat: parseFloat(trackData.pickupLatitude) || DEFAULT_COORDS.latitude,
-                pickupLng: parseFloat(trackData.pickupLongitude) || DEFAULT_COORDS.longitude,
+                pickupLat: newPickupLat,
+                pickupLng: newPickupLng,
                 dropoffLat: newDropoffLat,
                 dropoffLng: newDropoffLng,
                 etaMinutes: trackData.etaMinutes ?? "--",
                 distanceRemainingKm: trackData.distanceRemainingKm ?? "--",
-              });
-
-              // 🎥 Dynamic Camera Tracking with Viewport Padding Offset
-              if (mapRef.current) {
-                const bottomPaddingOffset = isDrawerExpanded ? height * 0.45 : height * 0.22;
-                if (!hasInitializedCamera.current) {
-                  try {
-                    mapRef.current.fitToCoordinates(
-                      [
-                        { latitude: newCarLat, longitude: newCarLng },
-                        { latitude: newDropoffLat, longitude: newDropoffLng }
-                      ],
-                      {
-                        edgePadding: { top: 80, right: 50, bottom: bottomPaddingOffset, left: 50 },
-                        animated: true,
-                      }
-                    );
-                    hasInitializedCamera.current = true;
-                  } catch (e) {}
-                } else {
-                  try {
-                    mapRef.current.animateCamera(
-                      {
-                        center: { latitude: newCarLat, longitude: newCarLng },
-                        zoom: 15.5,
-                        pitch: 25,
-                      },
-                      { duration: 1000 }
-                    );
-                  } catch (e) {}
-                }
-              }
+              }));
             }
           }
           setLoading(false);
@@ -277,9 +363,9 @@ export default function TripInProgressScreen({ navigation, route }) {
       isMounted = false;
       clearInterval(syncInterval);
     };
-  }, [userId, initialRideOfferId, isDrawerExpanded]);
+  }, [userId, initialRideOfferId]);
 
-  // 5. CHECKOUT HANDLER
+  // 8. CHECKOUT HANDLER
   const handlePaymentCheckout = async () => {
     try {
       navigation.replace("TripPayment", {
@@ -328,14 +414,19 @@ export default function TripInProgressScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* 2. UBER-STYLE PRODUCTION MAP */}
+      {/* 2. UBER-STYLE PRODUCTION MAP WITH STREET-LEVEL PATHS */}
       <View style={styles.mapContainer}>
-        <MemoizedTripMap rideDetails={rideDetails} isTripFinished={isTripFinished} mapRef={mapRef} />
+        <MemoizedTripMap 
+          rideDetails={rideDetails} 
+          traveledRouteCoordinates={traveledCoordinates}
+          remainingRouteCoordinates={remainingCoordinates}
+          isTripFinished={isTripFinished} 
+          mapRef={mapRef} 
+        />
       </View>
 
-      {/* 3. COLLAPSIBLE SLIDING INFORMATION DRAWER WITH SAFE ANDROID BOTTOM INSETS */}
+      {/* 3. COLLAPSIBLE SLIDING INFORMATION DRAWER (Expanded by default) */}
       <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
-        {/* Drag Handle & Header Tap Area to Toggle Expansion */}
         <Pressable 
           style={styles.dragHandleContainer} 
           onPress={() => setIsDrawerExpanded(!isDrawerExpanded)}
@@ -361,7 +452,7 @@ export default function TripInProgressScreen({ navigation, route }) {
           style={styles.drawerScrollBody}
           contentContainerStyle={{ paddingBottom: 16 }}
         >
-          {/* Real-time Distance & Arrival Metrics Header */}
+          {/* Real-time Metrics Header */}
           <View style={styles.transitSummaryHeader}>
             <View style={styles.metricColumn}>
               <Text style={styles.metricLabel}>EST. TIME</Text>
@@ -414,13 +505,32 @@ export default function TripInProgressScreen({ navigation, route }) {
 
             <View style={styles.manifestRow}>
               <View style={styles.leftLabelCluster}>
+                <Ionicons name="location-outline" size={16} color="#059669" />
+                <Text style={styles.manifestRouteLabel}>Pickup Hub</Text>
+              </View>
+              <Text style={styles.manifestValueText} numberOfLines={1}>{rideDetails.startHubName}</Text>
+            </View>
+
+            <View style={styles.horizontalLineDivider} />
+
+            <View style={styles.manifestRow}>
+              <View style={styles.leftLabelCluster}>
+                <Ionicons name="flag-outline" size={16} color="#EF4444" />
+                <Text style={styles.manifestRouteLabel}>Destination</Text>
+              </View>
+              <Text style={styles.manifestValueText} numberOfLines={1}>{rideDetails.endHubName}</Text>
+            </View>
+
+            <View style={styles.horizontalLineDivider} />
+
+            <View style={styles.manifestRow}>
+              <View style={styles.leftLabelCluster}>
                 <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
                 <Text style={styles.manifestRouteLabel}>Co-Riders on Board</Text>
               </View>
               <Text style={styles.manifestValueText}>{rideDetails.coRiders.length} Passengers</Text>
             </View>
 
-            {/* Render Co-Rider Names if present */}
             {rideDetails.coRiders.length > 0 && (
               <View style={styles.coRidersListContainer}>
                 {rideDetails.coRiders.map((rider) => (
@@ -449,7 +559,7 @@ export default function TripInProgressScreen({ navigation, route }) {
           </View>
         </ScrollView>
 
-        {/* Sticky Action / Checkout Button Footer (Safely padded above Android Navigation Bar) */}
+        {/* Sticky Action / Checkout Button Footer */}
         {isDrawerExpanded && (
           <View style={styles.drawerFooterSticky}>
             {isTripFinished ? (
@@ -501,14 +611,24 @@ const styles = StyleSheet.create({
   statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
   statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
   mapContainer: { flex: 1 },
-  originMarkerPoint: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#9CA3AF", borderWidth: 2, borderColor: "#FFFFFF", elevation: 2 },
+  
+  // Explicitly Labeled Pickup Hub Marker Styles
+  hubMarkerContainer: { alignItems: "center" },
+  hubPinBubble: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  hubBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700", maxWidth: 130 },
+  hubPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#059669", marginTop: -1 },
+
+  // Explicitly Labeled Destination Marker Styles
   destinationMarkerContainer: { alignItems: "center" },
-  destinationPinBubble: { backgroundColor: "#EF4444", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  destinationPinBubble: { backgroundColor: "#EF4444", flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  destinationBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700", maxWidth: 130 },
   destinationPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#EF4444", marginTop: -1 },
+
+  // Active Vehicle Marker Styles
   activeCarWrapper: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
   carInnerBubble: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#111827", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 6 },
   
-  // Drawer States with Safe Bottom Inset Padding for Android Navigation Bars
+  // Drawer Styles
   slidingPanelDrawer: { 
     position: "absolute", 
     bottom: 0, 
@@ -536,7 +656,7 @@ const styles = StyleSheet.create({
   drawerScrollBody: { flex: 1 },
   drawerFooterSticky: { 
     paddingVertical: 12, 
-    paddingBottom: Platform.OS === 'android' ? 24 : 12, // Extra padding to clear Android navigation buttons/gestures
+    paddingBottom: Platform.OS === 'android' ? 24 : 12, 
     borderTopWidth: 1, 
     borderTopColor: "#E5E7EB", 
     backgroundColor: "#F9FAFB" 
@@ -559,7 +679,7 @@ const styles = StyleSheet.create({
   manifestRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12 },
   leftLabelCluster: { flexDirection: "row", alignItems: "center" },
   manifestRouteLabel: { fontSize: 13, color: "#4B5563", marginLeft: 10 },
-  manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111" },
+  manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111", maxWidth: 180 },
   horizontalLineDivider: { height: 1, backgroundColor: "#F3F4F6" },
   coRidersListContainer: { paddingBottom: 10, paddingLeft: 28 },
   coRiderRowItem: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
