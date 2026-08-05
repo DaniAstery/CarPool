@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, memo } from "react";
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
+import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -33,6 +33,91 @@ const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
+// Calculate exact bearing/heading between coordinates if compass is unavailable
+const calculateBearing = (startLat, startLng, destLat, destLng) => {
+  const startLatRad = (startLat * Math.PI) / 180;
+  const startLngRad = (startLng * Math.PI) / 180;
+  const destLatRad = (destLat * Math.PI) / 180;
+  const destLngRad = (destLng * Math.PI) / 180;
+
+  const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
+  const x =
+    Math.cos(startLatRad) * Math.sin(destLatRad) -
+    Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
+  let computedHeading = (Math.atan2(y, x) * 180) / Math.PI;
+  return (computedHeading + 360) % 360;
+};
+
+// ------------------------------------------------------------------
+// MEMOIZED MAP VIEW WITH LOCKED-IN BASELINE STYLINGS & MARKERS
+// ------------------------------------------------------------------
+const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, routeCoordinates, onRouteReady, mapRef, isSheetCollapsed }) => {
+  return (
+    <MapView
+      ref={mapRef}
+      provider={PROVIDER_GOOGLE}
+      style={StyleSheet.absoluteFillObject}
+      initialRegion={{
+        latitude: driverLocation?.latitude || 9.0105,
+        longitude: driverLocation?.longitude || 38.7935,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      }}
+      customMapStyle={cleanMinimalMapStyle}
+      showsUserLocation={false}
+      showsMyLocationButton={false}
+      showsCompass={false}
+    >
+      {/* 🟢 1. Driver Current Location Marker (Standardized Navigation Arrow / Vehicle Bubble with tracksViewChanges) */}
+      {driverLocation && driverLocation.latitude && (
+        <Marker
+          coordinate={driverLocation}
+          title="Your Vehicle Position"
+          anchor={{ x: 0.5, y: 0.5 }}
+          rotation={heading || 0}
+          flat={true}
+          tracksViewChanges={true}
+          zIndex={2}
+        >
+          <View style={styles.emeraldCarWrapper}>
+            <View style={styles.emeraldCarInnerBubble}>
+              <Ionicons name="navigate" size={17} color="#FFFFFF" />
+            </View>
+          </View>
+        </Marker>
+      )}
+
+      {/* 🔵 2. Destination / Pickup Hub Marker (Standardized Royal Blue Halo Badge) */}
+      {pickupLocation?.latitude && pickupLocation?.longitude && (
+        <Marker
+          coordinate={pickupLocation}
+          title={pickupLocation.name}
+          description="Assigned Staging Hub"
+          anchor={{ x: 0.5, y: 0.5 }}
+          zIndex={1}
+        >
+          <View style={styles.royalBlueDestinationHalo}>
+            <View style={styles.royalBlueDestinationBadge} />
+          </View>
+        </Marker>
+      )}
+
+      {/* 🛣️ Realistic Road Route Line (MapViewDirections) */}
+      {driverLocation && pickupLocation?.latitude && (
+        <MapViewDirections
+          origin={driverLocation}
+          destination={pickupLocation}
+          apikey={GOOGLE_MAPS_API_KEY}
+          strokeWidth={5}
+          strokeColor="#059669"
+          optimizeWaypoints={true}
+          onReady={onRouteReady}
+        />
+      )}
+    </MapView>
+  );
+});
+
 export default function NavigateToPickup({ navigation, route }) {
   // 🔐 1. AUTH & SYSTEM PARAMETERS
   const { user } = useAuth();
@@ -43,8 +128,10 @@ export default function NavigateToPickup({ navigation, route }) {
 
   // 📍 2. STATE MATRIX
   const mapRef = useRef(null);
+  const prevLocRef = useRef(null);
   const [driverLocation, setDriverLocation] = useState(null);
   const [mapHubData, setMapHubData] = useState(null);
+  const [heading, setHeading] = useState(0);
 
   const [offerDetails, setOfferDetails] = useState(null);
   const [poolPassengers, setPoolPassengers] = useState([]);
@@ -65,37 +152,63 @@ export default function NavigateToPickup({ navigation, route }) {
     ? getDistanceFromLatLonInKm(driverLocation.latitude, driverLocation.longitude, pickupLocation.latitude, pickupLocation.longitude)
     : null;
 
-  // 📡 3. GPS LIVE TRACKING
+  // 📡 3. GPS LIVE TRACKING & COMPASS HEADING
   useEffect(() => {
     let locationSubscription;
+    let headingSubscription;
 
     (async () => {
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== "granted") return;
 
+        // Watch live GPS coordinates
         locationSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
             timeInterval: 2000,
-            distanceInterval: 5,
+            distanceInterval: 4,
           },
           (location) => {
-            setDriverLocation({
+            const newCoord = {
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
-            });
+            };
+
+            // Compute bearing fallback
+            if (prevLocRef.current) {
+              const computedHeading = calculateBearing(
+                prevLocRef.current.latitude,
+                prevLocRef.current.longitude,
+                newCoord.latitude,
+                newCoord.longitude
+              );
+              if (computedHeading > 0 && !headingSubscription) {
+                setHeading(computedHeading);
+              }
+            }
+            prevLocRef.current = newCoord;
+            setDriverLocation(newCoord);
           }
         );
+
+        // Watch physical device compass heading for smooth arrow rotation
+        headingSubscription = await Location.watchHeadingAsync((headingObj) => {
+          if (headingObj) {
+            const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magHeading;
+            if (compassHeading >= 0) {
+              setHeading(compassHeading);
+            }
+          }
+        });
       } catch (err) {
         console.log("GPS Location initialization failed:", err);
       }
     })();
 
     return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
-      }
+      if (locationSubscription) locationSubscription.remove();
+      if (headingSubscription) headingSubscription.remove();
     };
   }, []);
 
@@ -339,83 +452,34 @@ export default function NavigateToPickup({ navigation, route }) {
         </View>
       )}
 
-      {/* MAP AREA WITH REALISTIC ROAD ROUTING */}
+      {/* MAP AREA WITH AGREED BASELINE MAP STYLE */}
       <View style={styles.mapContainer}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: driverLocation?.latitude || 9.0105,
-            longitude: driverLocation?.longitude || 38.7935,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
+        <DriverNavigationMap
+          driverLocation={driverLocation}
+          pickupLocation={pickupLocation}
+          heading={heading}
+          mapRef={mapRef}
+          isSheetCollapsed={isSheetCollapsed}
+          onRouteReady={(result) => {
+            const bottomPadding = isSheetCollapsed ? 150 : height * 0.45;
+            mapRef.current?.fitToCoordinates(result.coordinates, {
+              edgePadding: {
+                right: 60,
+                bottom: bottomPadding,
+                left: 60,
+                top: 100,
+              },
+            });
           }}
-          customMapStyle={cleanMinimalMapStyle}
-        >
-          {/* Driver Circular Marker */}
-          {driverLocation && (
-            <Marker coordinate={driverLocation} title="Your Vehicle Position" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={2}>
-              <View style={styles.driverPinnedContainer}>
-                <View style={styles.driverPinBadge}>
-                  <Text style={styles.driverPinText}>YOU</Text>
-                </View>
-                <View style={styles.glowingDriverHalo}>
-                  <View style={styles.driverMarkerBubble}>
-                    <MaterialCommunityIcons name="car-side" size={16} color="#FFFFFF" />
-                  </View>
-                </View>
-              </View>
-            </Marker>
-          )}
-
-          {/* Pickup Hub Circular Marker */}
-          {pickupLocation?.latitude && pickupLocation?.longitude && (
-            <Marker coordinate={pickupLocation} title={pickupLocation.name} description="Assigned Staging Hub" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={1}>
-              <View style={styles.driverPinnedContainer}>
-                <View style={[styles.driverPinBadge, { backgroundColor: "#0284C7" }]}>
-                  <Text style={styles.driverPinText}>PICKUP</Text>
-                </View>
-                <View style={[styles.glowingDriverHalo, { backgroundColor: "rgba(2, 132, 199, 0.15)", borderColor: "rgba(2, 132, 199, 0.4)" }]}>
-                  <View style={[styles.driverMarkerBubble, { backgroundColor: "#0284C7" }]}>
-                    <Ionicons name="location" size={16} color="#FFFFFF" />
-                  </View>
-                </View>
-              </View>
-            </Marker>
-          )}
-
-          {/* Realistic Road Route Line */}
-          {driverLocation && pickupLocation?.latitude && (
-            <MapViewDirections
-              origin={driverLocation}
-              destination={pickupLocation}
-              apikey={GOOGLE_MAPS_API_KEY}
-              strokeWidth={4}
-              strokeColor="#EF4444"
-              optimizeWaypoints={true}
-              onReady={(result) => {
-                const bottomPadding = isSheetCollapsed ? 150 : height * 0.45;
-                mapRef.current?.fitToCoordinates(result.coordinates, {
-                  edgePadding: {
-                    right: 60,
-                    bottom: bottomPadding,
-                    left: 60,
-                    top: 100,
-                  },
-                });
-              }}
-            />
-          )}
-        </MapView>
+        />
 
         {/* 📏 Distance Banner */}
         {currentDriverDistance !== null && (
           <View style={styles.persistentDistanceBanner}>
-            <Ionicons name="navigate" size={14} color="#EF4444" style={{ marginRight: 6 }} />
+            <Ionicons name="navigate" size={14} color="#059669" style={{ marginRight: 6 }} />
             <Text style={styles.persistentDistanceText}>
               Distance to <Text style={styles.boldText}>{pickupLocation.name}</Text>:{" "}
-              <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#EF4444" }]}>
+              <Text style={[styles.boldText, { color: currentDriverDistance <= 2.0 ? "#10B981" : "#059669" }]}>
                 {currentDriverDistance.toFixed(2)} km
               </Text>
             </Text>
@@ -446,7 +510,7 @@ export default function NavigateToPickup({ navigation, route }) {
               <Ionicons
                 name={hasArrived ? "checkmark-circle" : "navigate"}
                 size={20}
-                color="#10B981"
+                color="#059669"
               />
             </View>
             <View style={styles.locationTextWrapper}>
@@ -481,7 +545,7 @@ export default function NavigateToPickup({ navigation, route }) {
                       <Ionicons
                         name="person-outline"
                         size={14}
-                        color={isArrived ? "#D97706" : "#10B981"}
+                        color={isArrived ? "#D97706" : "#059669"}
                       />
                       <Text style={styles.tableUserText}>
                         {passenger.name}
@@ -520,7 +584,7 @@ export default function NavigateToPickup({ navigation, route }) {
   );
 }
 
-// 🎨 STYLES
+// 🎨 STYLES & LOCKED-IN BASELINE MAP STYLING
 const cleanMinimalMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
   { featureType: "poi", stylers: [{ visibility: "off" }] },
@@ -555,47 +619,12 @@ const styles = StyleSheet.create({
   },
   mapContainer: { flex: 1 },
   
-  // Clean Circular Map Marker Styles
-  driverPinnedContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  driverPinBadge: {
-    backgroundColor: "#0F172A",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginBottom: 4,
-  },
-  driverPinText: {
-    color: "#FFFFFF",
-    fontSize: 9,
-    fontWeight: "800",
-    letterSpacing: 0.5,
-  },
-  glowingDriverHalo: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(16, 185, 129, 0.15)",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(16, 185, 129, 0.4)",
-  },
-  driverMarkerBubble: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#10B981",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-  },
+  // Locked-In Baseline Marker Styles
+  emeraldCarWrapper: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
+  emeraldCarInnerBubble: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 6 },
+  
+  royalBlueDestinationHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(59, 130, 246, 0.3)", justifyContent: "center", alignItems: "center" },
+  royalBlueDestinationBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#3B82F6", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
 
   persistentDistanceBanner: {
     position: "absolute",
@@ -696,7 +725,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  arriveButton: { backgroundColor: "#10B981" },
+  arriveButton: { backgroundColor: "#059669" },
   startTripButton: { backgroundColor: "#0284C7" },
   actionButtonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 14, letterSpacing: 0.5 },
 });
