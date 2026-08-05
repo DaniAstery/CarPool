@@ -15,7 +15,7 @@ import * as ImagePicker from "expo-image-picker";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext"; // Ensure this path matches your project structure
 
-const API_URL = "http://192.168.1.3:5000/api";
+const API_URL = "http://100.108.52.79:5000/api";
 
 export default function AuthScreen() {
   const { loginSession } = useAuth();

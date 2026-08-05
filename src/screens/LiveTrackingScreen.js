@@ -15,79 +15,120 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
-import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://192.168.1.3:5000";
+const API_URL = "http://100.108.52.79:5000";
 
 const DEFAULT_LOCATION = {
-  latitude: 9.0220,
-  longitude: 38.8450,
+  latitude: 9.0235,
+  longitude: 38.8275,
   latitudeDelta: 0.02,
   longitudeDelta: 0.02,
 };
 
-// ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Auto-focuses & frames User GPS + Pickup Hub)
-// ------------------------------------------------------------------
-const TrackingMap = memo(({ currentLocation, meetupLocation, mapRef, isDrawerExpanded }) => {
-  useEffect(() => {
-    if (mapRef.current && currentLocation?.latitude && meetupLocation?.latitude) {
-      const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
-      mapRef.current.fitToCoordinates(
-        [
-          { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-          { latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }
-        ],
-        {
-          edgePadding: { top: 70, right: 50, bottom: bottomPadding, left: 50 },
-          animated: true,
-        }
-      );
+// Fetch real street-level driving route from OSRM public driving router
+const fetchDrivingRoute = async (origin, destination) => {
+  if (!origin || !destination || !origin.latitude || !destination.latitude || !origin.longitude || !destination.longitude) {
+    return [];
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.routes && data.routes[0]) {
+      return data.routes[0].geometry.coordinates.map(coord => ({
+        latitude: coord[1],
+        longitude: coord[0]
+      }));
     }
-  }, [currentLocation, meetupLocation, mapRef, isDrawerExpanded]);
+  } catch (err) {
+    console.log("⚠️ OSRM driving route request failed, utilizing direct path fallback");
+  }
+
+  return [origin, destination];
+};
+
+// ------------------------------------------------------------------
+// MEMOIZED MAP VIEW (3 Distinct Ride-App Markers: User, Pickup, Destination)
+// ------------------------------------------------------------------
+const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded }) => {
+  const hasFitted = useRef(false);
+
+  useEffect(() => {
+    if (mapRef.current && pickupLocation?.latitude && destinationLocation?.latitude && !hasFitted.current) {
+      hasFitted.current = true;
+      const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
+      const coordsToFit = [
+        ...(currentLocation?.latitude ? [{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }] : []),
+        { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude },
+        { latitude: destinationLocation.latitude, longitude: destinationLocation.longitude },
+        ...routeCoordinates
+      ];
+
+      try {
+        mapRef.current.fitToCoordinates(coordsToFit, {
+          edgePadding: { top: 80, right: 60, bottom: bottomPadding, left: 60 },
+          animated: true,
+        });
+      } catch (e) {}
+    }
+  }, [currentLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded]);
 
   return (
     <MapView
       ref={mapRef}
       style={StyleSheet.absoluteFillObject}
       provider={PROVIDER_DEFAULT}
-      initialRegion={currentLocation || DEFAULT_LOCATION}
+      initialRegion={DEFAULT_LOCATION}
       showsUserLocation={false}
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* 🔵 Your Phone's Live GPS Marker */}
-      {currentLocation && (
-        <Marker coordinate={currentLocation} title="Your GPS Location" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+      {/* 🔵 1. Passenger / User Current Device GPS Marker (Cyan/Blue Dot) */}
+      {currentLocation && currentLocation.latitude && (
+        <Marker coordinate={currentLocation} title="Your Location" anchor={{ x: 0.5, y: 0.5 }}>
           <View style={styles.userMarkerHalo}>
             <View style={styles.userMarkerDot} />
           </View>
         </Marker>
       )}
 
-      {/* 🚏 Pickup Hub Station Marker */}
-      {meetupLocation && meetupLocation.latitude && (
-        <Marker coordinate={meetupLocation} title="Pickup Hub Station" anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
-          <View style={styles.pickupMarkerContainer}>
-            <View style={styles.pickupPinBubble}>
-              <MaterialCommunityIcons name="bus-stop" size={18} color="#FFFFFF" />
-            </View>
-            <View style={styles.pickupPinTip} />
+      {/* 🟢 2. Pickup Hub Marker (Emerald Green Ride-App Dot) */}
+      {pickupLocation && pickupLocation.latitude && pickupLocation.longitude && (
+        <Marker 
+          coordinate={{ latitude: Number(pickupLocation.latitude), longitude: Number(pickupLocation.longitude) }} 
+          title={pickupLocation.title || "Pickup Hub"} 
+          anchor={{ x: 0.5, y: 0.5 }}
+        >
+          <View style={styles.glowingEmeraldOuterHalo}>
+            <View style={styles.glowingEmeraldBadge} />
           </View>
         </Marker>
       )}
 
-      {/* 🛣️ Route Path from You to Pickup Hub */}
-      {currentLocation && meetupLocation && meetupLocation.latitude && (
+      {/* 🔵 3. Destination Hub Marker (Royal Blue Ride-App Dot) */}
+      {destinationLocation && destinationLocation.latitude && destinationLocation.longitude && (
+        <Marker 
+          coordinate={{ latitude: Number(destinationLocation.latitude), longitude: Number(destinationLocation.longitude) }} 
+          title={destinationLocation.title || "Destination Hub"} 
+          anchor={{ x: 0.5, y: 0.5 }}
+        >
+          <View style={styles.glowingDestinationOuterHalo}>
+            <View style={styles.glowingDestinationBadge} />
+          </View>
+        </Marker>
+      )}
+
+      {/* 🛣️ Real Street-Level Polyline Route Path (Pickup to Destination) */}
+      {routeCoordinates && routeCoordinates.length > 0 && (
         <Polyline
-          coordinates={[
-            currentLocation, 
-            { latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }
-          ]}
-          strokeColor="#10B981"
-          strokeWidth={4}
+          coordinates={routeCoordinates}
+          strokeColor="#059669"
+          strokeWidth={5}
           geodesic={true}
         />
       )}
@@ -108,10 +149,10 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const [coRiders, setCoRiders] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
-  const [meetupLocation, setMeetupLocation] = useState({
-    latitude: null,
-    longitude: null,
-  });
+  
+  const [pickupLocation, setPickupLocation] = useState({ latitude: null, longitude: null, title: "Pickup Hub" });
+  const [destinationLocation, setDestinationLocation] = useState({ latitude: null, longitude: null, title: "Destination Hub" });
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
 
   const [pickupHubName, setPickupHubName] = useState("Fetching Pickup Hub...");
   const [dropoffHubName, setDropoffHubName] = useState("Fetching Destination...");
@@ -153,7 +194,65 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => { isMounted = false; };
   }, []);
 
-  // Poll presence status & hub coordinates
+  // 2. FETCH PRECISE AUTHORITATIVE PICKUP & DESTINATION COORDINATES FROM MAP_COORDINATES
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchMapCoordinatesEndpoint() {
+      if (!rideOfferId) return;
+      try {
+        const res = await fetch(`${API_URL}/api/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
+        const data = await res.json();
+        if (data.success && data.coordinates && isMounted) {
+          const coords = data.coordinates;
+          const startLat = parseFloat(coords.start_latitude);
+          const startLng = parseFloat(coords.start_longitude);
+          const endLat = parseFloat(coords.end_latitude);
+          const endLng = parseFloat(coords.end_longitude);
+
+          if (startLat && startLng) {
+            setPickupLocation({
+              latitude: startLat,
+              longitude: startLng,
+              title: coords.start_hub_name || "Pickup Hub"
+            });
+          }
+
+          if (endLat && endLng) {
+            setDestinationLocation({
+              latitude: endLat,
+              longitude: endLng,
+              title: coords.end_hub_name || "Destination Hub"
+            });
+          }
+
+          if (coords.start_hub_name) setPickupHubName(coords.start_hub_name);
+          if (coords.end_hub_name) setDropoffHubName(coords.end_hub_name);
+        }
+      } catch (err) {
+        console.log("⚠️ Error fetching map_coordinates endpoint:", err);
+      }
+    }
+
+    fetchMapCoordinatesEndpoint();
+    return () => { isMounted = false; };
+  }, [rideOfferId]);
+
+  // 3. GENERATE STREET-LEVEL ROUTE POLYLINE FROM PICKUP HUB TO DESTINATION HUB
+  useEffect(() => {
+    let isMounted = true;
+    async function updateStreetRoute() {
+      if (pickupLocation.latitude && destinationLocation.latitude) {
+        const routePoints = await fetchDrivingRoute(pickupLocation, destinationLocation);
+        if (isMounted && routePoints.length > 0) {
+          setRouteCoordinates(routePoints);
+        }
+      }
+    }
+    updateStreetRoute();
+    return () => { isMounted = false; };
+  }, [pickupLocation, destinationLocation]);
+
+  // Poll presence status (Driver state & co-riders only; no overwriting authoritative map coordinates)
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -172,13 +271,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
           if (data.driverName) setDriverName(data.driverName);
           if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
           if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
-
-          if (data.pickup_lat && data.pickup_lng) {
-            setMeetupLocation({
-              latitude: parseFloat(data.pickup_lat),
-              longitude: parseFloat(data.pickup_lng),
-            });
-          }
 
           const passengers = data.passengers || [];
           const myRow = passengers.find(
@@ -267,7 +359,9 @@ export default function LiveTrackingScreen({ route, navigation }) {
       <View style={styles.mapContainer}>
         <TrackingMap 
           currentLocation={currentLocation} 
-          meetupLocation={meetupLocation} 
+          pickupLocation={pickupLocation}
+          destinationLocation={destinationLocation}
+          routeCoordinates={routeCoordinates}
           mapRef={mapRef} 
           isDrawerExpanded={isDrawerExpanded}
         />
@@ -310,7 +404,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
           {/* Route Corridor Details */}
           <View style={styles.routeCard}>
             <View style={styles.routeItem}>
-              <Ionicons name="location-sharp" size={18} color="#10B981" />
+              <Ionicons name="location-sharp" size={18} color="#059669" />
               <View style={{ marginLeft: 8, flex: 1 }}>
                 <Text style={styles.routeLabel}>PICKUP HUB</Text>
                 <Text style={styles.routeValue} numberOfLines={1}>{pickupHubName}</Text>
@@ -320,7 +414,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
             <View style={styles.routeDivider} />
 
             <View style={styles.routeItem}>
-              <Ionicons name="flag-sharp" size={18} color="#E28743" />
+              <Ionicons name="flag-sharp" size={18} color="#3B82F6" />
               <View style={{ marginLeft: 8, flex: 1 }}>
                 <Text style={styles.routeLabel}>DESTINATION</Text>
                 <Text style={styles.routeValue} numberOfLines={1}>{dropoffHubName}</Text>
@@ -395,14 +489,17 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8F9FA" },
   mapContainer: { flex: 1 },
   
-  // User GPS Marker
-  userMarkerHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(16, 185, 129, 0.2)", justifyContent: "center", alignItems: "center" },
-  userMarkerDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: "#10B981", borderWidth: 2, borderColor: "#FFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+  // 1. User Device GPS Marker (Cyan/Blue Dot)
+  userMarkerHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(2, 132, 199, 0.25)", justifyContent: "center", alignItems: "center" },
+  userMarkerDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: "#0284C7", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 6 },
   
-  // Pickup Hub Marker
-  pickupMarkerContainer: { alignItems: "center" },
-  pickupPinBubble: { backgroundColor: "#2F4F4F", paddingHorizontal: 8, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
-  pickupPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#2F4F4F", marginTop: -1 },
+  // 2. Pickup Hub Marker (Emerald Green Dot)
+  glowingEmeraldOuterHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.3)", justifyContent: "center", alignItems: "center" },
+  glowingEmeraldBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#059669", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
+
+  // 3. Destination Hub Marker (Royal Blue Dot)
+  glowingDestinationOuterHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(59, 130, 246, 0.3)", justifyContent: "center", alignItems: "center" },
+  glowingDestinationBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#3B82F6", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
 
   // Sliding Panel Drawer
   slidingPanelDrawer: { 

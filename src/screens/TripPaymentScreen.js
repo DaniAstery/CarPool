@@ -33,7 +33,7 @@ export default function TripPaymentScreen({ navigation }) {
         return;
       }
       try {
-        const res = await fetch(`http://192.168.1.3:5000/api/rides/payment-details-by-user/${currentUserId}`);
+        const res = await fetch(`http://100.108.52.79:5000/api/rides/payment-details-by-user/${currentUserId}`);
         const data = await res.json();
         if (res.ok && data.success && isMounted) {
           if (data.fixedPrice) setFixedPrice(data.fixedPrice);

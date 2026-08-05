@@ -19,7 +19,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://192.168.1.3:5000/api";
+const API_URL = "http://100.108.52.79:5000/api";
 
 const DEFAULT_COORDS = {
   latitude: 9.0115,

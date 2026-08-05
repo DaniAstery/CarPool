@@ -20,7 +20,7 @@ import { useAuth } from "../../AuthContext";
 import { io } from "socket.io-client";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://192.168.1.3:5000";
+const API_URL = "http://100.108.52.79:5000";
 
 const FALLBACK_LOCATION = {
   latitude: 9.0220,

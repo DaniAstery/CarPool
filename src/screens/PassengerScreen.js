@@ -14,8 +14,8 @@ import { useAuth } from '../AuthContext';
 import * as Location from 'expo-location';
 import io from "socket.io-client";
 
-const API_URL = "http://192.168.1.3:5000/api"; 
-const socket = io("http://192.168.1.3:5000");
+const API_URL = "http://100.108.52.79:5000/api"; 
+const socket = io("http://100.108.52.79:5000");
 
 export default function PassengerScreen({ navigation }) {
   const { user, logoutSession } = useAuth();

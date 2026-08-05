@@ -18,7 +18,7 @@ import { useAuth } from "../../AuthContext";
 const { width, height } = Dimensions.get("window");
 
 // 🌐 NETWORK HOST CONFIGURATION & API KEY
-const API_URL = "http://192.168.1.3:5000/api";
+const API_URL = "http://100.108.52.79:5000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
 
 const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {

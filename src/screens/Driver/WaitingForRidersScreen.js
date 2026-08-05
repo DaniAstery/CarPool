@@ -13,7 +13,7 @@ import {
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 
-const API_URL = "http://192.168.1.3:5000";
+const API_URL = "http://100.108.52.79:5000";
 
 export default function WaitingForRidersScreen({ route, navigation }) {
   const { user } = useAuth();

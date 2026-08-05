@@ -19,7 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 
-const API_BASE_URL = "http://192.168.1.3:5000/api";
+const API_BASE_URL = "http://100.108.52.79:5000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
 const { height } = Dimensions.get("window");
 

@@ -31,8 +31,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
     async function streamHubRoster() {
       try {
         const response = await fetch(
-          `http://192.168.1.3:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`
-        );
+          `http://100.108.52.79:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`);
         if (!response.ok) return;
 
         const data = await response.json();
@@ -61,7 +60,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
     if (!activeRideOfferId) return;
     
     try {
-      const res = await fetch("http://192.168.1.3:5000/api/rides/start-trip", {
+      const res = await fetch("http://100.108.52.79:5000/api/rides/start-trip", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ride_offer_id: activeRideOfferId }),
