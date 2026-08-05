@@ -10,7 +10,7 @@ import { AuthProvider, useAuth } from "./src/AuthContext";
 import { useRideGateway } from "./src/hooks/useRideGateway";
 
 // 🛠️ SCREENS IMPORT MATRIX
-import RegisterScreen from "./src/screens/RegistrationScreen";
+
 import PassengerJoinedPoolScreen from "./src/screens/JoinedPoolScreen";
 import PassengerScreen from "./src/screens/PassengerScreen";
 import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
@@ -28,6 +28,7 @@ import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import RegistrationScreen from "./src/screens/RegistrationScreen";
 const Stack = createNativeStackNavigator();
 
 // 📍 GLOBAL NAVIGATION REF (Allows NavigationGateway to trigger navigation)
@@ -61,7 +62,7 @@ function NavigationGateway() {
         {user === null ? (
           // 🛑 1. UNAUTHENTICATED ROUTE CHANNEL
           <Stack.Screen 
-            name="Register" 
+            name="Registeration" 
             component={RegisterScreen} 
           />
         ) : user.role === "driver" ? (
@@ -76,6 +77,7 @@ function NavigationGateway() {
             <Stack.Screen name="WaitingForPassengers" component={WaitingForPassengersScreen} />
             <Stack.Screen name="TripInProgress" component={TripInProgressScreen}/>
             <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
+           
           </>
         ) : (
           // 🎒 3. PASSENGER/RIDER WORKSPACE
@@ -89,6 +91,7 @@ function NavigationGateway() {
             <Stack.Screen name="TripCompletion" component={TripCompletionScreen} />
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
              <Stack.Screen name="Home" component={HomeScreen} />
+            
           </>
         )}
 

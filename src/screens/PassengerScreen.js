@@ -13,6 +13,7 @@ import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-ico
 import { useAuth } from '../AuthContext'; 
 import * as Location from 'expo-location';
 import io from "socket.io-client";
+import CorridorDrawer from "../screens/Corridor_Drawer";
 
 const API_URL = "http://100.108.52.79:5000/api"; 
 const socket = io("http://100.108.52.79:5000");
@@ -21,10 +22,13 @@ export default function PassengerScreen({ navigation }) {
   const { user, logoutSession } = useAuth();
 
   const currentUserId = user?.id || user?.userId || 12;
+  const userRole = user?.role || "passenger";
+  const userName = user?.name || user?.full_name || "Passenger";
 
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
   const [isLocating, setIsLocating] = useState(true);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   const [userCoords, setUserCoords] = useState(null);
   const [selectedPickupHub, setSelectedPickupHub] = useState(null);
@@ -258,7 +262,7 @@ export default function PassengerScreen({ navigation }) {
         user_id: currentUserId,
         pickup_hub_id: pickupHubId,
         route_id: targetRouteId,
-        dropoff_hub_id: item.drop_off_hub_id || null, // ✅ Send actual destination ID if needed
+        dropoff_hub_id: item.drop_off_hub_id || null, 
         booking_type: isSoloRide ? "solo" : "shared"
       };
 
@@ -285,7 +289,6 @@ export default function PassengerScreen({ navigation }) {
       const isRecovered = data.alreadyActive === true;
       const targetScreen = isRecovered ? (data.navigateTo || "MatchingScreen") : "MatchingScreen";
 
-      // ✅ Formulate the corridor name cleanly for the next screen
       const passThrough = item.pass_through_name ? ` ➔ ${item.pass_through_name}` : "";
       const routeTitle = item.pickup_hub_name && item.name 
         ? `${item.pickup_hub_name}${passThrough} ➔ ${item.name}` 
@@ -301,7 +304,7 @@ export default function PassengerScreen({ navigation }) {
         ride: {
           corridor: routeTitle,
           time: "Evaluating Corridor Options...",
-          price: `ETB ${item.price || 150}`, // ✅ Uses the new aliased price
+          price: `ETB ${item.price || 150}`, 
         }
       };
 
@@ -309,7 +312,6 @@ export default function PassengerScreen({ navigation }) {
 
     } catch (err) {
       console.error("❌ Join Pool Exception caught:", err);
-      // Fallback bypass logic intentionally preserved
     }
   };
 
@@ -330,18 +332,34 @@ export default function PassengerScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.outerContainer}>
       
-      {/* FLOATING LOGOUT UTILITY */}
-      <TouchableOpacity 
-        style={styles.floatingLogoutBtn} 
-        onPress={() => {
-          Alert.alert("Logout", `Sign out of session for ${user?.full_name || "Passenger"}?`, [
-            { text: "Stay" },
-            { text: "Logout", style: "destructive", onPress: () => logoutSession() }
-          ]);
-        }}
-      >
-        <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-      </TouchableOpacity>
+      {/* 🧭 TOP FLOATING HEADER WITH HAMBURGER MENU */}
+      <View style={styles.topFloatingHeader}>
+        <View style={styles.headerLeftCluster}>
+          <TouchableOpacity 
+            style={styles.hamburgerButton} 
+            onPress={() => setIsDrawerOpen(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu" size={22} color="#111111" />
+          </TouchableOpacity>
+          <View style={{ marginLeft: 10 }}>
+            <Text style={styles.headerTitleText}>Passenger Center</Text>
+            <Text style={styles.headerSubtext}>{userName}</Text>
+          </View>
+        </View>
+        <TouchableOpacity 
+          style={styles.logoutIconButton} 
+          onPress={() => {
+            Alert.alert("Logout", `Sign out of session for ${userName}?`, [
+              { text: "Stay" },
+              { text: "Logout", style: "destructive", onPress: () => logoutSession() }
+            ]);
+          }} 
+          activeOpacity={0.7}
+        >
+          <Ionicons name="power" size={16} color="#EF4444" />
+        </TouchableOpacity>
+      </View>
 
       {/* 📍 1. PROXIMITY BANNERS */}
       <View style={styles.heroHeaderZone}>
@@ -431,17 +449,15 @@ export default function PassengerScreen({ navigation }) {
             contentContainerStyle={{ paddingBottom: 40 }}
           >
            {routes.map((route, index) => {
-              // ✅ Updated Mapping Logic using SQL outputs
               const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
               const routeTitle = route.pickup_hub_name && route.name 
                 ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
                 : `Route #${route.id || route.route_id}`;
 
-              // Handle seat count logic safely, since cars might not be active yet
               const maxSeats = parseInt(route.total_seats, 10) || 4;
               const availableSeats = parseInt(route.available_seats, 10);
               const seatCount = isNaN(availableSeats) ? 0 : (maxSeats - availableSeats);
-              const hasActiveQueue = !!route.ride_offer_id; // True if a car is waiting at hub
+              const hasActiveQueue = !!route.ride_offer_id; 
 
               const routePrice = parseFloat(route.price) || 150;
               const finalDisplayPrice = isSoloRide ? (routePrice * 2.5) : routePrice;
@@ -507,6 +523,17 @@ export default function PassengerScreen({ navigation }) {
           </ScrollView>
         )}
       </View>
+
+      {/* 🚪 CORRIDOR SIDE DRAWER */}
+      <CorridorDrawer
+        visible={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        role={userRole}
+        userName={userName}
+        onNavigate={(routeName) => {
+          navigation.navigate(routeName);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -515,6 +542,48 @@ const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#F9FAFB" },
   gatekeeperContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" },
   gatekeeperText: { marginTop: 12, color: "#4B5563", fontWeight: "700", fontSize: 14, letterSpacing: 0.2 },
+  
+  topFloatingHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 12,
+    borderRadius: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  headerLeftCluster: { flexDirection: "row", alignItems: "center" },
+  hamburgerButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTitleText: { fontSize: 14, fontWeight: "800", color: "#111111" },
+  headerSubtext: { fontSize: 11, color: "#059669", fontWeight: "700" },
+  logoutIconButton: { 
+    width: 32, 
+    height: 32, 
+    borderRadius: 16, 
+    backgroundColor: "#FEF2F2", 
+    alignItems: "center", 
+    justifyContent: "center", 
+    borderWidth: 1, 
+    borderColor: "#FCA5A5" 
+  },
+
   heroHeaderZone: { backgroundColor: "#FFFFFF", padding: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: "#111827", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 10, elevation: 3, marginBottom: 16 },
   hubHeader: { flexDirection: "row", alignItems: "center", marginBottom: 15 },
   iconCircle: { width: 48, height: 48, borderRadius: 24, justifyContent: "center", alignItems: "center" },
@@ -526,7 +595,7 @@ const styles = StyleSheet.create({
   rangeRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
   rangeValueText: { fontSize: 14, fontWeight: "800", marginLeft: 6 },
   rangeHintText: { fontSize: 12, fontWeight: "500", lineHeight: 16 },
-  floatingLogoutBtn: { position: "absolute", top: 12, right: 16, zIndex: 10, padding: 8, borderRadius: 20, backgroundColor: "#FFF", borderWidth: 1, borderColor: "#F3F4F6" },
+  
   toggleRowContainer: { paddingHorizontal: 20, marginBottom: 18 },
   toggleSectionHeading: { fontSize: 11, fontWeight: "800", color: "#6B7280", letterSpacing: 1, marginBottom: 8, textTransform: "uppercase" },
   toggleButtonGroup: { flexDirection: "row", backgroundColor: "#F3F4F6", padding: 4, borderRadius: 14 },
@@ -535,9 +604,11 @@ const styles = StyleSheet.create({
   activeSoloButton: { backgroundColor: "#059669" },
   archetypeText: { fontSize: 13, fontWeight: "700", marginLeft: 6, color: "#4B5563" },
   activeArchetypeText: { color: "#FFFFFF" },
+  
   listSectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 12 },
   sectionTitle: { fontSize: 16, fontWeight: "800", color: "#111827" },
   container: { flex: 1, paddingHorizontal: 20 },
+  
   supremeCard: { backgroundColor: "#FFFFFF", borderRadius: 18, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: "#E5E7EB", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 6, elevation: 2 },
   disabledCard: { opacity: 0.65, backgroundColor: "#F3F4F6", borderColor: "#E5E7EB" },
   cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", borderBottomWidth: 1, borderBottomColor: "#F3F4F6", paddingBottom: 12, marginBottom: 12 },
@@ -548,12 +619,14 @@ const styles = StyleSheet.create({
   activeSeatBadge: { backgroundColor: "#D1FAE5" },
   pulseDot: { width: 6, height: 6, borderRadius: 3, marginRight: 6 },
   seatText: { fontSize: 11, fontWeight: "800" },
+  
   cardFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   priceContainer: { flexDirection: "column" },
   priceLabel: { fontSize: 9, fontWeight: "800", color: "#9CA3AF", letterSpacing: 0.5 },
   priceText: { fontSize: 18, fontWeight: "900", color: "#111827", marginTop: 1 },
   actionArrowZone: { flexDirection: "row", alignItems: "center" },
   actionText: { fontSize: 12, fontWeight: "800", marginRight: 6 },
+  
   fallbackBlock: { flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 60, paddingHorizontal: 40 },
   fallbackTitle: { fontSize: 16, fontWeight: "800", color: "#374151", marginTop: 8 },
   fallbackSub: { fontSize: 13, color: "#9CA3AF", textAlign: "center", marginTop: 4, lineHeight: 18 }
