@@ -29,21 +29,6 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.02,
 };
 
-// Calculate exact bearing/heading between two coordinates so the vehicle marker faces forward properly
-const calculateBearing = (startLat, startLng, destLat, destLng) => {
-  const startLatRad = (startLat * Math.PI) / 180;
-  const startLngRad = (startLng * Math.PI) / 180;
-  const destLatRad = (destLat * Math.PI) / 180;
-  const destLngRad = (destLng * Math.PI) / 180;
-
-  const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
-  const x =
-    Math.cos(startLatRad) * Math.sin(destLatRad) -
-    Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
-  let computedHeading = (Math.atan2(y, x) * 180) / Math.PI;
-  return (computedHeading + 360) % 360;
-};
-
 // Fetch real street-level driving route from OSRM public driving router
 const fetchDrivingRoute = async (origin, destination) => {
   if (!origin || !destination || !origin.latitude || !destination.latitude || !origin.longitude || !destination.longitude) {
@@ -69,7 +54,7 @@ const fetchDrivingRoute = async (origin, destination) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (GPS Navigation Arrow Marker & Corrected Destination)
+// MEMOIZED MAP VIEW
 // ------------------------------------------------------------------
 const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoordinates, heading, mapRef, isDrawerExpanded, isTripFinished }) => {
   useEffect(() => {
@@ -100,7 +85,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* 🟢 1. Passenger In-Car Current Location Marker with tracksViewChanges enabled for real-time Android rotation */}
+      {/* 🟢 Passenger In-Car Current Location Marker (Physical Phone Orientation) */}
       {!isTripFinished && currentLocation && currentLocation.latitude && (
         <Marker
           coordinate={currentLocation}
@@ -118,7 +103,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
         </Marker>
       )}
 
-      {/* 🔵 2. Destination Hub Marker */}
+      {/* 🔵 Destination Hub Marker */}
       {destinationLocation && destinationLocation.latitude && destinationLocation.longitude && (
         <Marker 
           coordinate={{ latitude: Number(destinationLocation.latitude), longitude: Number(destinationLocation.longitude) }} 
@@ -169,7 +154,6 @@ export default function TripDepartureScreen({ route, navigation }) {
   });
 
   const mapRef = useRef(null);
-  const prevLocRef = useRef(null);
   const [pulseAnim] = useState(new Animated.Value(0));
 
   const isTripFinished = tripStatus === "completed";
@@ -200,81 +184,61 @@ export default function TripDepartureScreen({ route, navigation }) {
     ).start();
   }, [pulseAnim]);
 
-  // Track passenger's live device GPS location continuously and compute heading
+  // Track passenger's live GPS location & physical phone compass heading
   useEffect(() => {
     let isMounted = true;
     let locationSubscription = null;
+    let headingSubscription = null;
 
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
+          // 1. Get initial GPS position
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           if (loc && isMounted) {
-            const newCoord = {
+            setCurrentLocation({
               latitude: loc.coords.latitude,
               longitude: loc.coords.longitude,
               latitudeDelta: 0.02,
               longitudeDelta: 0.02,
-            };
-
-            if (prevLocRef.current) {
-              const computedHeading = calculateBearing(
-                prevLocRef.current.latitude,
-                prevLocRef.current.longitude,
-                newCoord.latitude,
-                newCoord.longitude
-              );
-              setHeading(computedHeading);
-            } else if (loc.coords.heading >= 0) {
-              setHeading(loc.coords.heading);
-            }
-
-            prevLocRef.current = newCoord;
-            setCurrentLocation(newCoord);
+            });
           }
 
+          // 2. Watch live GPS coordinates
           locationSubscription = await Location.watchPositionAsync(
             { accuracy: Location.Accuracy.High, distanceInterval: 4, timeInterval: 2500 },
             (newLoc) => {
               if (isMounted && newLoc) {
-                const newCoord = {
+                setCurrentLocation({
                   latitude: newLoc.coords.latitude,
                   longitude: newLoc.coords.longitude,
                   latitudeDelta: 0.02,
                   longitudeDelta: 0.02,
-                };
-
-                if (prevLocRef.current) {
-                  const computedHeading = calculateBearing(
-                    prevLocRef.current.latitude,
-                    prevLocRef.current.longitude,
-                    newCoord.latitude,
-                    newCoord.longitude
-                  );
-                  if (computedHeading > 0) {
-                    setHeading(computedHeading);
-                  }
-                } else if (newLoc.coords.heading >= 0) {
-                  setHeading(newLoc.coords.heading);
-                }
-
-                prevLocRef.current = newCoord;
-                setCurrentLocation(newCoord);
+                });
               }
             }
           );
+
+          // 3. Watch physical device compass orientation for smooth arrow rotation
+          headingSubscription = await Location.watchHeadingAsync((headingObj) => {
+            if (isMounted && headingObj) {
+              const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magHeading;
+              if (compassHeading >= 0) {
+                setHeading(compassHeading);
+              }
+            }
+          });
         }
       } catch (err) {
-        console.log("📍 Location tracking error:", err.message);
+        console.log("📍 Location/Heading tracking error:", err.message);
       }
     })();
 
     return () => {
       isMounted = false;
-      if (locationSubscription) {
-        locationSubscription.remove();
-      }
+      if (locationSubscription) locationSubscription.remove();
+      if (headingSubscription) headingSubscription.remove();
     };
   }, []);
 
@@ -521,7 +485,7 @@ export default function TripDepartureScreen({ route, navigation }) {
               <Ionicons name="navigate-sharp" size={18} color="#059669" />
               <View style={{ marginLeft: 8, flex: 1 }}>
                 <Text style={styles.routeLabel}>CURRENT LOCATION (YOU IN CAR)</Text>
-                <Text style={styles.routeValue} numberOfLines={1}>Live Device GPS (Arrow Oriented)</Text>
+                <Text style={styles.routeValue} numberOfLines={1}>Live Device Compass Heading</Text>
               </View>
             </View>
 
