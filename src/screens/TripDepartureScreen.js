@@ -9,10 +9,15 @@ import {
   BackHandler,
   Platform,
   Pressable,
+  TouchableOpacity,
+  ActivityIndicator,
+  Animated,
+  Easing,
+  Alert,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
-import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -64,9 +69,9 @@ const fetchDrivingRoute = async (origin, destination) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Top-Down Oriented Car Marker & Corrected Destination)
+// MEMOIZED MAP VIEW (GPS Navigation Arrow Marker & Corrected Destination)
 // ------------------------------------------------------------------
-const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoordinates, heading, mapRef, isDrawerExpanded }) => {
+const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoordinates, heading, mapRef, isDrawerExpanded, isTripFinished }) => {
   useEffect(() => {
     if (mapRef.current && destinationLocation?.latitude && currentLocation?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
@@ -95,18 +100,19 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* 🟢 1. Passenger In-Car Current Location Marker (Top-Down Car Icon) */}
-      {currentLocation && currentLocation.latitude && (
+      {/* 🟢 1. Passenger In-Car Current Location Marker with tracksViewChanges enabled for real-time Android rotation */}
+      {!isTripFinished && currentLocation && currentLocation.latitude && (
         <Marker
           coordinate={currentLocation}
           title="Your Current Location (In Car)"
           anchor={{ x: 0.5, y: 0.5 }}
           rotation={heading || 0}
           flat={true}
+          tracksViewChanges={true}
         >
           <View style={styles.emeraldCarWrapper}>
             <View style={styles.emeraldCarInnerBubble}>
-              <MaterialCommunityIcons name="car" size={18} color="#FFFFFF" />
+              <Ionicons name="navigate" size={17} color="#FFFFFF" />
             </View>
           </View>
         </Marker>
@@ -129,7 +135,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
       {routeCoordinates && routeCoordinates.length > 0 && (
         <Polyline
           coordinates={routeCoordinates}
-          strokeColor="#059669"
+          strokeColor={isTripFinished ? "#9CA3AF" : "#059669"}
           strokeWidth={5}
           geodesic={true}
         />
@@ -138,23 +144,35 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
   );
 });
 
-export default function TripDepartureScreen({ route }) {
+export default function TripDepartureScreen({ route, navigation }) {
   const rideOfferId = route?.params?.rideOfferId || 0;
+  const userId = route?.params?.userId || 1;
 
+  const [loading, setLoading] = useState(true);
+  const [tripStatus, setTripStatus] = useState("in_trip");
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
   const [destinationLocation, setDestinationLocation] = useState({ latitude: null, longitude: null, title: "Destination Hub" });
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [heading, setHeading] = useState(0);
 
-  const [dropoffHubName, setDropoffHubName] = useState("CMC");
-  const [driverName, setDriverName] = useState("Assigned Driver");
-  const [vehicleInfo, setVehicleInfo] = useState("Corridor Shuttle");
-  const [corridorName, setCorridorName] = useState("Transit Corridor");
-  const [fixedPrice, setFixedPrice] = useState(100);
+  const [rideDetails, setRideDetails] = useState({
+    corridor: "Transit Corridor",
+    driverName: "Assigned Driver",
+    vehicleInfo: "Corridor Shuttle",
+    driverRating: "5.0",
+    fixedPrice: 100,
+    coRiders: [],
+    endHubName: "CMC",
+    etaMinutes: "--",
+    distanceRemainingKm: "--",
+  });
 
   const mapRef = useRef(null);
   const prevLocRef = useRef(null);
+  const [pulseAnim] = useState(new Animated.Value(0));
+
+  const isTripFinished = tripStatus === "completed";
 
   // Disable Android Back Button during active trip departure
   useEffect(() => {
@@ -162,6 +180,25 @@ export default function TripDepartureScreen({ route }) {
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
     return () => backHandler.remove();
   }, []);
+
+  // Auto-expand drawer when trip finishes
+  useEffect(() => {
+    if (isTripFinished) {
+      setIsDrawerExpanded(true);
+    }
+  }, [isTripFinished]);
+
+  // Pulse animation for status banner
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 2200,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      })
+    ).start();
+  }, [pulseAnim]);
 
   // Track passenger's live device GPS location continuously and compute heading
   useEffect(() => {
@@ -270,9 +307,12 @@ export default function TripDepartureScreen({ route }) {
             });
           }
 
-          if (coords.end_hub_name) setDropoffHubName(coords.end_hub_name);
-          if (coords.corridor_name) setCorridorName(coords.corridor_name);
-          if (coords.price_per_seat) setFixedPrice(coords.price_per_seat);
+          setRideDetails(prev => ({
+            ...prev,
+            endHubName: coords.end_hub_name || prev.endHubName,
+            corridor: coords.corridor_name || prev.corridor,
+            fixedPrice: coords.price_per_seat || prev.fixedPrice,
+          }));
         }
       } catch (err) {
         console.log("⚠️ Error fetching map_coordinates endpoint:", err);
@@ -298,8 +338,112 @@ export default function TripDepartureScreen({ route }) {
     return () => { isMounted = false; };
   }, [currentLocation, destinationLocation]);
 
+  // Live Telemetry & Status Polling Loop
+  useEffect(() => {
+    let isMounted = true;
+
+    async function streamLiveTripMetrics() {
+      try {
+        const statusRes = await fetch(`${API_URL}/api/passenger-livetracking/status/${userId}`);
+        if (!statusRes.ok) throw new Error("Status polling error.");
+        const statusData = await statusRes.json();
+
+        if (isMounted && statusData) {
+          setTripStatus(statusData.status);
+          const activeOfferId = statusData.matched_ride_offer_id || rideOfferId;
+
+          if (activeOfferId) {
+            const trackRes = await fetch(`${API_URL}/api/rides/passenger-track/${activeOfferId}/user/${userId}`);
+            if (trackRes.ok) {
+              const trackData = await trackRes.json();
+              const rawPassengers = Array.isArray(trackData.passengers) ? trackData.passengers : [];
+              
+              const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+              const formattedCoRiders = rawPassengers.map((p, idx) => ({
+                id: p.user_id || idx,
+                name: p.full_name || p.name || `Rider ${p.user_id || idx}`,
+                color: colorPalette[idx % colorPalette.length],
+              }));
+
+              setRideDetails(prev => ({
+                ...prev,
+                corridor: trackData.corridor || prev.corridor,
+                driverName: trackData.driverName || prev.driverName,
+                vehicleInfo: trackData.vehicleInfo || prev.vehicleInfo,
+                driverRating: trackData.driverRating || prev.driverRating,
+                fixedPrice: trackData.finalPrice || statusData.finalPrice || prev.fixedPrice,
+                coRiders: formattedCoRiders,
+                etaMinutes: trackData.etaMinutes ?? "--",
+                distanceRemainingKm: trackData.distanceRemainingKm ?? "--",
+              }));
+            }
+          }
+          setLoading(false);
+        }
+      } catch (err) {
+        console.log("⚠️ Error loading real-time telemetry stream:", err);
+        setLoading(false);
+      }
+    }
+
+    streamLiveTripMetrics();
+    const syncInterval = setInterval(streamLiveTripMetrics, 3500);
+
+    return () => {
+      isMounted = false;
+      clearInterval(syncInterval);
+    };
+  }, [userId, rideOfferId]);
+
+  // Payment Checkout Handler
+  const handlePaymentCheckout = async () => {
+    try {
+      navigation.replace("TripPayment", {
+        userId: userId,
+        fixedPrice: rideDetails.fixedPrice,
+        corridor: rideDetails.corridor,
+      });
+    } catch (payError) {
+      Alert.alert("Checkout Disconnect", "Unable to establish secure gateway navigation context.");
+    }
+  };
+
+  const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.0] });
+  const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.5, 0.2, 0] });
+
+  if (loading) {
+    return (
+      <View style={styles.fallbackLoadingBox}>
+        <ActivityIndicator size="large" color="#059669" />
+        <Text style={styles.fallbackLoadingText}>Connecting live tracking telemetry...</Text>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* 1. TOP BANNER STATUS BAR */}
+      <View style={[styles.statusBarBanner, isTripFinished && styles.bannerFinishedBg]}>
+        <View style={styles.statusIndicatorWrapper}>
+          {!isTripFinished && (
+            <Animated.View style={[styles.statusPulseWave, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }]} />
+          )}
+          <View style={[styles.statusCenterCoreDot, isTripFinished && styles.coreDotFinishedBg]}>
+            <FontAwesome5 name={isTripFinished ? "check-circle" : "car-side"} size={11} color="#FFFFFF" />
+          </View>
+        </View>
+        <View style={styles.statusTextContainer}>
+          <Text style={styles.statusPrimaryText}>
+            {isTripFinished ? "Arrived safely at Destination" : "Transit Active"}
+          </Text>
+          <Text style={styles.statusSecondaryText}>
+            {isTripFinished
+              ? "Thank you for riding shared corridor loops."
+              : `ETA: ${rideDetails.etaMinutes} mins • ${rideDetails.distanceRemainingKm} km remaining`}
+          </Text>
+        </View>
+      </View>
+
       {/* MAP SECTION */}
       <View style={styles.mapContainer}>
         <TripDepartureMap 
@@ -309,6 +453,7 @@ export default function TripDepartureScreen({ route }) {
           heading={heading}
           mapRef={mapRef} 
           isDrawerExpanded={isDrawerExpanded}
+          isTripFinished={isTripFinished}
         />
       </View>
 
@@ -323,14 +468,16 @@ export default function TripDepartureScreen({ route }) {
           <View style={styles.dragHandle} />
           <View style={styles.headerRow}>
             <View style={styles.previewLeftCluster}>
-              <Text style={styles.title}>Trip in Departure</Text>
+              <Text style={styles.title}>{isTripFinished ? "Trip Completed" : "Trip in Departure"}</Text>
               <Text style={styles.subtitle} numberOfLines={1}>
-                Heading to <Text style={styles.boldText}>{dropoffHubName}</Text>
+                Heading to <Text style={styles.boldText}>{destinationLocation.title || rideDetails.endHubName}</Text>
               </Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <View style={[styles.statusBadge, styles.badgeActive]}>
-                <Text style={styles.badgeText}>IN TRANSIT</Text>
+              <View style={[styles.statusBadge, isTripFinished ? styles.badgeFinished : styles.badgeActive]}>
+                <Text style={[styles.badgeText, isTripFinished && { color: "#1F2937" }]}>
+                  {isTripFinished ? "ARRIVED" : "IN TRANSIT"}
+                </Text>
               </View>
               <View style={styles.expandToggleBadge}>
                 <Text style={styles.expandToggleText}>{isDrawerExpanded ? "Collapse" : "Details"}</Text>
@@ -346,13 +493,35 @@ export default function TripDepartureScreen({ route }) {
           style={styles.drawerScrollBody}
           contentContainerStyle={{ paddingBottom: 10 }}
         >
+          {/* Transit Summary Metrics */}
+          <View style={styles.transitSummaryHeader}>
+            <View style={styles.metricColumn}>
+              <Text style={styles.metricLabel}>EST. TIME</Text>
+              <Text style={[styles.metricValueHighlight, { color: "#059669" }]}>
+                {isTripFinished ? "0 mins" : `${rideDetails.etaMinutes} mins`}
+              </Text>
+            </View>
+            <View style={styles.verticalSplitter} />
+            <View style={styles.metricColumn}>
+              <Text style={styles.metricLabel}>DISTANCE</Text>
+              <Text style={styles.metricValueHighlight}>
+                {isTripFinished ? "0 km" : `${rideDetails.distanceRemainingKm} km`}
+              </Text>
+            </View>
+            <View style={styles.verticalSplitter} />
+            <View style={styles.metricColumn}>
+              <Text style={styles.metricLabel}>FIXED COST</Text>
+              <Text style={styles.metricValueHighlight}>ETB {rideDetails.fixedPrice}</Text>
+            </View>
+          </View>
+
           {/* Route Corridor Details */}
           <View style={styles.routeCard}>
             <View style={styles.routeItem}>
               <Ionicons name="navigate-sharp" size={18} color="#059669" />
               <View style={{ marginLeft: 8, flex: 1 }}>
                 <Text style={styles.routeLabel}>CURRENT LOCATION (YOU IN CAR)</Text>
-                <Text style={styles.routeValue} numberOfLines={1}>Live Device GPS (Top-Down Oriented)</Text>
+                <Text style={styles.routeValue} numberOfLines={1}>Live Device GPS (Arrow Oriented)</Text>
               </View>
             </View>
 
@@ -362,7 +531,7 @@ export default function TripDepartureScreen({ route }) {
               <Ionicons name="flag-sharp" size={18} color="#3B82F6" />
               <View style={{ marginLeft: 8, flex: 1 }}>
                 <Text style={styles.routeLabel}>DESTINATION HUB</Text>
-                <Text style={styles.routeValue} numberOfLines={1}>{dropoffHubName}</Text>
+                <Text style={styles.routeValue} numberOfLines={1}>{destinationLocation.title || rideDetails.endHubName}</Text>
               </View>
             </View>
           </View>
@@ -371,17 +540,62 @@ export default function TripDepartureScreen({ route }) {
           <View style={styles.driverCard}>
             <FontAwesome5 name="car-side" size={20} color="#2F4F4F" />
             <View style={{ marginLeft: 10, flex: 1 }}>
-              <Text style={styles.driverLabel}>{driverName} • {vehicleInfo}</Text>
-              <Text style={styles.driverSub}>Corridor Axis: <Text style={styles.boldText}>{corridorName}</Text></Text>
+              <Text style={styles.driverLabel}>{rideDetails.driverName} • {rideDetails.vehicleInfo}</Text>
+              <Text style={styles.driverSub}>Corridor Axis: <Text style={styles.boldText}>{rideDetails.corridor}</Text></Text>
+            </View>
+            <View style={styles.ratingBadge}>
+              <Ionicons name="star" size={12} color="#F59E0B" />
+              <Text style={styles.ratingText}>{rideDetails.driverRating}</Text>
             </View>
           </View>
+
+          {/* Co-Riders Manifest Section */}
+          {rideDetails.coRiders.length > 0 && (
+            <View style={styles.manifestContainerCard}>
+              <View style={styles.manifestRow}>
+                <View style={styles.leftLabelCluster}>
+                  <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
+                  <Text style={styles.manifestRouteLabel}>Co-Riders on Board</Text>
+                </View>
+                <Text style={styles.manifestValueText}>{rideDetails.coRiders.length} Passengers</Text>
+              </View>
+              <View style={styles.coRidersListContainer}>
+                {rideDetails.coRiders.map((rider) => (
+                  <View key={rider.id} style={styles.coRiderRowItem}>
+                    <View style={[styles.miniAvatar, { backgroundColor: rider.color }]}>
+                      <Text style={styles.miniAvatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.coRiderNameText}>{rider.name}</Text>
+                    <Text style={styles.coRiderStatusTag}>ON BOARD</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
         </ScrollView>
 
-        {/* Footer Status */}
+        {/* Footer Action Button / Checkout Footer */}
         {isDrawerExpanded && (
-          <View style={styles.actionBanner}>
-            <Ionicons name="shield-checkmark" size={18} color="#059669" />
-            <Text style={styles.actionBannerText}>Secure Ride-Pooling Active • ETB {fixedPrice}.00 Fixed</Text>
+          <View style={styles.drawerFooterSticky}>
+            {isTripFinished ? (
+              <TouchableOpacity
+                style={[styles.actionButton, styles.paymentButtonBg]}
+                activeOpacity={0.85}
+                onPress={handlePaymentCheckout}
+              >
+                <View style={styles.buttonInternalGroup}>
+                  <Ionicons name="wallet" size={18} color="#FFFFFF" />
+                  <Text style={styles.actionButtonText}>PAY ETB {rideDetails.fixedPrice}.00 NOW</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <View style={[styles.actionButton, styles.disabledButtonBg]}>
+                <View style={styles.buttonInternalGroup}>
+                  <ActivityIndicator size="small" color="#9CA3AF" style={{ marginRight: 8 }} />
+                  <Text style={[styles.actionButtonText, { color: "#9CA3AF" }]}>TRIP IN PROGRESS...</Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -391,6 +605,19 @@ export default function TripDepartureScreen({ route }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8F9FA" },
+  fallbackLoadingBox: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF" },
+  fallbackLoadingText: { marginTop: 12, color: "#4B5563", fontWeight: "600", fontSize: 14 },
+  
+  statusBarBanner: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, zIndex: 20 },
+  bannerFinishedBg: { backgroundColor: "#1F2937" },
+  statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
+  statusPulseWave: { position: "absolute", width: 24, height: 24, borderRadius: 12, backgroundColor: "#FFFFFF" },
+  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", zIndex: 2 },
+  coreDotFinishedBg: { backgroundColor: "#10B981" },
+  statusTextContainer: { flex: 1 },
+  statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+  statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
+
   mapContainer: { flex: 1 },
   
   emeraldCarWrapper: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
@@ -415,8 +642,8 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     zIndex: 30 
   },
-  drawerCollapsed: { height: 125 },
-  drawerExpanded: { maxHeight: height * 0.55 },
+  drawerCollapsed: { height: 135 },
+  drawerExpanded: { maxHeight: height * 0.72 },
 
   dragHandleContainer: { paddingBottom: 8, width: "100%" },
   dragHandle: { width: 40, height: 4, backgroundColor: "#E0E0E0", borderRadius: 2, alignSelf: "center", marginBottom: 10 },
@@ -428,20 +655,54 @@ const styles = StyleSheet.create({
   
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginBottom: 4 },
   badgeActive: { backgroundColor: "#ECFDF5" },
+  badgeFinished: { backgroundColor: "#E5E7EB" },
   badgeText: { fontSize: 11, fontWeight: "700", color: "#059669" },
 
   expandToggleBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end" },
   expandToggleText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginRight: 2 },
 
   drawerScrollBody: { flexGrow: 0 },
+  drawerFooterSticky: { 
+    paddingVertical: 12, 
+    paddingBottom: Platform.OS === 'android' ? 24 : 12, 
+    borderTopWidth: 1, 
+    borderTopColor: "#E5E7EB", 
+    backgroundColor: "#FFFFFF" 
+  },
+
+  transitSummaryHeader: { flexDirection: "row", backgroundColor: "#F8F9FA", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 12, marginBottom: 12, marginTop: 4 },
+  metricColumn: { flex: 1, alignItems: "center", justifyContent: "center" },
+  verticalSplitter: { width: 1, backgroundColor: "#E5E7EB" },
+  metricLabel: { fontSize: 9, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
+  metricValueHighlight: { fontSize: 15, fontWeight: "800", color: "#111111", marginTop: 2 },
+
   routeCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: "#EAEAEA" },
   routeItem: { flexDirection: "row", alignItems: "center" },
   routeLabel: { fontSize: 10, fontWeight: "700", color: "#888", letterSpacing: 0.5 },
   routeValue: { fontSize: 14, fontWeight: "700", color: "#1A1A1A", marginTop: 1 },
   routeDivider: { height: 1, backgroundColor: "#EAEAEA", marginVertical: 8 },
+  
   driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F0F4F4", padding: 12, borderRadius: 12, marginVertical: 6 },
   driverLabel: { fontSize: 14, fontWeight: "700", color: "#1A1A1A" },
   driverSub: { fontSize: 12, color: "#666" },
-  actionBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#ECFDF5", paddingVertical: 14, borderRadius: 12, marginTop: 10, marginBottom: Platform.OS === 'android' ? 20 : 10 },
-  actionBannerText: { color: "#059669", fontSize: 14, fontWeight: "700", marginLeft: 8 },
+  ratingBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFBEB", borderWidth: 1, borderColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  ratingText: { fontSize: 12, fontWeight: "700", color: "#D97706", marginLeft: 4 },
+
+  manifestContainerCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: "#EAEAEA" },
+  manifestRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
+  leftLabelCluster: { flexDirection: "row", alignItems: "center" },
+  manifestRouteLabel: { fontSize: 13, color: "#4B5563", marginLeft: 8, fontWeight: "600" },
+  manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111" },
+  coRidersListContainer: { marginTop: 8, paddingLeft: 24 },
+  coRiderRowItem: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
+  miniAvatar: { width: 22, height: 22, borderRadius: 11, justifyContent: "center", alignItems: "center" },
+  miniAvatarText: { color: "#FFFFFF", fontSize: 9, fontWeight: "700" },
+  coRiderNameText: { flex: 1, marginLeft: 8, fontSize: 12, color: "#374151", fontWeight: "500" },
+  coRiderStatusTag: { fontSize: 9, fontWeight: "700", color: "#059669", backgroundColor: "#ECFDF5", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+
+  actionButton: { borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center" },
+  paymentButtonBg: { backgroundColor: "#059669" },
+  disabledButtonBg: { backgroundColor: "#E5E7EB", borderWidth: 1, borderColor: "#D1D5DB" },
+  buttonInternalGroup: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", marginLeft: 8, letterSpacing: 0.5 },
 });
