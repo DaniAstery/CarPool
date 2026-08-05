@@ -1,18 +1,15 @@
 import React from "react";
-import { ActivityIndicator, View } from "react-native";
 import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
-// 🔐 IMPORT THE GLOBAL AUTH STATE SYSTEM
-import { AuthProvider, useAuth } from "./src/AuthContext"; 
-
-// 🛰️ IMPORT THE ROLE-AWARE RIDE GATEWAY HOOK
-import { useRideGateway } from "./src/hooks/useRideGateway";
+// 🔐 AUTH & CONTEXT
+import { AuthProvider, useAuth } from "./src/AuthContext"; // Adjust path if AuthContext is elsewhere
 
 // 🛠️ SCREENS IMPORT MATRIX
-
-import PassengerJoinedPoolScreen from "./src/screens/JoinedPoolScreen";
+import RegistrationScreen from "./src/screens/RegistrationScreen";
 import PassengerScreen from "./src/screens/PassengerScreen";
+import DriverPendingVerification from "./src/screens/Driver/DriverPendingVerification"; 
+import PassengerJoinedPoolScreen from "./src/screens/JoinedPoolScreen";
 import LivetrackingScreen from "./src/screens/LiveTrackingScreen";
 import MatchingScreen from "./src/screens/MatchingScreen";
 import PickupProposalScreen from "./src/screens/PickupProposalScreen";
@@ -28,45 +25,31 @@ import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 import HomeScreen from "./src/screens/HomeScreen";
-import RegistrationScreen from "./src/screens/RegistrationScreen";
+
 const Stack = createNativeStackNavigator();
 
-// 📍 GLOBAL NAVIGATION REF (Allows NavigationGateway to trigger navigation)
+// 📍 GLOBAL NAVIGATION REF
 export const navigationRef = createNavigationContainerRef();
 
-// 🗺️ NAVIGATION GATEWAY ENGINE
-function NavigationGateway() {
+function AppNavigator() {
   const { user, isLoading } = useAuth();
 
-  // 🚀 ACTIVATE ROLE-AWARE RIDE GATEWAY
-  useRideGateway({
-    userId: user?.id,
-    userRole: user?.role, // "driver" vs "passenger"
-    navigationRef: navigationRef,
-    enabled: Boolean(user?.id),
-  });
-
-  // 🌀 Show loading indicator while reading storage
+  // Prevent flash of auth screen while reading AsyncStorage session
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fff" }}>
-        <ActivityIndicator size="large" color="#007BFF" />
-      </View>
-    );
+    return null; 
   }
 
   return (
     <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        
-        {user === null ? (
-          // 🛑 1. UNAUTHENTICATED ROUTE CHANNEL
-          <Stack.Screen 
-            name="Registeration" 
-            component={RegisterScreen} 
-          />
+        {!user ? (
+          // 🔐 AUTHENTICATION WORKSPACE
+          <>
+            <Stack.Screen name="Registration" component={RegistrationScreen} />
+            <Stack.Screen name="DriverPendingVerification" component={DriverPendingVerification} />
+          </>
         ) : user.role === "driver" ? (
-          // 🚖 2. DRIVER SYSTEM HUB WORKSPACE
+          // 🚖 DRIVER SYSTEM WORKSPACE
           <>
             <Stack.Screen name="CreateCorridor" component={CreateCorridorScreen} />
             <Stack.Screen name="WaitingForRiders" component={WaitingForRidersScreen} />
@@ -75,12 +58,12 @@ function NavigationGateway() {
             <Stack.Screen name="WaitingForAcceptance" component={WaitingForAcceptanceScreen} />
             <Stack.Screen name="NavigateToPickup" component={NavigateToPickupScreen} />
             <Stack.Screen name="WaitingForPassengers" component={WaitingForPassengersScreen} />
-            <Stack.Screen name="TripInProgress" component={TripInProgressScreen}/>
+            <Stack.Screen name="TripInProgress" component={TripInProgressScreen} />
             <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
-           
+            <Stack.Screen name="DriverPendingVerification" component={DriverPendingVerification} />
           </>
         ) : (
-          // 🎒 3. PASSENGER/RIDER WORKSPACE
+          // 🎒 PASSENGER WORKSPACE
           <>
             <Stack.Screen name="Passenger" component={PassengerScreen} />
             <Stack.Screen name="JoinedPool" component={PassengerJoinedPoolScreen} />
@@ -90,21 +73,18 @@ function NavigationGateway() {
             <Stack.Screen name="TripDeparture" component={TripDepartureScreen} />
             <Stack.Screen name="TripCompletion" component={TripCompletionScreen} />
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
-             <Stack.Screen name="Home" component={HomeScreen} />
-            
+            <Stack.Screen name="Home" component={HomeScreen} />
           </>
         )}
-
       </Stack.Navigator>
     </NavigationContainer>
   );
 }
 
-// 🏁 ROOT APPLICATION BOUNDARY ENTITY
 export default function App() {
   return (
     <AuthProvider>
-      <NavigationGateway />
+      <AppNavigator />
     </AuthProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -8,62 +8,92 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  AppState,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useAuth } from "../AuthContext";
 
 const API_URL = "http://100.108.52.79:5000/api";
-const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; // Replace with your actual bot username
+const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
 
-export default function AuthScreen({ navigation }) {
-  // Mode toggle: "signin" or "register"
+export default function RegistrationScreen() {
+  const { loginSession } = useAuth();
   const [authMode, setAuthMode] = useState("signin");
-
-  // Form fields
   const [fullName, setFullName] = useState("");
-  const [role, setRole] = useState("rider"); // "rider" for passenger or "driver"
+  const [role, setRole] = useState("rider"); 
   
-  // States
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [pendingSessionId, setPendingSessionId] = useState(null);
   const [waitingForTelegram, setWaitingForTelegram] = useState(false);
 
-  // Poll server to check if Telegram verification / login has completed
+  const sessionIdRef = useRef(null);
+  const authModeRef = useRef(authMode);
+
+  useEffect(() => {
+    authModeRef.current = authMode;
+  }, [authMode]);
+
+  // Core function to check auth status against backend
+  const checkAuthStatus = async () => {
+    const currentSessionId = sessionIdRef.current;
+    if (!waitingForTelegram || !currentSessionId) return;
+
+    try {
+      const endpoint = authModeRef.current === "register" 
+        ? `${API_URL}/auth/check-status/${currentSessionId}`
+        : `${API_URL}/auth/check-signin/${currentSessionId}`;
+
+      console.log(`[Auth Polling] Checking endpoint: ${endpoint}`);
+      const res = await fetch(endpoint);
+      const responseText = await res.text();
+      console.log(`[Auth Polling] Response (${res.status}):`, responseText);
+
+      if (res.ok) {
+        const data = JSON.parse(responseText);
+        if (data.success || data.phone_verified) {
+          setWaitingForTelegram(false);
+
+          const userRole = data.role || role;
+          const userId = data.userId || data.id || currentSessionId;
+
+          console.log(`[Auth Success] Logging in user ID: ${userId}, Role: ${userRole}`);
+          await loginSession({
+            id: userId,
+            role: userRole,
+            phone_verified: true,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[Auth Polling Error]:", err.message);
+    }
+  };
+
+  // 1. Regular interval polling while waiting
   useEffect(() => {
     let interval;
     if (waitingForTelegram) {
-      interval = setInterval(async () => {
-        try {
-          const endpoint = authMode === "register" 
-            ? `${API_URL}/auth/check-status/${pendingSessionId}`
-            : `${API_URL}/auth/check-signin/${pendingSessionId}`;
-
-          const res = await fetch(endpoint);
-          if (res.ok) {
-            const data = await res.json();
-            
-            if (data.success || data.phone_verified) {
-              clearInterval(interval);
-              setWaitingForTelegram(false);
-
-              const userRole = data.role || role;
-              const userId = data.userId || pendingSessionId;
-
-              if (userRole === "driver" && authMode === "register") {
-                navigation.replace("DriverPendingVerification", { userId });
-              } else {
-                navigation.replace("Passenger", { userId });
-              }
-            }
-          }``
-        } catch (err) {
-          console.log("Polling error:", err);
-        }
-      }, 3000);
+      console.log("[Auth Polling] Interval active...");
+      interval = setInterval(checkAuthStatus, 3000);
     }
-    return () => clearInterval(interval);
-  }, [waitingForTelegram, pendingSessionId, authMode, role, navigation]);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [waitingForTelegram, role, loginSession]);
+
+  // 2. AppState listener: Check immediately when returning from Telegram app
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      if (nextAppState === "active") {
+        console.log("[App State] Returned to app. Checking auth status...");
+        checkAuthStatus();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const handleAuthAction = async () => {
     if (authMode === "register" && !fullName.trim()) {
@@ -74,27 +104,35 @@ export default function AuthScreen({ navigation }) {
     setIsSubmitting(true);
     try {
       let deepLink = "";
+      let sessionId = "";
 
       if (authMode === "register") {
-        // 1. Initialize registration record on backend
         const res = await fetch(`${API_URL}/auth/register-init`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ full_name: fullName, role: role }),
+          body: JSON.stringify({ full_name: fullName.trim(), role: role }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Registration init failed.");
+        if (!res.ok) throw new Error(data.error || "Registration initialization failed.");
 
-        setPendingSessionId(data.userId);
-        deepLink = `${TELEGRAM_BOT_URL}?start=verify_${data.userId}`;
+        sessionId = data.userId;
+        deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        // 2. Initialize sign-in tracking session ID
-        const sessionId = "signin_" + Date.now();
-        setPendingSessionId(sessionId);
+        // ⚡ Fetch server-initialized sign-in session ID to prevent ID mismatches
+        const res = await fetch(`${API_URL}/auth/signin-init`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Sign-in initialization failed.");
+
+        sessionId = data.sessionId;
         deepLink = `${TELEGRAM_BOT_URL}?start=login_${sessionId}`;
       }
 
-      // Open Telegram Bot
+      sessionIdRef.current = sessionId;
+      console.log(`[Auth Action] Opening Telegram deep link with session: ${sessionId}`);
+
       const supported = await Linking.canOpenURL(deepLink);
       if (supported) {
         await Linking.openURL(deepLink);
@@ -109,6 +147,11 @@ export default function AuthScreen({ navigation }) {
     }
   };
 
+  const handleCancelWaiting = () => {
+    setWaitingForTelegram(false);
+    sessionIdRef.current = null;
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerBox}>
@@ -117,11 +160,11 @@ export default function AuthScreen({ navigation }) {
       </View>
 
       <View style={styles.formCard}>
-        {/* 🔀 TOGGLE TABS: SIGN IN vs REGISTER */}
+        {/* MODE TOGGLE TABS */}
         <View style={styles.modeToggleRow}>
           <TouchableOpacity
             style={[styles.modeTab, authMode === "signin" && styles.activeModeTab]}
-            onPress={() => { setAuthMode("signin"); setWaitingForTelegram(false); }}
+            onPress={() => { setAuthMode("signin"); handleCancelWaiting(); }}
           >
             <Text style={[styles.modeTabText, authMode === "signin" && styles.activeModeTabText]}>
               Sign In
@@ -130,7 +173,7 @@ export default function AuthScreen({ navigation }) {
 
           <TouchableOpacity
             style={[styles.modeTab, authMode === "register" && styles.activeModeTab]}
-            onPress={() => { setAuthMode("register"); setWaitingForTelegram(false); }}
+            onPress={() => { setAuthMode("register"); handleCancelWaiting(); }}
           >
             <Text style={[styles.modeTabText, authMode === "register" && styles.activeModeTabText]}>
               Register
@@ -138,7 +181,7 @@ export default function AuthScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* 📝 CONDITIONAL FIELDS FOR REGISTRATION */}
+        {/* REGISTRATION FIELDS */}
         {authMode === "register" && (
           <>
             <Text style={styles.inputLabel}>Full Name</Text>
@@ -171,7 +214,7 @@ export default function AuthScreen({ navigation }) {
           </>
         )}
 
-        {/* 🚀 ACTION AREA */}
+        {/* WAITING AREA */}
         {waitingForTelegram ? (
           <View style={styles.waitingContainer}>
             <ActivityIndicator size="large" color="#059669" />
@@ -179,8 +222,12 @@ export default function AuthScreen({ navigation }) {
               {authMode === "register" ? "Verifying Phone via Telegram..." : "Signing in via Telegram..."}
             </Text>
             <Text style={styles.waitingSubtext}>
-              Please tap &quot;Share Contact&quot; in our Telegram bot to proceed.
+              Please tap &quot;Share Contact&quot; inside Telegram, then return here.
             </Text>
+
+            <TouchableOpacity style={styles.cancelButton} onPress={handleCancelWaiting}>
+              <Text style={styles.cancelButtonText}>Cancel / Try Again</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
@@ -235,5 +282,8 @@ const styles = StyleSheet.create({
 
   waitingContainer: { alignItems: "center", paddingVertical: 10 },
   waitingText: { fontSize: 13, fontWeight: "800", color: "#059669", marginTop: 10, textAlign: "center" },
-  waitingSubtext: { fontSize: 11, color: "#6B7280", textAlign: "center", marginTop: 4, lineHeight: 16 },
+  waitingSubtext: { fontSize: 11, color: "#6B7280", textAlign: "center", marginTop: 6, lineHeight: 16 },
+
+  cancelButton: { marginTop: 16, paddingVertical: 8, paddingHorizontal: 16, backgroundColor: "#F3F4F6", borderRadius: 8 },
+  cancelButtonText: { fontSize: 12, fontWeight: "700", color: "#4B5563" },
 });
