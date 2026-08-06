@@ -8,6 +8,7 @@ import {
   Dimensions,
   Animated,
   Easing,
+  TouchableOpacity,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
@@ -18,13 +19,16 @@ const API_URL = "http://100.108.52.79:5000/api";
 export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);
   const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 150");
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [currentLocation, setCurrentLocation] = useState({
     latitude: 9.0105, 
     longitude: 38.7935, 
-    latitudeDelta: 0.015, 
-    longitudeDelta: 0.015,
+    latitudeDelta: 0.012, 
+    longitudeDelta: 0.012,
   });
 
+  const mapRef = useRef(null);
   const radarAnim = useRef(new Animated.Value(0)).current;
   
   // 🛡️ SAFE CONFIGURATION UNPACKING MATRIX
@@ -34,7 +38,21 @@ export default function MatchingScreen({ navigation, route }) {
   const currentUserId = parseInt(userId, 10) || 1;
   const ride = route?.params?.ride || { corridor: "Evaluating Corridor...", time: "Calculating..." };
 
-  // 1. NON-BLOCKING GPS RESOLUTION WITH TIMEOUT FALLBACK
+  // 1. ELAPSED SEARCH TIMER
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatSearchTime = (secs) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  // 2. REAL-TIME GPS RESOLUTION & MAP CENTERING
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -42,21 +60,22 @@ export default function MatchingScreen({ navigation, route }) {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== "granted") return;
 
-        // Force maximum 2s wait for hardware location before falling back
         const locationPromise = Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
-        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 2000));
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 2500));
 
         const location = await Promise.race([locationPromise, timeoutPromise]);
 
         if (location && isMounted) {
-          setCurrentLocation({
+          const newRegion = {
             latitude: location.coords.latitude, 
             longitude: location.coords.longitude,
-            latitudeDelta: 0.012, 
-            longitudeDelta: 0.012,
-          });
+            latitudeDelta: 0.010, 
+            longitudeDelta: 0.010,
+          };
+          setCurrentLocation(newRegion);
+          mapRef.current?.animateToRegion(newRegion, 1000);
         }
       } catch (err) {
         console.log("📍 Hardware location fallback applied:", err.message);
@@ -65,7 +84,7 @@ export default function MatchingScreen({ navigation, route }) {
     return () => { isMounted = false; };
   }, []);
 
-  // 2. RADAR PULSE ANIMATION
+  // 3. RADAR PULSE ANIMATION
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(radarAnim, {
@@ -79,13 +98,13 @@ export default function MatchingScreen({ navigation, route }) {
     return () => loop.stop();
   }, [radarAnim]);
 
-  // 3. NON-OVERLAPPING FAST POLLING LOOP
+  // 4. NON-OVERLAPPING FAST POLLING LOOP
   useEffect(() => {
     let isMounted = true;
     let timerId;
 
     const checkMyPoolStatus = async () => {
-      if (!isMounted) return;
+      if (!isMounted || isCancelling) return;
 
       try {
         const controller = new AbortController();
@@ -96,14 +115,11 @@ export default function MatchingScreen({ navigation, route }) {
         });
         clearTimeout(timeoutId);
         
-        if (!response.ok) {
-          return;
-        }
+        if (!response.ok) return;
 
         const data = await response.json();
         if (!isMounted) return;
 
-        // Extract status parameters safely from payload
         const currentPoolStatus = (data.status || data.pool?.status || data.match_pipeline?.status || "searching").toLowerCase().trim();
         const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
         const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
@@ -112,7 +128,6 @@ export default function MatchingScreen({ navigation, route }) {
         setMatchedCount(currentCount);
         setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
 
-        // Check if ride has departed or started
         const rideStatus = (data.rideStatus || data.pool?.rideStatus || "").toLowerCase();
         if (["departed", "started", "inprogress", "in_trip"].includes(rideStatus)) {
           navigation.replace("LiveTrackingScreen", {
@@ -128,7 +143,6 @@ export default function MatchingScreen({ navigation, route }) {
           return;
         }
 
-       // IF A DRIVER HAS ACCEPTED OR MATCHED -> ROUTE STRICTLY TO PICKUP PROPOSAL FIRST
         if (targetRideOfferId !== null) {
           const navigationPayload = {
             id: targetRideOfferId,
@@ -142,21 +156,18 @@ export default function MatchingScreen({ navigation, route }) {
             ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
           };
 
-          // 🎯 ONLY route to PickupProposal when a match offer is active.
-          // Let PickupProposal handle user acceptance before ever touching LiveTracking.
           navigation.replace("PickupProposal", navigationPayload);
           return;
         }
 
-        // Core match threshold reached (2/2 threshold reached)
         if (currentPoolStatus === "matched" || currentCount >= 2) {
           setMatchedCount(2); 
         }
 
       } catch (err) {
-        // Suppress temporary network drops
+        // Suppress temporary network drops during polling
       } finally {
-        if (isMounted) {
+        if (isMounted && !isCancelling) {
           timerId = setTimeout(checkMyPoolStatus, 2500);
         }
       }
@@ -168,7 +179,23 @@ export default function MatchingScreen({ navigation, route }) {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [routeId, hubId, userId, navigation]);
+  }, [routeId, hubId, userId, navigation, isCancelling]);
+
+  // 🛡️ HANDLE CANCELLATION VIA BACK ARROW (PATCH status to 'cancelled')
+  const handleCancelPoolRequest = async () => {
+    setIsCancelling(true);
+    try {
+      console.log(`[Matching] Passenger ${currentUserId} cancelling pool request...`);
+      await fetch(`${API_URL}/routes/pool/${currentUserId}`, {
+        method: "PATCH",
+      });
+    } catch (err) {
+      console.log("⚠️ Network note during cancellation cleanup:", err.message);
+    } finally {
+      setIsCancelling(false);
+      navigation.replace("Passenger");
+    }
+  };
 
   const ringScaleOut = radarAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.4] });
   const ringOpacityIn = radarAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 0.4, 0] });
@@ -176,20 +203,26 @@ export default function MatchingScreen({ navigation, route }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.backButton} onPress={() => navigation?.goBack()}>←</Text>
+        <TouchableOpacity onPress={handleCancelPoolRequest} disabled={isCancelling}>
+          <Text style={styles.backButton}>←</Text>
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Corridor Smart Matching</Text>
-        <View style={{ width: 24 }} />
+        <Text style={styles.timerBadge}>{formatSearchTime(elapsedSeconds)}</Text>
       </View>
       
       <View style={styles.mapContainer}>
         <MapView
+          ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
-          region={currentLocation}
-          showsUserLocation={true}
+          initialRegion={currentLocation}
+          showsCompass={false}
+          showsMyLocationButton={false}
+          toolbarEnabled={false}
           customMapStyle={cleanMinimalMapStyle}
         />
 
+        {/* 📍 Centered Map Radar Overlay */}
         <View style={styles.radarWrapper}>
           <Animated.View 
             style={[
@@ -203,7 +236,7 @@ export default function MatchingScreen({ navigation, route }) {
           <View style={styles.radarInnerRing}>
             <View style={styles.userBeaconDot} />
           </View>
-          <Text style={styles.youTextTag}>You</Text>
+          <Text style={styles.youTextTag}>You (Passenger)</Text>
         </View>
       </View>
 
@@ -214,7 +247,7 @@ export default function MatchingScreen({ navigation, route }) {
 
         <Text style={styles.cardTitle}>
           <Text>{`Pooling Core Partners\non `}</Text>
-          <Text style={{ color: "#10B981" }}>{ride.corridor}</Text>
+          <Text style={{ color: "#059669" }}>{ride.corridor}</Text>
         </Text>
 
         <Text style={styles.matchCountText}>{`${matchedCount} / 2`}</Text>
@@ -223,12 +256,12 @@ export default function MatchingScreen({ navigation, route }) {
         {matchedCount < 2 ? (
           <View style={styles.loaderInlineRow}>
             <Text style={styles.waitText}>Waiting for secondary core matcher...</Text>
-            <ActivityIndicator size="small" color="#111" style={{ marginLeft: 8 }} />
+            <ActivityIndicator size="small" color="#059669" style={{ marginLeft: 8 }} />
           </View>
         ) : (
           <View style={styles.loaderInlineRow}>
             <Text style={styles.successRouteText}>🎉 Core matched! Waiting for driver...</Text>
-            <ActivityIndicator size="small" color="#10B981" style={{ marginLeft: 8 }} />
+            <ActivityIndicator size="small" color="#059669" style={{ marginLeft: 8 }} />
           </View>
         )}
       </View>
@@ -258,33 +291,36 @@ export default function MatchingScreen({ navigation, route }) {
 }
 
 const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
+  { elementType: "geometry", stylers: [{ color: "#F8FAFC" }] },
   { featureType: "poi", stylers: [{ visibility: "off" }] },
+  { featureType: "transit", stylers: [{ visibility: "off" }] },
   { featureType: "road", elementType: "geometry", stylers: [{ color: "#FFFFFF" }] },
-  { featureType: "water", elementType: "geometry", stylers: [{ color: "#D2E4F9" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#F1F5F9" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#E0F2FE" }] },
 ];
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F5F5F5" },
-  header: { height: 56, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, backgroundColor: "#FFFFFF", zIndex: 10 },
-  backButton: { fontSize: 24, color: "#000000", fontWeight: "600" },
-  headerTitle: { fontSize: 14, fontWeight: "700", color: "#111111" },
+  header: { height: 56, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, backgroundColor: "#FFFFFF", zIndex: 10, borderBottomWidth: 1, borderBottomColor: "#F3F4F6" },
+  backButton: { fontSize: 24, color: "#111111", fontWeight: "600", padding: 4 },
+  headerTitle: { fontSize: 13, fontWeight: "700", color: "#111111" },
+  timerBadge: { fontSize: 12, fontWeight: "800", color: "#059669", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, overflow: "hidden" },
   mapContainer: { flex: 1, position: "relative" },
   radarWrapper: { position: "absolute", top: "14%", alignSelf: "center", alignItems: "center", justifyContent: "center", width: 160, height: 160 },
-  radarPulseRing: { position: "absolute", width: 130, height: 130, borderRadius: 65, borderWidth: 2, borderColor: "#111", backgroundColor: "rgba(0, 0, 0, 0.05)" },
-  radarInnerRing: { width: 76, height: 76, borderRadius: 38, borderWidth: 1.5, borderColor: "#111", borderStyle: "dashed", justifyContent: "center", alignItems: "center", backgroundColor: "rgba(255, 255, 255, 0.4)" },
-  userBeaconDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#111", borderWidth: 3, borderColor: "#FFFFFF", elevation: 4 },
-  youTextTag: { fontWeight: "700", fontSize: 12, color: "#111111", marginTop: 6, backgroundColor: "rgba(255, 255, 255, 0.9)", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 0.5, borderColor: "#E5E7EB" },
-  matchCard: { position: "absolute", top: "32%", alignSelf: "center", width: width * 0.9, backgroundColor: "#FFFFFF", borderRadius: 16, paddingVertical: 24, paddingHorizontal: 20, alignItems: "center", elevation: 6 },
-  iconCircle: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center", marginBottom: 12 },
+  radarPulseRing: { position: "absolute", width: 130, height: 130, borderRadius: 65, borderWidth: 2, borderColor: "#059669", backgroundColor: "rgba(5, 150, 105, 0.06)" },
+  radarInnerRing: { width: 76, height: 76, borderRadius: 38, borderWidth: 1.5, borderColor: "#059669", borderStyle: "dashed", justifyContent: "center", alignItems: "center", backgroundColor: "rgba(255, 255, 255, 0.7)" },
+  userBeaconDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#059669", borderWidth: 3, borderColor: "#FFFFFF", elevation: 4 },
+  youTextTag: { fontWeight: "700", fontSize: 12, color: "#065F46", marginTop: 6, backgroundColor: "rgba(255, 255, 255, 0.95)", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 0.5, borderColor: "#A7F3D0" },
+  matchCard: { position: "absolute", top: "32%", alignSelf: "center", width: width * 0.9, backgroundColor: "#FFFFFF", borderRadius: 16, paddingVertical: 24, paddingHorizontal: 20, alignItems: "center", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.1, shadowRadius: 6 },
+  iconCircle: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#ECFDF5", justifyContent: "center", alignItems: "center", marginBottom: 12 },
   avatarIcon: { fontSize: 20 },
   cardTitle: { fontSize: 14, fontWeight: "700", textAlign: "center", color: "#1F2937", lineHeight: 20 },
   matchCountText: { fontSize: 36, fontWeight: "800", color: "#111111", marginTop: 12 },
   matchCountSubtitle: { fontSize: 12, color: "#6B7280", marginBottom: 16 },
   loaderInlineRow: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
   waitText: { fontSize: 13, color: "#9CA3AF" },
-  successRouteText: { fontSize: 14, fontWeight: "700", color: "#10B981" },
-  bottomSheet: { backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 24, elevation: 4 },
+  successRouteText: { fontSize: 14, fontWeight: "700", color: "#059669" },
+  bottomSheet: { backgroundColor: "#FFFFFF", borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 24, elevation: 4, shadowColor: "#000", shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 4 },
   sheetTitle: { fontSize: 14, fontWeight: "800", color: "#111111", marginBottom: 12 },
   divider: { height: 1, backgroundColor: "#F3F4F6", marginBottom: 16 },
   sheetRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
