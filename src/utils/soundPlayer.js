@@ -4,10 +4,10 @@ import { Audio } from "expo-av";
 const soundCache = {};
 
 const soundFiles = {
-  offer: require("../assets/offerPing.mp3"),
-  success_chime: require("../assets/successChime.mp3"),
-  complete: require("../assets/CompletedTrip.mp3"),
-  soft_tap: require("../assets/Accepted.mp3"),
+  offer: require("../assets/sounds/offerPing.mp3"),
+  success_chime: require("../assets/sounds/success_chime.mp3"),
+  complete: require("../assets/sounds/cash_reward.mp3"),
+  soft_tap: require("../assets/sounds/soft_tap.mp3"),
 };
 
 export async function playSound(soundKey) {
