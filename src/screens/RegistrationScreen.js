@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
+import RoleSelectionModal from "./RoleSelectionModal"; // Adjust path if needed
 
 const API_URL = "http://100.108.52.79:5000/api";
 const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
@@ -25,6 +26,10 @@ export default function RegistrationScreen() {
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [waitingForTelegram, setWaitingForTelegram] = useState(false);
+
+  // 🔀 Multi-role selection modal states
+  const [isRoleSelectionVisible, setIsRoleSelectionVisible] = useState(false);
+  const [availableAccounts, setAvailableAccounts] = useState([]);
 
   const sessionIdRef = useRef(null);
   const authModeRef = useRef(authMode);
@@ -50,7 +55,20 @@ export default function RegistrationScreen() {
 
       if (res.ok) {
         const data = JSON.parse(responseText);
+        
         if (data.success || data.phone_verified) {
+          
+          // 🔀 CHECK FOR MULTI-ROLE ACCOUNTS
+          if (data.requiresRoleSelection && data.accounts) {
+            setWaitingForTelegram(false);
+            console.log("[Auth Success] Multiple roles detected for this phone number. Prompting user selection.");
+            
+            setAvailableAccounts(data.accounts);
+            setIsRoleSelectionVisible(true);
+            return; // Stop here and wait for user to pick a role
+          }
+
+          // ⚡ SINGLE ACCOUNT FLOW (Standard)
           setWaitingForTelegram(false);
 
           const userRole = data.role || role;
@@ -118,7 +136,6 @@ export default function RegistrationScreen() {
         sessionId = data.userId;
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        // ⚡ Fetch server-initialized sign-in session ID to prevent ID mismatches
         const res = await fetch(`${API_URL}/auth/signin-init`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -150,6 +167,18 @@ export default function RegistrationScreen() {
   const handleCancelWaiting = () => {
     setWaitingForTelegram(false);
     sessionIdRef.current = null;
+  };
+
+  // 🎯 STEP 3: Handle the user's workspace choice from the modal
+  const handleSelectRole = async (selectedAccount) => {
+    setIsRoleSelectionVisible(false);
+    console.log(`[Role Selected] Logging in as ${selectedAccount.role} (ID: ${selectedAccount.id})`);
+    
+    await loginSession({
+      id: selectedAccount.id,
+      role: selectedAccount.role,
+      phone_verified: true,
+    });
   };
 
   return (
@@ -249,6 +278,13 @@ export default function RegistrationScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* 🔀 NATIVE MULTI-ROLE SELECTION MODAL */}
+      <RoleSelectionModal
+        visible={isRoleSelectionVisible}
+        accounts={availableAccounts}
+        onSelectRole={handleSelectRole}
+      />
     </SafeAreaView>
   );
 }
