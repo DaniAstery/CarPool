@@ -18,6 +18,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import CorridorDrawer from "../Corridor_Drawer";
 import { useAuth } from "../../AuthContext";
 import { io } from "socket.io-client";
+import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -527,7 +528,7 @@ export default function CreateCorridorScreen({ navigation }) {
         Alert.alert("Launch Rejected", data.error || "Could not spin up pool session.");
         return;
       }
-
+      playSound("offer_ping.mp3");
       navigation.navigate("WaitingForRiders", { 
         ride: {
           id: data.ride_id,
