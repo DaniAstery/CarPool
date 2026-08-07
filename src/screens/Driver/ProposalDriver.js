@@ -13,6 +13,7 @@ import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
+import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000/api";
@@ -55,6 +56,11 @@ export default function ProposalDriver({ navigation, route }) {
 
   const routeId = route?.params?.routeId || "1";
   const activeRideOfferIdRef = useRef(null);
+
+  // 🎵 Sound Tracking Refs (Sound 1 for pool entrance, Sound 4 for accepted status transition)
+  const acceptedSoundPlayedRef = useRef(new Set());
+  const prevPoolLengthRef = useRef(0);
+  const isInitialManifestLoad = useRef(true);
 
   // Financial and seat metrics pulled directly from map_coordinates endpoint data
   const pricePerSeat = mapHubData?.price_per_seat ? parseFloat(mapHubData.price_per_seat) : 80.0;
@@ -172,13 +178,13 @@ export default function ProposalDriver({ navigation, route }) {
         } else {
           setRouteCoordinates([
             { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-            { latitude: startCoords.latitude, longitude: startCoords.longitude }
+            { latitude: startCoords.latitude, longitude: startCoords.latitude }
           ]);
         }
       } catch (err) {
         setRouteCoordinates([
           { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-          { latitude: startCoords.latitude, longitude: startCoords.longitude }
+          { latitude: startCoords.latitude, longitude: startCoords.latitude }
         ]);
       }
     }
@@ -314,6 +320,15 @@ export default function ProposalDriver({ navigation, route }) {
             unifiedRoster.push({ user_id: acceptedId, status: "accepted", name: `Passenger ${acceptedId}` });
           }
         });
+
+        const currentTotalPoolLength = unifiedRoster.length;
+
+        // 🎵 SOUND TRIGGER 1: Play Sound "1" when new riders enter/increase in the matched pool
+        if (!isInitialManifestLoad.current && currentTotalPoolLength > prevPoolLengthRef.current) {
+          playSound("1");
+        }
+        prevPoolLengthRef.current = currentTotalPoolLength;
+        isInitialManifestLoad.current = false;
 
         const acceptedCount = unifiedRoster.filter((p) => p.status === "accepted").length;
         setStrictlyAcceptedCount(acceptedCount);
@@ -604,6 +619,12 @@ export default function ProposalDriver({ navigation, route }) {
               poolPassengers.map((passenger) => {
                 const pId = parseInt(passenger.user_id || passenger.id, 10);
                 const isAccepted = passenger.status === "accepted";
+
+                // 🎵 SOUND TRIGGER 2: Play Sound "4" the exact moment this specific passenger becomes accepted
+                if (isAccepted && !acceptedSoundPlayedRef.current.has(pId)) {
+                  acceptedSoundPlayedRef.current.add(pId);
+                  playSound("4");
+                }
 
                 return (
                   <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>

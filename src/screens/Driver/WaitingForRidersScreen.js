@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
+import { playSound } from "../../utils/soundPlayer";
 
 const API_URL = "http://100.108.52.79:5000";
 
@@ -29,6 +30,10 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   const [pricePerSeat, setPricePerSeat] = useState(150);
   const [routeId, setRouteId] = useState(null);
   const [currentPickupHubId, setCurrentPickupHubId] = useState(null);
+
+  // Track previous matched count to detect increments for sound triggering
+  const prevMatchedRef = useRef(0);
+  const isInitialFetch = useRef(true);
 
   // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
   useEffect(() => {
@@ -60,6 +65,13 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         const totalSearching = data.totalSearching || 0;
         const totalMatched = data.totalMatched || 0;
         const matchedRiders = data.matchedRiders || [];
+
+        // 🎵 PLAY SOUND WHEN NEW RIDER MATCHES/JOINS INCREMENTS
+        if (!isInitialFetch.current && totalMatched > prevMatchedRef.current) {
+          playSound("1");
+        }
+        isInitialFetch.current = false;
+        prevMatchedRef.current = totalMatched;
 
         // Update dynamic states from backend database record
         if (data.hubName) setHubNameDisplay(data.hubName);

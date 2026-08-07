@@ -528,7 +528,7 @@ export default function CreateCorridorScreen({ navigation }) {
         Alert.alert("Launch Rejected", data.error || "Could not spin up pool session.");
         return;
       }
-      playSound("offer_ping.mp3");
+      playSound("1.mp3");
       navigation.navigate("WaitingForRiders", { 
         ride: {
           id: data.ride_id,

@@ -12,6 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext"; 
+import { playSound } from "../../utils/soundPlayer";
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000/api"; 
@@ -57,6 +58,11 @@ export default function ProposalDriver({ navigation, route }) {
   const activeRideOfferIdRef = useRef(null);
   const prevLocRef = useRef(null);
 
+  // 🎵 Ref tracking to detect count increments for sound effects ("2" for matched, "4" for accepted)
+  const prevMatchedCountRef = useRef(0);
+  const prevAcceptedCountRef = useRef(0);
+  const isInitialManifestLoad = useRef(true);
+
   const pricePerSeat = offerDetails?.price_per_seat ? parseFloat(offerDetails.price_per_seat) : 80.00;
   const currentDriverPayout = strictlyAcceptedCount * pricePerSeat;
 
@@ -91,7 +97,7 @@ export default function ProposalDriver({ navigation, route }) {
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
               latitudeDelta: 0.008,
-              latitudeDelta: 0.008,
+              longitudeDelta: 0.008,
             };
 
             if (prevLocRef.current) {
@@ -201,6 +207,21 @@ export default function ProposalDriver({ navigation, route }) {
             });
 
             const finalAcceptedCount = visibleRoster.filter(p => p.status === "accepted").length;
+            const currentTotalMatched = visibleRoster.length;
+
+            // 🎵 AUDIO TRIGGER LOGIC: Play sound 2 if total matched count increments, play sound 4 if accepted count increments
+            if (!isInitialManifestLoad.current) {
+              if (currentTotalMatched > prevMatchedCountRef.current) {
+                playSound("2");
+              }
+              if (finalAcceptedCount > prevAcceptedCountRef.current) {
+                playSound("4");
+              }
+            }
+            isInitialManifestLoad.current = false;
+            prevMatchedCountRef.current = currentTotalMatched;
+            prevAcceptedCountRef.current = finalAcceptedCount;
+
             setStrictlyAcceptedCount(finalAcceptedCount);
             setPoolPassengers(visibleRoster);
 
