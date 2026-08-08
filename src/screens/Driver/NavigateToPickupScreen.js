@@ -14,6 +14,7 @@ import MapViewDirections from "react-native-maps-directions";
 import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
+import { playSound } from "../../utils/soundPlayer"; // 👈 Sound Player imported
 
 const { width, height } = Dimensions.get("window");
 
@@ -63,12 +64,11 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
       }}
-      customMapStyle={cleanMinimalMapStyle}
       showsUserLocation={false}
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* 🟢 1. Driver Current Location Marker (Standardized Navigation Arrow / Vehicle Bubble with tracksViewChanges) */}
+      {/* 🟢 1. Driver Current Location Marker */}
       {driverLocation && driverLocation.latitude && (
         <Marker
           coordinate={driverLocation}
@@ -87,7 +87,7 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
         </Marker>
       )}
 
-      {/* 🔵 2. Destination / Pickup Hub Marker (Standardized Royal Blue Halo Badge) */}
+      {/* 🔵 2. Destination / Pickup Hub Marker */}
       {pickupLocation?.latitude && pickupLocation?.longitude && (
         <Marker
           coordinate={pickupLocation}
@@ -129,6 +129,8 @@ export default function NavigateToPickup({ navigation, route }) {
   // 📍 2. STATE MATRIX
   const mapRef = useRef(null);
   const prevLocRef = useRef(null);
+  const arrivedSoundPlayedRef = useRef(new Set()); // 🎵 Tracks unique passenger arrival chimes
+
   const [driverLocation, setDriverLocation] = useState(null);
   const [mapHubData, setMapHubData] = useState(null);
   const [heading, setHeading] = useState(0);
@@ -162,7 +164,6 @@ export default function NavigateToPickup({ navigation, route }) {
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== "granted") return;
 
-        // Watch live GPS coordinates
         locationSubscription = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
@@ -175,7 +176,6 @@ export default function NavigateToPickup({ navigation, route }) {
               longitude: location.coords.longitude,
             };
 
-            // Compute bearing fallback
             if (prevLocRef.current) {
               const computedHeading = calculateBearing(
                 prevLocRef.current.latitude,
@@ -192,7 +192,6 @@ export default function NavigateToPickup({ navigation, route }) {
           }
         );
 
-        // Watch physical device compass heading for smooth arrow rotation
         headingSubscription = await Location.watchHeadingAsync((headingObj) => {
           if (headingObj) {
             const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magHeading;
@@ -256,13 +255,11 @@ export default function NavigateToPickup({ navigation, route }) {
 
         setOfferDetails(data);
 
-        // Check backend status for arrival sync
         const currentStatus = data.status ? data.status.toString().trim().toLowerCase() : "";
         if (currentStatus === "arrived" || currentStatus === "inprogress") {
           setHasArrived(true);
         }
 
-        // 1. Clean parse of arrived_passengers array
         let cleanArrivedIds = [];
         if (data.arrived_passengers) {
           if (Array.isArray(data.arrived_passengers)) {
@@ -276,7 +273,6 @@ export default function NavigateToPickup({ navigation, route }) {
           }
         }
 
-        // 2. Safely parse passenger list from available backend keys
         let rawPassengers = [];
         if (Array.isArray(data.passengers)) {
           rawPassengers = data.passengers;
@@ -290,7 +286,6 @@ export default function NavigateToPickup({ navigation, route }) {
           }
         }
 
-        // 3. Unified Roster Mapping with Arrived Status Synchronization
         const unifiedRoster = rawPassengers.map((rider) => {
           const userId = parseInt(rider.user_id || rider.id, 10);
           
@@ -302,6 +297,12 @@ export default function NavigateToPickup({ navigation, route }) {
             cleanArrivedIds.includes(userId) || rawDbStatus === "arrived"
               ? "arrived"
               : rawDbStatus;
+
+          // 🎵 Play Sound 5 the exact moment a passenger status shifts to arrived
+          if (finalStatus === "arrived" && !arrivedSoundPlayedRef.current.has(userId)) {
+            arrivedSoundPlayedRef.current.add(userId);
+            playSound("5");
+          }
 
           const passengerName =
             rider?.passenger_name ||
@@ -346,6 +347,7 @@ export default function NavigateToPickup({ navigation, route }) {
       if (res.ok) {
         console.log("✅ Driver arrival recorded:", data);
         setHasArrived(true);
+        playSound("1"); // 🎵 Play Sound 1 when driver successfully signals arrival at hub
       } else {
         console.warn("⚠️ Arrival update failed:", data.error);
       }
@@ -359,6 +361,9 @@ export default function NavigateToPickup({ navigation, route }) {
   const handleStartTrip = async () => {
     setIsActionLoading(true);
     try {
+      // 🎵 Play your start trip sound the moment the button is pressed
+      playSound("6"); 
+
       const res = await fetch(`${API_URL}/rides/start-trip`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -452,7 +457,7 @@ export default function NavigateToPickup({ navigation, route }) {
         </View>
       )}
 
-      {/* MAP AREA WITH AGREED BASELINE MAP STYLE */}
+      {/* MAP AREA */}
       <View style={styles.mapContainer}>
         <DriverNavigationMap
           driverLocation={driverLocation}
@@ -504,7 +509,7 @@ export default function NavigateToPickup({ navigation, route }) {
         </TouchableOpacity>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollSheetContent}>
-          {/* LOCATION DETAILS WITH RESOLVED HUB NAME */}
+          {/* LOCATION DETAILS */}
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}>
               <Ionicons
@@ -584,148 +589,49 @@ export default function NavigateToPickup({ navigation, route }) {
   );
 }
 
-// 🎨 STYLES & LOCKED-IN BASELINE MAP STYLING
-const cleanMinimalMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#F5F5F5" }] },
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-];
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F5F5F5" },
-  header: {
-    height: 56,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    backgroundColor: "#FFFFFF",
-  },
+  header: { height: 56, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, backgroundColor: "#FFFFFF" },
   backButton: { fontSize: 24, fontWeight: "600", color: "#111111" },
-  headerTitle: { fontSize: 15, fontWeight: "700", color: "#111111" },
-  errorBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#EF4444",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  errorBannerText: {
-    color: "#FFFFFF",
-    fontSize: 11,
-    fontWeight: "600",
-    marginLeft: 6,
-    textAlign: "center",
-  },
+  headerTitle: { fontSize: 16, fontWeight: "700", color: "#111111" },
+  errorBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#EF4444", paddingVertical: 6, paddingHorizontal: 12 },
+  errorBannerText: { color: "#FFFFFF", fontSize: 11, fontWeight: "600", marginLeft: 6, textAlign: "center" },
   mapContainer: { flex: 1 },
-  
-  // Locked-In Baseline Marker Styles
-  emeraldCarWrapper: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
-  emeraldCarInnerBubble: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 6 },
-  
-  royalBlueDestinationHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(59, 130, 246, 0.3)", justifyContent: "center", alignItems: "center" },
-  royalBlueDestinationBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#3B82F6", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
-
-  persistentDistanceBanner: {
-    position: "absolute",
-    top: 15,
-    alignSelf: "center",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
+  emeraldCarWrapper: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
+  emeraldCarInnerBubble: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
+  royalBlueDestinationHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
+  royalBlueDestinationBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#3B82F6", borderWidth: 2, borderColor: "#FFFFFF" },
+  persistentDistanceBanner: { position: "absolute", top: 15, alignSelf: "center", backgroundColor: "#FFFFFF", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, flexDirection: "row", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4, borderWidth: 1, borderColor: "#E2E8F0" },
   persistentDistanceText: { fontSize: 12, color: "#1E293B", fontWeight: "600" },
   boldText: { fontWeight: "800" },
-
-  // Bottom Card & Collapsible Sheet
-  proposalCard: {
-    position: "absolute",
-    bottom: 0,
-    width: width,
-    maxHeight: "75%",
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    elevation: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-  },
+  proposalCard: { position: "absolute", bottom: 0, width: width, maxHeight: "75%", backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingBottom: 24, elevation: 10, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.15, shadowRadius: 10 },
   proposalCardCollapsed: { maxHeight: 90, overflow: "hidden" },
   dragHandleBarArea: { paddingVertical: 10, alignItems: "center" },
   dragHandleIndicator: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", marginBottom: 6 },
   collapseToggleRow: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
   collapseToggleTitle: { fontSize: 11, fontWeight: "700", color: "#64748B", marginRight: 4 },
   scrollSheetContent: { paddingBottom: 20 },
-
-  cardHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  locationPinCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#ECFDF5",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
+  cardHeaderRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
+  locationPinCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#ECFDF5", alignItems: "center", justifyContent: "center", marginRight: 12 },
   locationTextWrapper: { flex: 1 },
-  locationTitle: { fontSize: 16, fontWeight: "800", color: "#111" },
+  locationTitle: { fontSize: 15, fontWeight: "700", color: "#111111" },
   locationSubtitle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  
-  sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8, color: "#4B5563" },
+  sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8, color: "#374151" },
   statusTable: { marginBottom: 16 },
-  tableRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#F3F4F6",
-  },
+  tableRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#F3F4F6" },
   tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
-  tableUserText: { fontSize: 14, marginLeft: 10, fontWeight: "600", color: "#111" },
-  
-  badge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 6,
-    minWidth: 85,
-    alignItems: "center",
-  },
-  badgeAccepted: { backgroundColor: "#ECFDF5" },
+  tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500", color: "#1F2937" },
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, minWidth: 85, alignItems: "center" },
+  badgeAccepted: { backgroundColor: "#E0F2FE" },
   badgeArrived: { backgroundColor: "#FEF3C7" },
   badgeSearching: { backgroundColor: "#F3F4F6" },
-  badgeText: { fontSize: 12, fontWeight: "700" },
-  textAccepted: { color: "#10B981" },
+  badgeText: { fontSize: 11, fontWeight: "600" },
+  textAccepted: { color: "#0284C7" },
   textArrived: { color: "#D97706" },
   textSearching: { color: "#4B5563" },
-  
   actionButtonContainer: { marginTop: 4 },
-  actionButton: {
-    width: "100%",
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  actionButton: { borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   arriveButton: { backgroundColor: "#059669" },
-  startTripButton: { backgroundColor: "#0284C7" },
-  actionButtonText: { color: "#FFFFFF", fontWeight: "800", fontSize: 14, letterSpacing: 0.5 },
+  startTripButton: { backgroundColor: "#10B981" },
+  actionButtonText: { color: "#FFFFFF", fontWeight: "700", fontSize: 14, letterSpacing: 0.5 }
 });

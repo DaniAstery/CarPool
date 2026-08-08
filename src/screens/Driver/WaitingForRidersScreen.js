@@ -68,7 +68,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
 
         // 🎵 PLAY SOUND WHEN NEW RIDER MATCHES/JOINS INCREMENTS
         if (!isInitialFetch.current && totalMatched > prevMatchedRef.current) {
-          playSound("1");
+          playSound("2");
         }
         isInitialFetch.current = false;
         prevMatchedRef.current = totalMatched;

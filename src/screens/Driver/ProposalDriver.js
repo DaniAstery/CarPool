@@ -398,7 +398,7 @@ export default function ProposalDriver({ navigation, route }) {
           driver_id: currentDriverId,
         }),
       });
-
+      
       const responseData = await res.json();
       if (res.ok && responseData.success) {
         const finalId = parseInt(responseData.rideOfferId || activeRideOfferIdRef.current || mapHubData?.ride_offer_id, 10);
@@ -410,6 +410,7 @@ export default function ProposalDriver({ navigation, route }) {
           rideId: finalId,
           driverId: currentDriverId,
         });
+          playSound("4"); // 🎵 SOUND TRIGGER 3: Play Sound "4" when driver successfully locks in the manifest
       } else {
         setDriverAccepted(false);
         Alert.alert("Dispatch Rejection", responseData.error || "Manifest cluster locked or changed.");

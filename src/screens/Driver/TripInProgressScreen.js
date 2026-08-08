@@ -18,6 +18,7 @@ import MapViewDirections from "react-native-maps-directions";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
+import { playSound } from "../../utils/soundPlayer"; // 👈 1. Import sound player here
 
 const API_BASE_URL = "http://100.108.52.79:5000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
@@ -233,6 +234,10 @@ export default function TripInProgressScreen({ navigation, route }) {
       if (response.ok) {
         const result = JSON.parse(rawText);
         const resolvedRideOfferId = result.rideOffer?.id || rideOfferId;
+        
+        // 🎵 Play sound 7 before unmounting the view
+        await playSound("7");
+
         navigation.replace("TripEarningsSummary", {
           rideOfferId: resolvedRideOfferId,
           routeId: routeId,
@@ -243,6 +248,7 @@ export default function TripInProgressScreen({ navigation, route }) {
         Alert.alert("Execution Error", "Could not finalize transition parameters.");
       }
     } catch (err) {
+      console.error("Network error:", err);
       Alert.alert("Network Failure", "Unable to establish communication with backend.");
     } finally {
       setSubmitting(false);
@@ -313,7 +319,6 @@ export default function TripInProgressScreen({ navigation, route }) {
                     name="navigation" 
                     size={20} 
                     color="#FFFFFF" 
-                    // Material 'navigation' icon natively points top-right (45deg). We rotate it -45deg to point straight up.
                     style={{ transform: [{ rotate: '-45deg' }] }} 
                   />
                 </View>
@@ -468,12 +473,11 @@ const styles = StyleSheet.create({
   
   mapContainer: { flex: 1, backgroundColor: "#E5E7EB" },
 
-  // Arrow Marker Styles
   arrowMarkerHalo: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "rgba(37, 99, 235, 0.15)", // Very faint blue halo
+    backgroundColor: "rgba(37, 99, 235, 0.15)",
     justifyContent: "center",
     alignItems: "center",
   },

@@ -17,6 +17,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
+import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -141,6 +142,9 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
   const rideOfferId = route?.params?.rideOfferId || 0;
 
+  // 🎵 Placed correctly inside the component function scope
+  const arrivedSoundPlayedRef = useRef(false);
+
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [myStatus, setMyStatus] = useState("accepted");
   const [driverState, setDriverState] = useState("accepted");
@@ -252,7 +256,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => { isMounted = false; };
   }, [pickupLocation, destinationLocation]);
 
-  // Poll presence status (Driver state & co-riders only; no overwriting authoritative map coordinates)
+  // Poll presence status (Driver state & co-riders) + Sound 5 trigger on arrival transition
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -282,6 +286,12 @@ export default function LiveTrackingScreen({ route, navigation }) {
           if (rawMyStatus === "in_trip" || data.driver_status?.toLowerCase() === "in_trip") {
             navigateToDeparture();
             return;
+          }
+
+          // 🎵 TRIGGER SOUND "5" THE MOMENT STATUS CHANGES TO ARRIVED
+          if (rawMyStatus === "arrived" && !arrivedSoundPlayedRef.current) {
+            arrivedSoundPlayedRef.current = true;
+            playSound("5");
           }
 
           setMyStatus(rawMyStatus);
@@ -331,7 +341,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
       }
 
       setMyStatus("arrived");
-
+      playSound("5");  
       if (data.passengers && Array.isArray(data.passengers)) {
         const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
         const instantCoRiders = data.passengers
@@ -486,77 +496,50 @@ export default function LiveTrackingScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F8F9FA" },
+  container: { flex: 1, backgroundColor: "#0F172A" },
   mapContainer: { flex: 1 },
-  
-  // 1. User Device GPS Marker (Cyan/Blue Dot)
-  userMarkerHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(2, 132, 199, 0.25)", justifyContent: "center", alignItems: "center" },
-  userMarkerDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: "#0284C7", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 6 },
-  
-  // 2. Pickup Hub Marker (Emerald Green Dot)
-  glowingEmeraldOuterHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(5, 150, 105, 0.3)", justifyContent: "center", alignItems: "center" },
-  glowingEmeraldBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#059669", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
-
-  // 3. Destination Hub Marker (Royal Blue Dot)
-  glowingDestinationOuterHalo: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(59, 130, 246, 0.3)", justifyContent: "center", alignItems: "center" },
-  glowingDestinationBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#3B82F6", borderWidth: 3, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 3, elevation: 6 },
-
-  // Sliding Panel Drawer
-  slidingPanelDrawer: { 
-    position: "absolute", 
-    bottom: 0, 
-    width: width, 
-    backgroundColor: "#FFF", 
-    borderTopLeftRadius: 24, 
-    borderTopRightRadius: 24, 
-    paddingTop: 8, 
-    paddingHorizontal: 20, 
-    elevation: 15,
-    shadowColor: "#000", 
-    shadowOffset: { width: 0, height: -3 }, 
-    shadowOpacity: 0.1, 
-    shadowRadius: 6,
-    zIndex: 30 
-  },
-  drawerCollapsed: { height: 125 },
-  drawerExpanded: { maxHeight: height * 0.65 },
-
-  dragHandleContainer: { paddingBottom: 8, width: "100%" },
-  dragHandle: { width: 40, height: 4, backgroundColor: "#E0E0E0", borderRadius: 2, alignSelf: "center", marginBottom: 10 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  previewLeftCluster: { flex: 1 },
-  title: { fontSize: 18, fontWeight: "700", color: "#1A1A1A" },
-  subtitle: { fontSize: 12, color: "#666", marginTop: 2 },
-  boldText: { fontWeight: "700", color: "#1A1A1A" },
-  
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, marginBottom: 4 },
-  badgeAccepted: { backgroundColor: "#E3F2FD" },
-  badgeArrived: { backgroundColor: "#E8F5E9" },
-  badgeText: { fontSize: 11, fontWeight: "700", color: "#2F4F4F" },
-
-  expandToggleBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end" },
-  expandToggleText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginRight: 2 },
-
-  drawerScrollBody: { flexGrow: 0 },
-  routeCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: "#EAEAEA" },
+  userMarkerHalo: { width: 24, height: 24, borderRadius: 12, backgroundColor: "rgba(14, 165, 233, 0.2)", justifyContent: "center", alignItems: "center" },
+  userMarkerDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#0EA5E9", borderWidth: 2, borderColor: "#FFFFFF" },
+  glowingEmeraldOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
+  glowingEmeraldBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF" },
+  glowingDestinationOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
+  glowingDestinationBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#3B82F6", borderWidth: 2, borderColor: "#FFFFFF" },
+  slidingPanelDrawer: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 8, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 15 },
+  drawerExpanded: { height: height * 0.52 },
+  drawerCollapsed: { height: 110 },
+  dragHandleContainer: { width: "100%", paddingVertical: 6, alignItems: "center" },
+  dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", marginBottom: 8 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%", paddingBottom: 4 },
+  previewLeftCluster: { flex: 1, marginRight: 8 },
+  title: { fontSize: 15, fontWeight: "700", color: "#1E293B" },
+  subtitle: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  boldText: { fontWeight: "700", color: "#0F172A" },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  badgeAccepted: { backgroundColor: "#E0F2FE" },
+  badgeArrived: { backgroundColor: "#ECFDF5" },
+  badgeText: { fontSize: 10, fontWeight: "700", color: "#0369A1" },
+  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 4 },
+  expandToggleText: { fontSize: 11, color: "#64748B", marginRight: 2 },
+  drawerScrollBody: { marginTop: 8 },
+  routeCard: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },
   routeItem: { flexDirection: "row", alignItems: "center" },
-  routeLabel: { fontSize: 10, fontWeight: "700", color: "#888", letterSpacing: 0.5 },
-  routeValue: { fontSize: 14, fontWeight: "700", color: "#1A1A1A", marginTop: 1 },
-  routeDivider: { height: 1, backgroundColor: "#EAEAEA", marginVertical: 8 },
-  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F0F4F4", padding: 12, borderRadius: 12, marginVertical: 6 },
-  driverLabel: { fontSize: 14, fontWeight: "700", color: "#1A1A1A" },
-  driverSub: { fontSize: 12, color: "#666" },
-  rosterContainer: { marginVertical: 6 },
-  sectionHeader: { fontSize: 11, fontWeight: "700", color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 },
-  riderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
-  avatar: { width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center" },
-  avatarText: { color: "#FFF", fontSize: 11, fontWeight: "700" },
-  riderName: { flex: 1, marginLeft: 10, fontSize: 15, fontWeight: "500", color: "#333" },
-  statusTag: { fontSize: 11, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, overflow: "hidden" },
-  tagAccepted: { backgroundColor: "#E3F2FD", color: "#1565C0" },
-  tagArrived: { backgroundColor: "#E8F5E9", color: "#2E7D32" },
-  tagPending: { backgroundColor: "#FFF8E1", color: "#F57F17" },
-  actionButton: { backgroundColor: "#2F4F4F", paddingVertical: 14, borderRadius: 12, alignItems: "center", marginTop: 10, marginBottom: Platform.OS === 'android' ? 20 : 10 },
-  actionButtonDisabled: { backgroundColor: "#A0B2B2" },
-  actionButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  routeDivider: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 8, marginLeft: 26 },
+  routeLabel: { fontSize: 10, fontWeight: "700", color: "#64748B", letterSpacing: 0.5 },
+  routeValue: { fontSize: 13, fontWeight: "600", color: "#1E293B", marginTop: 1 },
+  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F1F5F9", borderRadius: 12, padding: 12, marginBottom: 12 },
+  driverLabel: { fontSize: 13, fontWeight: "700", color: "#1E293B" },
+  driverSub: { fontSize: 11, color: "#64748B", marginTop: 2 },
+  rosterContainer: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },
+  sectionHeader: { fontSize: 12, fontWeight: "700", color: "#475569", marginBottom: 8 },
+  riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: "#E2E8F0" },
+  avatar: { width: 28, height: 28, borderRadius: 14, justifyContent: "center", alignItems: "center", marginRight: 10 },
+  avatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" },
+  riderName: { flex: 1, fontSize: 12, fontWeight: "600", color: "#1E293B" },
+  statusTag: { fontSize: 10, fontWeight: "700", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  tagAccepted: { backgroundColor: "#E0F2FE", color: "#0369A1" },
+  tagArrived: { backgroundColor: "#ECFDF5", color: "#059669" },
+  tagPending: { backgroundColor: "#FEF3C7", color: "#D97706" },
+  actionButton: { backgroundColor: "#059669", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center", marginTop: 6, marginBottom: 10 },
+  actionButtonDisabled: { backgroundColor: "#9CA3AF" },
+  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" }
 });
