@@ -212,9 +212,9 @@ export default function ProposalDriver({ navigation, route }) {
   const handleDriverTimeout = async () => {
     try {
       const offerId = mapHubData?.ride_offer_id || activeRideOfferIdRef.current;
-      if (!offerId) return;
+      if (!offerId) return null;
 
-      await fetch(`${API_URL}/rides/driver-expired`, {
+      const res = await fetch(`${API_URL}/rides/driver-expired`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -223,8 +223,11 @@ export default function ProposalDriver({ navigation, route }) {
           route_id: routeId,
         }),
       });
+      const data = await res.json();
+      return data;
     } catch (err) {
       console.error("Error notifying backend of driver expiration:", err);
+      return null;
     }
   };
 
@@ -233,22 +236,30 @@ export default function ProposalDriver({ navigation, route }) {
     if (!hasMinimumRequiredPassengers || isOfferLockedIn) return;
 
     if (timeLeft <= 0 && !driverAccepted) {
-      handleDriverTimeout();
-      Alert.alert(
-        "Offer Expired",
-        "The dispatch window for this cluster has expired. Reassigning run.",
-        [
-          {
-            text: "Return to Queue",
-            onPress: () => {
-              navigation.reset({
-                index: 0,
-                routes: [{ name: "WaitingForPassengers", params: { driverId: currentDriverId } }],
-              });
+      handleDriverTimeout().then((result) => {
+        const isQueueDeleted = result?.action === "deleted";
+
+        Alert.alert(
+          isQueueDeleted ? "Station Queue Expired" : "Offer Expired",
+          isQueueDeleted
+            ? "The dispatch window elapsed and no alternative drivers or active clusters remain. Returning to station setup."
+            : "The dispatch window for this cluster has expired. Reassigning run.",
+          [
+            {
+              text: "OK",
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [{ 
+                    name: "CreateCorridor", 
+                    params: { driverId: currentDriverId } 
+                  }],
+                });
+              },
             },
-          },
-        ]
-      );
+          ]
+        );
+      });
       return;
     }
 
@@ -264,12 +275,27 @@ export default function ProposalDriver({ navigation, route }) {
       try {
         const url = `${API_URL}/rides/driver-proposal/${currentDriverId}`;
         const res = await fetch(url);
-        if (!res.ok) return;
+        
+        // If proposal returns 404 or not found, ride offer has been removed/deleted
+        if (res.status === 404 || !res.ok) {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: "CreateCorridor", params: { driverId: currentDriverId } }],
+          });
+          return;
+        }
 
         const data = await res.json();
         setNetworkError(null);
 
-        if (!data || (!data.hasActiveProposal && !data.id)) return;
+        // If proposal data is empty, deleted, or expired, navigate back to CreateCorridor
+        if (!data || (!data.hasActiveProposal && !data.id) || data.status === 'deleted' || data.status === 'expired') {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: "CreateCorridor", params: { driverId: currentDriverId } }],
+          });
+          return;
+        }
 
         setOfferDetails(data);
         activeRideOfferIdRef.current = data.ride_offer_id || data.id;
@@ -758,12 +784,12 @@ const styles = StyleSheet.create({
   timerBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#E6F4EA", paddingVertical: 10, borderRadius: 10, marginBottom: 16 },
   timerWaiting: { backgroundColor: "#F3F4F6", borderWidth: 0.5, borderColor: "#D1D5DB" },
   timerUrgent: { backgroundColor: "#FEE2E2" },
-  timerText: { fontSize: 13, color: "#10B981", marginLeft: 6, fontWeight: "600" },
+  timerText: { fontSize: 13, color: "#059669", marginLeft: 6, fontWeight: "600" },
   cardHeaderRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  locationPinCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#E6F4EA", alignItems: "center", justifyContent: "center", marginRight: 12 },
+  locationPinCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#ECFDF5", alignItems: "center", justifyContent: "center", marginRight: 12 },
   locationTextWrapper: { flex: 1 },
   locationTitle: { fontSize: 15, fontWeight: "700" },
-  locationSubtitle: { fontSize: 12, color: "#64748B" },
+  locationSubtitle: { fontSize: 12, color: "#6B7280" },
   sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8 },
   statusTable: { marginBottom: 16 },
   tableRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#F3F4F6" },
@@ -775,12 +801,12 @@ const styles = StyleSheet.create({
   badgeArrived: { backgroundColor: "#FEF3C7" },
   badgeText: { fontSize: 12, fontWeight: "600" },
   textMatched: { color: "#0284C7" },
-  textAccepted: { color: "#10B981" },
+  textAccepted: { color: "#059669" },
   textArrived: { color: "#D97706" },
   actionButtonContainer: { marginTop: 4 },
   buttonButtonGroup: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
   declineButton: { width: "30%", borderWidth: 1, borderColor: "#EF4444", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   declineButtonText: { color: "#EF4444", fontWeight: "700" },
-  acceptButton: { width: "66%", backgroundColor: "#10B981", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
-  acceptButtonText: { color: "#FFFFFF", fontWeight: "700" },
+  acceptButton: { width: "66%", backgroundColor: "#059669", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
+  acceptButtonText: { color: "#FFFFFF", fontWeight: "700" }
 });
