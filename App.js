@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
@@ -25,6 +25,7 @@ import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
 
 const Stack = createNativeStackNavigator();
 
@@ -82,6 +83,18 @@ function AppNavigator() {
 }
 
 export default function App() {
+
+  useEffect(() => {
+    // Configure audio session globally on app startup to allow background mixing without ducking
+    Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+      interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+      shouldDuckAndroid: false, // Prevents Android from lowering other apps
+      staysActiveInBackground: false,
+    }).catch((err) => console.log("Audio mode setup error:", err));
+  }, []);
+
   return (
     <AuthProvider>
       <AppNavigator />
