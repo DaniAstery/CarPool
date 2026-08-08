@@ -1,4 +1,4 @@
-import { Audio } from "expo-av";
+import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
 
 // Cache sound objects to prevent lag or memory leaks
 const soundCache = {};
@@ -29,6 +29,15 @@ const soundFiles = {
 
 export async function playSound(soundKey) {
   try {
+    // 🎵 Configure audio session to blend cleanly with background music apps
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+      interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+      shouldDuckAndroid: false, // Prevents Android from lowering other app volumes
+      staysActiveInBackground: false,
+    });
+
     const fileSource = soundFiles[soundKey];
     
     if (!fileSource) {
