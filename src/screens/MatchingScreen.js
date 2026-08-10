@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import { playSound } from "../utils/soundPlayer";
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000/api"; 
@@ -30,6 +31,7 @@ export default function MatchingScreen({ navigation, route }) {
 
   const mapRef = useRef(null);
   const radarAnim = useRef(new Animated.Value(0)).current;
+  const prevCountRef = useRef(1);
   
   // 🛡️ SAFE CONFIGURATION UNPACKING MATRIX
   const routeId = route?.params?.routeId || route?.params?.route_id || null;
@@ -122,8 +124,24 @@ export default function MatchingScreen({ navigation, route }) {
 
         const currentPoolStatus = (data.status || data.pool?.status || data.match_pipeline?.status || "searching").toLowerCase().trim();
         const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
-        const currentCount = data.currentPoolCount || data.pool?.currentPoolCount || 1;
+        
+        // 🛡️ ROBUST COUNT EXTRACTION (Checks backend count property and passenger arrays)
+        const currentCount = parseInt(
+          data.currentPoolCount || 
+          data.pool?.currentPoolCount || 
+          (Array.isArray(data.passengers) ? data.passengers.length : null) || 
+          (Array.isArray(data.pool?.passengers) ? data.pool.passengers.length : null) || 
+          1, 
+          10
+        );
+
         const finalPriceValue = data.finalPrice || data.pool?.finalPrice || data.pool?.base_price || 150;
+
+        // 🎵 SAFE SOUND TRIGGER: Fires Sound 4 strictly when actual passenger count increases
+        if (currentCount > prevCountRef.current) {
+          playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+          prevCountRef.current = currentCount;
+        }
 
         setMatchedCount(currentCount);
         setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
@@ -143,7 +161,8 @@ export default function MatchingScreen({ navigation, route }) {
           return;
         }
 
-        if (targetRideOfferId !== null) {
+        // 🛡️ STRICT THRESHOLD: Navigate ONLY when target ride offer exists AND passenger count reaches at least 2
+        if (targetRideOfferId !== null && currentCount >= 2) {
           const navigationPayload = {
             id: targetRideOfferId,
             rideOfferId: targetRideOfferId,
@@ -158,10 +177,6 @@ export default function MatchingScreen({ navigation, route }) {
 
           navigation.replace("PickupProposal", navigationPayload);
           return;
-        }
-
-        if (currentPoolStatus === "matched" || currentCount >= 2) {
-          setMatchedCount(2); 
         }
 
       } catch (err) {
