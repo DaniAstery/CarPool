@@ -16,6 +16,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
+import { playSound } from "../utils/soundPlayer"; // 👈 1. Import sound player
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -175,6 +176,9 @@ export default function PickupProposalScreen({ navigation }) {
   });
 
   const mapRef = useRef(null);
+  const prevMyStatusRef = useRef("searching"); 
+  const prevAcceptedCountRef = useRef(0);      
+  const prevDriverStateRef = useRef("pending");
 
   useEffect(() => {
     const backAction = () => true; 
@@ -307,10 +311,30 @@ export default function PickupProposalScreen({ navigation }) {
           const myRoutePoolStatus = myRow ? (myRow.status || "searching").toLowerCase().trim() : "searching";
           const rawMyStatus = (userAccepted || isUserAcceptedInOffer) ? "accepted" : myRoutePoolStatus;
 
+          // 🎵 TRIGGER SOUND WHEN USER STATUS TURNS TO "ACCEPTED" IN POOL
+          if (rawMyStatus === "accepted" && prevMyStatusRef.current !== "accepted") {
+            playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+          }
+          prevMyStatusRef.current = rawMyStatus;
+
+          // 🎵 TRIGGER SOUND WHEN ANY CO-RIDER'S STATUS TURNS TO "ACCEPTED"
+          const currentAcceptedCount = normalizedAcceptedIds.length;
+          if (currentAcceptedCount > prevAcceptedCountRef.current && prevAcceptedCountRef.current > 0) {
+            playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+          }
+          prevAcceptedCountRef.current = currentAcceptedCount;
+
           setMyDbStatus(rawMyStatus);
           if (rawMyStatus === "accepted") setUserAccepted(true);
 
           const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
+          
+          // 🎵 TRIGGER SOUND WHEN DRIVER ACCEPTS
+          if (currentDriverStatus === "accepted" && prevDriverStateRef.current !== "accepted") {
+            playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+          }
+          prevDriverStateRef.current = currentDriverStatus;
+
           setDriverState(currentDriverStatus);
 
           if (currentDriverStatus === "accepted" && activeRideOfferId) {
