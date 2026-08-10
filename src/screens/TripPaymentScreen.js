@@ -73,6 +73,7 @@ export default function TripPaymentScreen({ navigation }) {
             {
               text: "I Have Paid",
               onPress: () => {
+                playSound(7);
                 navigation.reset({
                   index: 0,
                   routes: [{ name: "Passenger" }],
@@ -104,7 +105,7 @@ export default function TripPaymentScreen({ navigation }) {
           {
             text: "I Have Paid",
             onPress: () => {
-              playSound(6);
+              playSound(7);
               navigation.reset({
                 index: 0,
                 routes: [{ name: "Passenger" }],

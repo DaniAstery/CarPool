@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
 
@@ -28,6 +28,60 @@ const DEFAULT_LOCATION = {
   heading: 0,
   latitudeDelta: 0.02,
   longitudeDelta: 0.02,
+};
+
+// Fetch real street-level walking path from OSRM public walking router with urban grid fallback
+const fetchWalkingRoute = async (userLoc, hubLoc) => {
+  if (!userLoc || !hubLoc || !hubLoc.latitude || !userLoc.latitude) {
+    return { distance: null, duration: null, coordinates: [] };
+  }
+
+  try {
+    const url = `https://router.project-osrm.org/route/v1/foot/${userLoc.longitude},${userLoc.latitude};${hubLoc.longitude},${hubLoc.latitude}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.routes && data.routes[0]) {
+      const route = data.routes[0];
+      const coordinates = route.geometry.coordinates.map(coord => ({
+        latitude: coord[1],
+        longitude: coord[0]
+      }));
+
+      const distanceMeters = route.distance;
+      const distanceStr = distanceMeters >= 1000 
+        ? `${(distanceMeters / 1000).toFixed(1)} km` 
+        : `${Math.round(distanceMeters)}m`;
+
+      const durationMinutes = Math.max(1, Math.round(route.duration / 60));
+      const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
+
+      return { distance: distanceStr, duration: durationStr, coordinates };
+    }
+  } catch (err) {
+    console.log("⚠️ OSRM walking route request failed, utilizing urban grid fallback");
+  }
+
+  const midLat = (userLoc.latitude + hubLoc.latitude) / 2;
+  const gridCoordinates = [
+    userLoc,
+    { latitude: midLat, longitude: userLoc.longitude },
+    { latitude: midLat, longitude: hubLoc.longitude },
+    { latitude: hubLoc.latitude, longitude: hubLoc.longitude }
+  ];
+
+  const toRad = (val) => (val * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(hubLoc.latitude - userLoc.latitude);
+  const dLon = toRad(hubLoc.longitude - userLoc.longitude);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(userLoc.latitude)) * Math.cos(toRad(hubLoc.latitude)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const distanceKm = R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  const distanceMeters = Math.round(distanceKm * 1000);
+  const distanceStr = distanceMeters >= 1000 ? `${(distanceMeters / 1000).toFixed(1)} km` : `${distanceMeters}m`;
+  const durationMinutes = Math.max(1, Math.round((distanceKm / 4.8) * 60));
+  const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
+
+  return { distance: distanceStr, duration: durationStr, coordinates: gridCoordinates };
 };
 
 // Fetch real street-level driving route from OSRM public driving router
@@ -55,9 +109,9 @@ const fetchDrivingRoute = async (origin, destination) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Circular Glowing Compass Arrow, Driver, Pickup, Destination)
+// MEMOIZED MAP VIEW (Walking Polyline, Compass Arrow, Driver, Pickup, Destination)
 // ------------------------------------------------------------------
-const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded }) => {
+const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, destinationLocation, walkingRouteCoordinates, routeCoordinates, mapRef, isDrawerExpanded }) => {
   const hasFitted = useRef(false);
 
   useEffect(() => {
@@ -69,17 +123,18 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
         ...(driverLocation?.latitude ? [{ latitude: driverLocation.latitude, longitude: driverLocation.longitude }] : []),
         { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude },
         { latitude: destinationLocation.latitude, longitude: destinationLocation.longitude },
+        ...walkingRouteCoordinates,
         ...routeCoordinates
       ];
 
       try {
         mapRef.current.fitToCoordinates(coordsToFit, {
-          edgePadding: { top: 80, right: 60, bottom: bottomPadding, left: 60 },
+          edgePadding: { top: 90, right: 60, bottom: bottomPadding, left: 60 },
           animated: true,
         });
       } catch (e) {}
     }
-  }, [currentLocation, driverLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded]);
+  }, [currentLocation, driverLocation, pickupLocation, destinationLocation, walkingRouteCoordinates, routeCoordinates, mapRef, isDrawerExpanded]);
 
   return (
     <MapView
@@ -151,12 +206,23 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
         </Marker>
       )}
 
-      {/* 🛣️ Real Street-Level Polyline Route Path (Pickup to Destination) */}
+      {/* 🛣️ Real Street-Level Walking Route Polyline (Current Device to Pickup Hub) */}
+      {walkingRouteCoordinates && walkingRouteCoordinates.length > 0 && (
+        <Polyline
+          coordinates={walkingRouteCoordinates}
+          strokeColor="#059669"
+          strokeWidth={4}
+          geodesic={true}
+          lineDashPattern={[6, 6]}
+        />
+      )}
+
+      {/* 🛣️ Real Street-Level Driving Route Polyline (Pickup Hub to Destination Hub) */}
       {routeCoordinates && routeCoordinates.length > 0 && (
         <Polyline
           coordinates={routeCoordinates}
-          strokeColor="#059669"
-          strokeWidth={5}
+          strokeColor="#3B82F6"
+          strokeWidth={4}
           geodesic={true}
         />
       )}
@@ -185,6 +251,10 @@ export default function LiveTrackingScreen({ route, navigation }) {
   
   const [pickupLocation, setPickupLocation] = useState({ latitude: null, longitude: null, title: "Pickup Hub" });
   const [destinationLocation, setDestinationLocation] = useState({ latitude: null, longitude: null, title: "Destination Hub" });
+  
+  const [walkingDistance, setWalkingDistance] = useState(null);
+  const [walkingDuration, setWalkingDuration] = useState(null);
+  const [walkingCoordinates, setWalkingCoordinates] = useState([]);
   const [routeCoordinates, setRouteCoordinates] = useState([]);
 
   const [pickupHubName, setPickupHubName] = useState("Fetching Pickup Hub...");
@@ -214,7 +284,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
-          // Watch precise GPS location coordinates
           locationSubscription = await Location.watchPositionAsync(
             {
               accuracy: Location.Accuracy.Balanced,
@@ -232,7 +301,6 @@ export default function LiveTrackingScreen({ route, navigation }) {
             }
           );
 
-          // Watch device magnetometer heading for real-time compass arrow rotation
           headingSubscription = await Location.watchHeadingAsync((headingObj) => {
             if (headingObj && isMounted) {
               const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magneticHeading;
@@ -298,7 +366,24 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => { isMounted = false; };
   }, [rideOfferId]);
 
-  // 3. GENERATE STREET-LEVEL ROUTE POLYLINE FROM PICKUP HUB TO DESTINATION HUB
+  // 3. GENERATE STREET-LEVEL WALKING ROUTE (Current Device to Pickup Hub)
+  useEffect(() => {
+    let isMounted = true;
+    async function loadWalkingRoute() {
+      if (currentLocation?.latitude && pickupLocation?.latitude) {
+        const routeData = await fetchWalkingRoute(currentLocation, pickupLocation);
+        if (isMounted) {
+          setWalkingDistance(routeData.distance);
+          setWalkingDuration(routeData.duration);
+          setWalkingCoordinates(routeData.coordinates);
+        }
+      }
+    }
+    loadWalkingRoute();
+    return () => { isMounted = false; };
+  }, [currentLocation?.latitude, currentLocation?.longitude, pickupLocation?.latitude, pickupLocation?.longitude]);
+
+  // 4. GENERATE STREET-LEVEL DRIVING ROUTE (Pickup Hub to Destination Hub)
   useEffect(() => {
     let isMounted = true;
     async function updateStreetRoute() {
@@ -460,6 +545,23 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* 1. TOP BANNER STATUS BAR */}
+      <View style={styles.statusBarBanner}>
+        <View style={styles.statusIndicatorWrapper}>
+          <View style={styles.statusCenterCoreDot}>
+            <FontAwesome5 name="car-side" size={11} color="#FFFFFF" />
+          </View>
+        </View>
+        <View style={styles.statusTextContainer}>
+          <Text style={styles.statusPrimaryText}>Live Tracking & Hub Presence</Text>
+          <Text style={styles.statusSecondaryText}>
+            {walkingDistance && walkingDuration 
+              ? `Walk ${walkingDistance} (~${walkingDuration}) to ${pickupHubName}` 
+              : `Head to ${pickupHubName}`}
+          </Text>
+        </View>
+      </View>
+
       {/* MAP SECTION */}
       <View style={styles.mapContainer}>
         <TrackingMap 
@@ -467,6 +569,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
           driverLocation={driverLocation}
           pickupLocation={pickupLocation}
           destinationLocation={destinationLocation}
+          walkingRouteCoordinates={walkingCoordinates}
           routeCoordinates={routeCoordinates}
           mapRef={mapRef} 
           isDrawerExpanded={isDrawerExpanded}
@@ -488,6 +591,14 @@ export default function LiveTrackingScreen({ route, navigation }) {
               <Text style={styles.subtitle} numberOfLines={1}>
                 To <Text style={styles.boldText}>{pickupHubName}</Text>
               </Text>
+              {walkingDistance && walkingDuration && (
+                <View style={styles.walkingInfoPill}>
+                  <MaterialCommunityIcons name="walk" size={12} color="#059669" />
+                  <Text style={styles.walkingInfoText}>
+                    Walk {walkingDistance} • ~{walkingDuration} away
+                  </Text>
+                </View>
+              )}
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <View style={[styles.statusBadge, isArrived ? styles.badgeArrived : styles.badgeAccepted]}>
@@ -600,6 +711,15 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
+  
+  // Status Bar Banner
+  statusBarBanner: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, zIndex: 20 },
+  statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
+  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: "#A7F3D0" },
+  statusTextContainer: { flex: 1 },
+  statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+  statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
+
   mapContainer: { flex: 1 },
   
   // Circular Glowing Compass Arrow Passenger Marker
@@ -614,9 +734,10 @@ const styles = StyleSheet.create({
   glowingEmeraldBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF" },
   glowingDestinationOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
   glowingDestinationBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#3B82F6", borderWidth: 2, borderColor: "#FFFFFF" },
+
   slidingPanelDrawer: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 8, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 15 },
-  drawerExpanded: { height: height * 0.52 },
-  drawerCollapsed: { height: 110 },
+  drawerExpanded: { height: height * 0.55 },
+  drawerCollapsed: { height: 125 },
   dragHandleContainer: { width: "100%", paddingVertical: 6, alignItems: "center" },
   dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", marginBottom: 8 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%", paddingBottom: 4 },
@@ -624,11 +745,15 @@ const styles = StyleSheet.create({
   title: { fontSize: 15, fontWeight: "700", color: "#1E293B" },
   subtitle: { fontSize: 12, color: "#64748B", marginTop: 2 },
   boldText: { fontWeight: "700", color: "#0F172A" },
+
+  walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 4, borderWidth: 1, borderColor: "#A7F3D0" },
+  walkingInfoText: { fontSize: 11, fontWeight: "600", color: "#059669", marginLeft: 4 },
+
   statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   badgeAccepted: { backgroundColor: "#E0F2FE" },
   badgeArrived: { backgroundColor: "#ECFDF5" },
   badgeText: { fontSize: 10, fontWeight: "700", color: "#0369A1" },
-  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 4 },
+  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 4, alignSelf: "flex-end" },
   expandToggleText: { fontSize: 11, color: "#64748B", marginRight: 2 },
   drawerScrollBody: { marginTop: 8 },
   routeCard: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },

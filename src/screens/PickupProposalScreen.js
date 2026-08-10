@@ -24,13 +24,14 @@ const API_URL = "http://100.108.52.79:5000";
 const DEFAULT_LOCATION = {
   latitude: 9.0220,
   longitude: 38.8450,
+  heading: 0,
   latitudeDelta: 0.015,
   longitudeDelta: 0.015,
 };
 
 // Fetch real street-level walking path from OSRM public walking router with urban grid fallback
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
-  if (!userLoc || !hubLoc || !hubLoc.latitude) {
+  if (!userLoc || !hubLoc || !hubLoc.latitude || !userLoc.latitude) {
     return { distance: null, duration: null, coordinates: [] };
   }
 
@@ -83,7 +84,7 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (Pinned Device Location & Pinned Pickup Hub)
+// MEMOIZED MAP VIEW (Circular Glowing Compass Arrow & Clean Pickup Hub Pin)
 // ------------------------------------------------------------------
 const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordinates, mapRef }) => {
   return (
@@ -97,27 +98,25 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       showsCompass={false}
       customMapStyle={cleanMinimalMapStyle}
     >
-      {/* 🔵 Pinned Passenger Live Device GPS Marker */}
-      {currentLocation && (
+      {/* 🧭 Circular Glowing Compass Arrow Passenger Marker */}
+      {currentLocation && currentLocation.latitude && (
         <Marker 
           coordinate={currentLocation} 
           title="Your Current Location" 
-          anchor={{ x: 0.5, y: 0.8 }}
+          description="Passenger (Compass Heading Active)"
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat={true}
           tracksViewChanges={false}
         >
-          <View style={styles.passengerMarkerGroup}>
-            <View style={styles.passengerLabelBubble}>
-              <View style={styles.passengerBubbleDot} />
-              <Text style={styles.passengerBubbleText}>Your Location (You)</Text>
-            </View>
-            <View style={styles.userLocationHalo}>
-              <View style={styles.userLocationDot} />
+          <View style={styles.userArrowOuterHalo}>
+            <View style={[styles.userArrowContainer, { transform: [{ rotate: `${currentLocation.heading || 0}deg` }] }]}>
+              <Ionicons name="navigate" size={18} color="#FFFFFF" />
             </View>
           </View>
         </Marker>
       )}
 
-      {/* 📍 Pinned Database Pickup Hub Marker */}
+      {/* 📍 Clean Pickup Hub Marker */}
       {meetupLocation && meetupLocation.latitude && (
         <Marker 
           coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
@@ -137,7 +136,7 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
         </Marker>
       )}
 
-      {/* 🛣️ Real Street-Level Walking Route Polyline */}
+      {/* 🛣️ Real Street-Level Walking Route Polyline (Current Device to Pickup Hub) */}
       {walkingRouteCoordinates && walkingRouteCoordinates.length > 0 && (
         <Polyline
           coordinates={walkingRouteCoordinates}
@@ -162,7 +161,7 @@ export default function PickupProposalScreen({ navigation }) {
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
   
-  const [currentLocation, setCurrentLocation] = useState(null);
+  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   
   const [walkingDistance, setWalkingDistance] = useState(null);
@@ -190,27 +189,53 @@ export default function PickupProposalScreen({ navigation }) {
     navigation.replace("LiveTracking", { rideOfferId });
   }, [navigation]);
 
+  // Real-time GPS location watch + compass heading watch
   useEffect(() => {
+    let locationSubscription = null;
+    let headingSubscription = null;
     let isMounted = true;
+
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
-          const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          if (location && isMounted) {
-            setCurrentLocation({
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              latitudeDelta: 0.015,
-              longitudeDelta: 0.015,
-            });
-          }
+          locationSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: 2000,
+              distanceInterval: 1,
+            },
+            (loc) => {
+              if (loc && loc.coords && isMounted) {
+                setCurrentLocation((prev) => ({
+                  ...prev,
+                  latitude: loc.coords.latitude,
+                  longitude: loc.coords.longitude,
+                }));
+              }
+            }
+          );
+
+          headingSubscription = await Location.watchHeadingAsync((headingObj) => {
+            if (headingObj && isMounted) {
+              const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magneticHeading;
+              setCurrentLocation((prev) => ({
+                ...prev,
+                heading: compassHeading || 0,
+              }));
+            }
+          });
         }
       } catch (err) {
-        console.log("⚠️ Could not fetch device location, using default.");
+        console.log("📍 Location/Heading subscription skip:", err.message);
       }
     })();
-    return () => { isMounted = false; };
+
+    return () => {
+      isMounted = false;
+      if (locationSubscription) locationSubscription.remove();
+      if (headingSubscription) headingSubscription.remove();
+    };
   }, []);
 
   const fetchMapCoordinatesData = useCallback(async (rideOfferId) => {
@@ -231,10 +256,11 @@ export default function PickupProposalScreen({ navigation }) {
     }
   }, []);
 
+  // Fetch walking route whenever user coordinates or meetup hub changes
   useEffect(() => {
     let isMounted = true;
     async function loadWalkingRoute() {
-      if (currentLocation && meetupHub?.latitude) {
+      if (currentLocation?.latitude && meetupHub?.latitude) {
         const routeData = await fetchWalkingRoute(currentLocation, meetupHub);
         if (isMounted) {
           setWalkingDistance(routeData.distance);
@@ -245,9 +271,9 @@ export default function PickupProposalScreen({ navigation }) {
     }
     loadWalkingRoute();
     return () => { isMounted = false; };
-  }, [currentLocation, meetupHub]);
+  }, [currentLocation?.latitude, currentLocation?.longitude, meetupHub?.latitude, meetupHub?.longitude]);
 
-  // Explicitly fit map bounds to keep BOTH the device location pin and pickup hub pin pinned and framed
+  // Explicitly fit map bounds to keep BOTH the compass arrow and pickup hub pin framed
   useEffect(() => {
     if (mapRef.current && currentLocation?.latitude && meetupHub?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
@@ -263,7 +289,7 @@ export default function PickupProposalScreen({ navigation }) {
         animated: true,
       });
     }
-  }, [currentLocation, meetupHub, walkingCoordinates, isDrawerExpanded]);
+  }, [currentLocation?.latitude, currentLocation?.longitude, meetupHub?.latitude, meetupHub?.longitude, walkingCoordinates, isDrawerExpanded]);
 
   useEffect(() => {
     if (timeLeft <= 0) return;
@@ -311,7 +337,6 @@ export default function PickupProposalScreen({ navigation }) {
           const myRoutePoolStatus = myRow ? (myRow.status || "searching").toLowerCase().trim() : "searching";
           const rawMyStatus = (userAccepted || isUserAcceptedInOffer || myRoutePoolStatus === "accepted") ? "accepted" : myRoutePoolStatus;
 
-          // 🎵 Play Sound 4 when user status shifts to ACCEPTED
           if (rawMyStatus === "accepted" && prevMyStatusRef.current !== "accepted") {
             playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
           }
@@ -319,7 +344,6 @@ export default function PickupProposalScreen({ navigation }) {
           setMyDbStatus(rawMyStatus);
           if (rawMyStatus === "accepted") setUserAccepted(true);
 
-          // Track each co-rider individually and play Sound 4 the moment any co-rider shifts to "accepted"
           const newCoRiderStatuses = {};
           let coRiderStatusChangedToAccepted = false;
 
@@ -334,7 +358,6 @@ export default function PickupProposalScreen({ navigation }) {
 
               newCoRiderStatuses[pId] = effectivePStatus;
 
-              // Check if this specific co-rider just transitioned from non-accepted to accepted
               const previousStatus = prevCoRiderStatusesRef.current[pId];
               if (effectivePStatus === "accepted" && previousStatus && previousStatus !== "accepted") {
                 coRiderStatusChangedToAccepted = true;
@@ -357,7 +380,6 @@ export default function PickupProposalScreen({ navigation }) {
 
           const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
           
-          // 🎵 Play Sound 4 when driver accepts
           if (currentDriverStatus === "accepted" && prevDriverStateRef.current !== "accepted") {
             playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
           }
@@ -590,15 +612,11 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1 },
   mapPlaceholder: { flex: 1, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center" },
   
-  // Pinned Passenger Marker Group
-  passengerMarkerGroup: { alignItems: "center" },
-  passengerLabelBubble: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 4, elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
-  passengerBubbleDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#A7F3D0", marginRight: 5 },
-  passengerBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700" },
-  userLocationHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
-  userLocationDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+  // Circular Glowing Compass Arrow Passenger Marker
+  userArrowOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(14, 165, 233, 0.25)", justifyContent: "center", alignItems: "center" },
+  userArrowContainer: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#0EA5E9", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
   
-  // Pinned Pickup Hub Marker Group
+  // Clean Pickup Hub Marker Group
   pickupMarkerContainer: { alignItems: "center" },
   pickupPinBubble: { backgroundColor: "#111827", flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
   pickupBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700", maxWidth: 140 },
