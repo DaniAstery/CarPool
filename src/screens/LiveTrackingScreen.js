@@ -25,6 +25,7 @@ const API_URL = "http://100.108.52.79:5000";
 const DEFAULT_LOCATION = {
   latitude: 9.0235,
   longitude: 38.8275,
+  heading: 0,
   latitudeDelta: 0.02,
   longitudeDelta: 0.02,
 };
@@ -54,9 +55,9 @@ const fetchDrivingRoute = async (origin, destination) => {
 };
 
 // ------------------------------------------------------------------
-// MEMOIZED MAP VIEW (3 Distinct Ride-App Markers: User, Pickup, Destination)
+// MEMOIZED MAP VIEW (Circular Glowing Compass Arrow, Driver, Pickup, Destination)
 // ------------------------------------------------------------------
-const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded }) => {
+const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded }) => {
   const hasFitted = useRef(false);
 
   useEffect(() => {
@@ -65,6 +66,7 @@ const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       const coordsToFit = [
         ...(currentLocation?.latitude ? [{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }] : []),
+        ...(driverLocation?.latitude ? [{ latitude: driverLocation.latitude, longitude: driverLocation.longitude }] : []),
         { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude },
         { latitude: destinationLocation.latitude, longitude: destinationLocation.longitude },
         ...routeCoordinates
@@ -77,7 +79,7 @@ const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation
         });
       } catch (e) {}
     }
-  }, [currentLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded]);
+  }, [currentLocation, driverLocation, pickupLocation, destinationLocation, routeCoordinates, mapRef, isDrawerExpanded]);
 
   return (
     <MapView
@@ -89,16 +91,41 @@ const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation
       showsMyLocationButton={false}
       showsCompass={false}
     >
-      {/* 🔵 1. Passenger / User Current Device GPS Marker (Cyan/Blue Dot) */}
+      {/* 🧭 1. Circular Glowing Compass Arrow Passenger Marker */}
       {currentLocation && currentLocation.latitude && (
-        <Marker coordinate={currentLocation} title="Your Location" anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={styles.userMarkerHalo}>
-            <View style={styles.userMarkerDot} />
+        <Marker 
+          coordinate={currentLocation} 
+          title="Your Location" 
+          description="Passenger (Compass Heading Active)"
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat={true}
+        >
+          <View style={styles.userArrowOuterHalo}>
+            <View style={[styles.userArrowContainer, { transform: [{ rotate: `${currentLocation.heading || 0}deg` }] }]}>
+              <Ionicons name="navigate" size={18} color="#FFFFFF" />
+            </View>
           </View>
         </Marker>
       )}
 
-      {/* 🟢 2. Pickup Hub Marker (Emerald Green Ride-App Dot) */}
+      {/* 🚗 2. Live Assigned Driver Pin Marker */}
+      {driverLocation && driverLocation.latitude && driverLocation.longitude && (
+        <Marker 
+          coordinate={driverLocation} 
+          title={driverLocation.title || "Assigned Driver"} 
+          description="Live Driver Location relative to passenger"
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat={true}
+        >
+          <View style={styles.driverMarkerOuterHalo}>
+            <View style={styles.driverMarkerContainer}>
+              <Ionicons name="car-sport" size={16} color="#FFFFFF" />
+            </View>
+          </View>
+        </Marker>
+      )}
+
+      {/* 🟢 3. Pickup Hub Marker (Emerald Green Ride-App Dot) */}
       {pickupLocation && pickupLocation.latitude && pickupLocation.longitude && (
         <Marker 
           coordinate={{ latitude: Number(pickupLocation.latitude), longitude: Number(pickupLocation.longitude) }} 
@@ -111,7 +138,7 @@ const TrackingMap = memo(({ currentLocation, pickupLocation, destinationLocation
         </Marker>
       )}
 
-      {/* 🔵 3. Destination Hub Marker (Royal Blue Ride-App Dot) */}
+      {/* 🔵 4. Destination Hub Marker (Royal Blue Ride-App Dot) */}
       {destinationLocation && destinationLocation.latitude && destinationLocation.longitude && (
         <Marker 
           coordinate={{ latitude: Number(destinationLocation.latitude), longitude: Number(destinationLocation.longitude) }} 
@@ -142,8 +169,9 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
   const rideOfferId = route?.params?.rideOfferId || 0;
 
-  // 🎵 Placed correctly inside the component function scope
   const arrivedSoundPlayedRef = useRef(false);
+  const prevCoRiderStatusesRef = useRef({});
+  const prevDriverStateRef = useRef("accepted");
 
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [myStatus, setMyStatus] = useState("accepted");
@@ -153,6 +181,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const [coRiders, setCoRiders] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
+  const [driverLocation, setDriverLocation] = useState({ latitude: null, longitude: null, title: "Assigned Driver" });
   
   const [pickupLocation, setPickupLocation] = useState({ latitude: null, longitude: null, title: "Pickup Hub" });
   const [destinationLocation, setDestinationLocation] = useState({ latitude: null, longitude: null, title: "Destination Hub" });
@@ -172,30 +201,58 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
   const navigateToDeparture = useCallback(() => {
     navigation.replace("TripDeparture", { rideOfferId, userId: currentUserId });
+    playSound("4");
   }, [navigation, rideOfferId, currentUserId]);
 
-  // Fetch initial GPS location
+  // Real-time GPS location watch + device compass heading watch for smooth arrow rotation
   useEffect(() => {
+    let locationSubscription = null;
+    let headingSubscription = null;
     let isMounted = true;
+
     (async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          if (loc && isMounted) {
-            setCurrentLocation({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-              latitudeDelta: 0.02,
-              longitudeDelta: 0.02,
-            });
-          }
+          // Watch precise GPS location coordinates
+          locationSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: 2000,
+              distanceInterval: 1,
+            },
+            (loc) => {
+              if (loc && loc.coords && isMounted) {
+                setCurrentLocation((prev) => ({
+                  ...prev,
+                  latitude: loc.coords.latitude,
+                  longitude: loc.coords.longitude,
+                }));
+              }
+            }
+          );
+
+          // Watch device magnetometer heading for real-time compass arrow rotation
+          headingSubscription = await Location.watchHeadingAsync((headingObj) => {
+            if (headingObj && isMounted) {
+              const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magneticHeading;
+              setCurrentLocation((prev) => ({
+                ...prev,
+                heading: compassHeading || 0,
+              }));
+            }
+          });
         }
       } catch (err) {
-        console.log("📍 Location skip:", err.message);
+        console.log("📍 Location/Heading subscription skip:", err.message);
       }
     })();
-    return () => { isMounted = false; };
+
+    return () => {
+      isMounted = false;
+      if (locationSubscription) locationSubscription.remove();
+      if (headingSubscription) headingSubscription.remove();
+    };
   }, []);
 
   // 2. FETCH PRECISE AUTHORITATIVE PICKUP & DESTINATION COORDINATES FROM MAP_COORDINATES
@@ -256,7 +313,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => { isMounted = false; };
   }, [pickupLocation, destinationLocation]);
 
-  // Poll presence status (Driver state & co-riders) + Sound 5 trigger on arrival transition
+  // Poll presence status (Driver state, driver live coordinates & co-riders) + Track precise transitions to ARRIVED + Sound 5
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
@@ -274,7 +331,24 @@ export default function LiveTrackingScreen({ route, navigation }) {
           if (data.dropoff_hub) setDropoffHubName(data.dropoff_hub);
           if (data.driverName) setDriverName(data.driverName);
           if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
-          if (data.driver_status) setDriverState(data.driver_status.toLowerCase());
+          
+          const dLat = parseFloat(data.driver_latitude || data.driver_lat);
+          const dLng = parseFloat(data.driver_longitude || data.driver_lng);
+          if (!isNaN(dLat) && !isNaN(dLng)) {
+            setDriverLocation({
+              latitude: dLat,
+              longitude: dLng,
+              title: data.driverName ? `${data.driverName}'s Vehicle` : "Assigned Driver"
+            });
+          }
+
+          const newDriverStatus = (data.driver_status || "accepted").toLowerCase().trim();
+
+          if (newDriverStatus === "arrived" && prevDriverStateRef.current !== "arrived") {
+            playSound("5");
+          }
+          prevDriverStateRef.current = newDriverStatus;
+          setDriverState(newDriverStatus);
 
           const passengers = data.passengers || [];
           const myRow = passengers.find(
@@ -283,12 +357,11 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
           const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
           
-          if (rawMyStatus === "in_trip" || data.driver_status?.toLowerCase() === "in_trip") {
+          if (rawMyStatus === "in_trip" || newDriverStatus === "in_trip") {
             navigateToDeparture();
             return;
           }
 
-          // 🎵 TRIGGER SOUND "5" THE MOMENT STATUS CHANGES TO ARRIVED
           if (rawMyStatus === "arrived" && !arrivedSoundPlayedRef.current) {
             arrivedSoundPlayedRef.current = true;
             playSound("5");
@@ -296,20 +369,39 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
           setMyStatus(rawMyStatus);
 
+          const newCoRiderStatuses = {};
+          let coRiderStatusChangedToArrived = false;
+
           const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
           const parsedCoRiders = passengers
             .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
-            .map((p, idx) => ({
-              id: parseInt(p.user_id || p.userId || p.id, 10),
-              name: p.full_name || `Rider ${p.user_id || p.userId || p.id}`,
-              status: (p.status || "accepted").toUpperCase(),
-              color: colorPalette[idx % colorPalette.length],
-            }));
+            .map((p, idx) => {
+              const pId = parseInt(p.user_id || p.userId || p.id, 10);
+              const pStatus = (p.status || "accepted").toLowerCase().trim();
+              
+              newCoRiderStatuses[pId] = pStatus;
 
+              const previousStatus = prevCoRiderStatusesRef.current[pId];
+              if (pStatus === "arrived" && previousStatus && previousStatus !== "arrived") {
+                coRiderStatusChangedToArrived = true;
+              }
+
+              return {
+                id: pId,
+                name: p.full_name || `Rider ${pId}`,
+                status: pStatus.toUpperCase(),
+                color: colorPalette[idx % colorPalette.length],
+              };
+            });
+
+          if (coRiderStatusChangedToArrived) {
+            playSound("5");
+          }
+
+          prevCoRiderStatusesRef.current = newCoRiderStatuses;
           setCoRiders(parsedCoRiders);
         }
       } catch (err) {
-        // Suppress background poll errors
       } finally {
         if (isSubscribed) {
           timerId = setTimeout(fetchHubPresenceStatus, 3500);
@@ -341,7 +433,9 @@ export default function LiveTrackingScreen({ route, navigation }) {
       }
 
       setMyStatus("arrived");
+      arrivedSoundPlayedRef.current = true;
       playSound("5");  
+
       if (data.passengers && Array.isArray(data.passengers)) {
         const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
         const instantCoRiders = data.passengers
@@ -362,6 +456,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   };
 
   const isArrived = myStatus === "arrived" || myStatus === "completed";
+  const isDriverArrived = driverState === "arrived";
 
   return (
     <SafeAreaView style={styles.container}>
@@ -369,6 +464,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
       <View style={styles.mapContainer}>
         <TrackingMap 
           currentLocation={currentLocation} 
+          driverLocation={driverLocation}
           pickupLocation={pickupLocation}
           destinationLocation={destinationLocation}
           routeCoordinates={routeCoordinates}
@@ -432,13 +528,20 @@ export default function LiveTrackingScreen({ route, navigation }) {
             </View>
           </View>
 
-          {/* Driver Card */}
-          <View style={styles.driverCard}>
-            <Ionicons name="car" size={22} color="#2F4F4F" />
+          {/* Driver Card with Distinct Arrival Status Highlighting */}
+          <View style={[styles.driverCard, isDriverArrived && styles.driverCardArrived]}>
+            <Ionicons name="car" size={22} color={isDriverArrived ? "#059669" : "#2F4F4F"} />
             <View style={{ marginLeft: 10, flex: 1 }}>
               <Text style={styles.driverLabel}>{driverName} • {vehicleInfo}</Text>
-              <Text style={styles.driverSub}>Driver Status: <Text style={styles.boldText}>{driverState.toUpperCase()}</Text></Text>
+              <Text style={styles.driverSub}>
+                Driver Status: <Text style={[styles.boldText, isDriverArrived && styles.driverArrivedText]}>{driverState.toUpperCase()}</Text>
+              </Text>
             </View>
+            {isDriverArrived && (
+              <View style={styles.driverArrivedBadge}>
+                <Text style={styles.driverArrivedBadgeText}>ARRIVED</Text>
+              </View>
+            )}
           </View>
 
           {/* Co-Riders Matrix */}
@@ -498,8 +601,15 @@ export default function LiveTrackingScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0F172A" },
   mapContainer: { flex: 1 },
-  userMarkerHalo: { width: 24, height: 24, borderRadius: 12, backgroundColor: "rgba(14, 165, 233, 0.2)", justifyContent: "center", alignItems: "center" },
-  userMarkerDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#0EA5E9", borderWidth: 2, borderColor: "#FFFFFF" },
+  
+  // Circular Glowing Compass Arrow Passenger Marker
+  userArrowOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(14, 165, 233, 0.25)", justifyContent: "center", alignItems: "center" },
+  userArrowContainer: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#0EA5E9", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+
+  // Driver Pin Marker
+  driverMarkerOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(5, 150, 105, 0.25)", justifyContent: "center", alignItems: "center" },
+  driverMarkerContainer: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
+
   glowingEmeraldOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
   glowingEmeraldBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF" },
   glowingDestinationOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
@@ -527,8 +637,12 @@ const styles = StyleSheet.create({
   routeLabel: { fontSize: 10, fontWeight: "700", color: "#64748B", letterSpacing: 0.5 },
   routeValue: { fontSize: 13, fontWeight: "600", color: "#1E293B", marginTop: 1 },
   driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F1F5F9", borderRadius: 12, padding: 12, marginBottom: 12 },
+  driverCardArrived: { backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#059669" },
   driverLabel: { fontSize: 13, fontWeight: "700", color: "#1E293B" },
   driverSub: { fontSize: 11, color: "#64748B", marginTop: 2 },
+  driverArrivedText: { color: "#059669" },
+  driverArrivedBadge: { backgroundColor: "#059669", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  driverArrivedBadgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" },
   rosterContainer: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },
   sectionHeader: { fontSize: 12, fontWeight: "700", color: "#475569", marginBottom: 8 },
   riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: "#E2E8F0" },
@@ -539,7 +653,7 @@ const styles = StyleSheet.create({
   tagAccepted: { backgroundColor: "#E0F2FE", color: "#0369A1" },
   tagArrived: { backgroundColor: "#ECFDF5", color: "#059669" },
   tagPending: { backgroundColor: "#FEF3C7", color: "#D97706" },
-  actionButton: { backgroundColor: "#059669", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center", marginTop: 6, marginBottom: 10 },
+  actionButton: { backgroundColor: "#059669", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, alignItems: "center", justifyContent: "center", marginTop: 6, marginBottom: 10 },
   actionButtonDisabled: { backgroundColor: "#9CA3AF" },
   actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" }
 });

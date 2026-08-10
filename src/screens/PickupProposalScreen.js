@@ -16,7 +16,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
-import { playSound } from "../utils/soundPlayer"; // 👈 1. Import sound player
+import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -177,7 +177,7 @@ export default function PickupProposalScreen({ navigation }) {
 
   const mapRef = useRef(null);
   const prevMyStatusRef = useRef("searching"); 
-  const prevAcceptedCountRef = useRef(0);      
+  const prevCoRiderStatusesRef = useRef({});      
   const prevDriverStateRef = useRef("pending");
 
   useEffect(() => {
@@ -309,27 +309,55 @@ export default function PickupProposalScreen({ navigation }) {
           
           const myRow = passengers.find(p => parseInt(p.user_id, 10) === currentUserId);
           const myRoutePoolStatus = myRow ? (myRow.status || "searching").toLowerCase().trim() : "searching";
-          const rawMyStatus = (userAccepted || isUserAcceptedInOffer) ? "accepted" : myRoutePoolStatus;
+          const rawMyStatus = (userAccepted || isUserAcceptedInOffer || myRoutePoolStatus === "accepted") ? "accepted" : myRoutePoolStatus;
 
-          // 🎵 TRIGGER SOUND WHEN USER STATUS TURNS TO "ACCEPTED" IN POOL
+          // 🎵 Play Sound 4 when user status shifts to ACCEPTED
           if (rawMyStatus === "accepted" && prevMyStatusRef.current !== "accepted") {
             playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
           }
           prevMyStatusRef.current = rawMyStatus;
-
-          // 🎵 TRIGGER SOUND WHEN ANY CO-RIDER'S STATUS TURNS TO "ACCEPTED"
-          const currentAcceptedCount = normalizedAcceptedIds.length;
-          if (currentAcceptedCount > prevAcceptedCountRef.current && prevAcceptedCountRef.current > 0) {
-            playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
-          }
-          prevAcceptedCountRef.current = currentAcceptedCount;
-
           setMyDbStatus(rawMyStatus);
           if (rawMyStatus === "accepted") setUserAccepted(true);
 
+          // Track each co-rider individually and play Sound 4 the moment any co-rider shifts to "accepted"
+          const newCoRiderStatuses = {};
+          let coRiderStatusChangedToAccepted = false;
+
+          const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
+          const parsedCoRiders = passengers
+            .filter(p => parseInt(p.user_id, 10) !== currentUserId)
+            .map((p, idx) => {
+              const pId = parseInt(p.user_id, 10);
+              const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
+              const pRoutePoolStatus = (p.status || "searching").toLowerCase().trim();
+              const effectivePStatus = (isCoRiderAccepted || pRoutePoolStatus === "accepted") ? "accepted" : pRoutePoolStatus;
+
+              newCoRiderStatuses[pId] = effectivePStatus;
+
+              // Check if this specific co-rider just transitioned from non-accepted to accepted
+              const previousStatus = prevCoRiderStatusesRef.current[pId];
+              if (effectivePStatus === "accepted" && previousStatus && previousStatus !== "accepted") {
+                coRiderStatusChangedToAccepted = true;
+              }
+
+              return {
+                id: pId,
+                name: p.full_name || p.name || `Rider ${pId}`,
+                status: effectivePStatus.toUpperCase(),
+                color: colorPalette[idx % colorPalette.length],
+              };
+            });
+
+          if (coRiderStatusChangedToAccepted) {
+            playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+          }
+
+          prevCoRiderStatusesRef.current = newCoRiderStatuses;
+          setCoRiders(parsedCoRiders);
+
           const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
           
-          // 🎵 TRIGGER SOUND WHEN DRIVER ACCEPTS
+          // 🎵 Play Sound 4 when driver accepts
           if (currentDriverStatus === "accepted" && prevDriverStateRef.current !== "accepted") {
             playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
           }
@@ -340,25 +368,6 @@ export default function PickupProposalScreen({ navigation }) {
           if (currentDriverStatus === "accepted" && activeRideOfferId) {
             navigateToTracking(activeRideOfferId);
             return; 
-          }
-
-          if (Array.isArray(passengers)) {
-            const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-            const parsedCoRiders = passengers
-              .filter(p => parseInt(p.user_id, 10) !== currentUserId)
-              .map((p, idx) => {
-                const pId = parseInt(p.user_id, 10);
-                const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
-                const pRoutePoolStatus = (p.status || "searching").toLowerCase().trim();
-
-                return {
-                  id: pId,
-                  name: p.full_name || p.name || `Rider ${pId}`,
-                  status: isCoRiderAccepted ? "ACCEPTED" : pRoutePoolStatus.toUpperCase(),
-                  color: colorPalette[idx % colorPalette.length],
-                };
-              });
-            setCoRiders(parsedCoRiders);
           }
         }
       } catch (err) {} 
@@ -380,6 +389,7 @@ export default function PickupProposalScreen({ navigation }) {
   const handleAcceptProposal = async () => {
     setUserAccepted(true);
     setMyDbStatus("accepted");
+    playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
 
     try {
       const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {

@@ -18,6 +18,7 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import {playSound} from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
@@ -367,6 +368,7 @@ export default function TripDepartureScreen({ route, navigation }) {
         fixedPrice: rideDetails.fixedPrice,
         corridor: rideDetails.corridor,
       });
+      playSound(5);
     } catch (payError) {
       Alert.alert("Checkout Disconnect", "Unable to establish secure gateway navigation context.");
     }

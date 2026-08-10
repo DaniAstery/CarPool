@@ -11,6 +11,7 @@ import {
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { useAuth } from "../AuthContext";
+import { playSound } from "../utils/soundPlayer";
 
 export default function TripPaymentScreen({ navigation }) {
   const { user } = useAuth();
@@ -84,6 +85,7 @@ export default function TripPaymentScreen({ navigation }) {
       }, 600);
     } catch (err) {
       setIsProcessing(false);
+      playSound(7);
       Alert.alert("Error", "Failed to copy number to clipboard.");
     }
   };
@@ -102,6 +104,7 @@ export default function TripPaymentScreen({ navigation }) {
           {
             text: "I Have Paid",
             onPress: () => {
+              playSound(6);
               navigation.reset({
                 index: 0,
                 routes: [{ name: "Passenger" }],
