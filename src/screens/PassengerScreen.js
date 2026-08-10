@@ -14,6 +14,7 @@ import { useAuth } from '../AuthContext';
 import * as Location from 'expo-location';
 import io from "socket.io-client";
 import CorridorDrawer from "../screens/Corridor_Drawer";
+import { playSound } from "../utils/soundPlayer";
 
 const API_URL = "http://100.108.52.79:5000/api"; 
 const socket = io("http://100.108.52.79:5000");
@@ -256,6 +257,7 @@ export default function PassengerScreen({ navigation }) {
         return;
       }
 
+      playSound(1);
       const payload = {
         user_lat: userCoords?.latitude || 9.0022471,
         user_lng: userCoords?.longitude || 38.8100596,
@@ -288,7 +290,7 @@ export default function PassengerScreen({ navigation }) {
       
       const isRecovered = data.alreadyActive === true;
       const targetScreen = isRecovered ? (data.navigateTo || "MatchingScreen") : "MatchingScreen";
-
+      playSound(1);
       const passThrough = item.pass_through_name ? ` ➔ ${item.pass_through_name}` : "";
       const routeTitle = item.pickup_hub_name && item.name 
         ? `${item.pickup_hub_name}${passThrough} ➔ ${item.name}` 
