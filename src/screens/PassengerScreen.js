@@ -10,19 +10,23 @@ import {
 } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useAuth } from '../AuthContext'; 
-import * as Location from 'expo-location';
-import io from "socket.io-client";
-import CorridorDrawer from "../screens/Corridor_Drawer";
-import { playSound } from "../utils/soundPlayer";
+  import { useAuth } from '../AuthContext'; 
+  import * as Location from 'expo-location';
+  import io from "socket.io-client";
+  import CorridorDrawer from "../screens/Corridor_Drawer";
+  import { playSound } from "../utils/soundPlayer";
+  import { useLocationPinger } from '../hooks/useLocationPinger';
 
-const API_URL = "http://100.108.52.79:5000/api"; 
-const socket = io("http://100.108.52.79:5000");
+  const API_URL = "http://100.108.52.79:5000/api"; 
+  const socket = io("http://100.108.52.79:5000");
 
-export default function PassengerScreen({ navigation }) {
-  const { user, logoutSession } = useAuth();
+  export default function PassengerScreen({ navigation }) {
+    const { user, logoutSession } = useAuth();
+    // Start the location pinger hook to send GPS updates to the server
 
-  const currentUserId = user?.id || user?.userId || 12;
+
+    const currentUserId = user?.id || user?.userId || 12;
+    useLocationPinger(currentUserId, true);
   const userRole = user?.role || "passenger";
   const userName = user?.name || user?.full_name || "Passenger";
 

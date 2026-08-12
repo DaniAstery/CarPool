@@ -1,42 +1,75 @@
 import { useEffect } from 'react';
 import * as Location from 'expo-location';
 
-// Replace with machine IP or emulator host (10.0.2.2 for Android Emulator)
-const SERVER_URL = 'http://192.168.1.3:5001/api/driver/location';
+// ⚠️ Ensure this IP matches your server machine and port 5001
+const SERVER_URL = 'http://100.108.52.79:5001/api/location/ping';
 
-export const useLocationPinger = (user, isActive = false) => {
+export const useLocationPinger = (userOrId, isActive = false) => {
+  // Extract primitive user ID safely from object or raw value
+  const userId = typeof userOrId === 'object' 
+    ? (userOrId?.id || userOrId?.userId) 
+    : userOrId;
+
   useEffect(() => {
-    if (!user?.id || !isActive) return;
+    console.log('🔍 [Pinger Hook Triggered]', { userId, isActive });
 
-    let intervalId;
+    if (!userId || !isActive) {
+      if (!userId) console.warn('⚠️ [Pinger Aborted]: userId is missing or undefined.');
+      if (!isActive) console.warn('⚠️ [Pinger Aborted]: isActive is false.');
+      return;
+    }
 
-    const sendPing = async () => {
+    let subscription = null;
+
+    const startPinger = async () => {
       try {
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          console.warn('⚠️ [GPS Ping]: Location permission denied.');
+          return;
+        }
 
-        await fetch(SERVER_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            user_id: user.id,
-            lat: location.coords.latitude,
-            lng: location.coords.longitude,
-            heading: location.coords.heading || 0.0,
-          }),
-        });
+        subscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 3,
+          },
+          async (location) => {
+            const { latitude, longitude, heading } = location.coords;
+
+            console.log(`📡 [Sending Live GPS] User: ${userId} | Lat: ${latitude} | Lng: ${longitude}`);
+
+            try {
+              const response = await fetch(SERVER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  user_id: userId,
+                  lat: latitude,
+                  lng: longitude,
+                  heading: heading || 0.0,
+                }),
+              });
+
+              const resData = await response.json();
+              console.log('✅ [Ping Response]:', resData);
+            } catch (err) {
+              console.warn('⚠️ [GPS Ping Network Error]:', err.message);
+            }
+          }
+        );
       } catch (err) {
-        console.warn('⚠️ [GPS Ping Failed]:', err.message);
+        console.error('❌ [GPS Watcher Error]:', err);
       }
     };
 
-    // Immediate ping, then interval every 5 seconds
-    sendPing();
-    intervalId = setInterval(sendPing, 5000);
+    startPinger();
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (subscription) {
+        subscription.remove();
+      }
     };
-  }, [user, isActive]);
+  }, [userId, isActive]);
 };
