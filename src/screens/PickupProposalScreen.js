@@ -435,6 +435,25 @@ export default function PickupProposalScreen({ navigation }) {
     }
   };
 
+  const handleDeclineProposal = async () => {
+    playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+
+    try {
+      const response = await fetch(`${API_URL}/api/routes/decline-proposal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: currentUserId }),
+      });
+
+      if (response.ok) {
+        if (navigation.canGoBack()) navigation.goBack();
+        else navigation.replace("Passenger");
+      }
+    } catch (err) {
+      console.log("❌ Error declining proposal:", err);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       {/* 1. TOP BANNER STATUS BAR */}
@@ -561,26 +580,39 @@ export default function PickupProposalScreen({ navigation }) {
           </View>
         </ScrollView>
 
-        {/* Sticky Action Button inside Drawer (Hidden if collapsed) */}
+        {/* Sticky Action Buttons inside Drawer (Hidden if collapsed) */}
         {isDrawerExpanded && (
           <View style={styles.drawerFooterSticky}>
-            <TouchableOpacity
-              style={[styles.actionButton, userAccepted && styles.actionButtonDisabled]}
-              disabled={userAccepted}
-              activeOpacity={0.85}
-              onPress={handleAcceptProposal}
-            >
-              <View style={styles.buttonInternalGroup}>
-                {userAccepted ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
-                ) : (
-                  <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                )}
-                <Text style={styles.actionButtonText}>
-                  {userAccepted ? "Waiting for driver..." : "Accept Pickup Spot"}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            <View style={styles.actionButtonsRow}>
+              <TouchableOpacity
+                style={[styles.actionButton, styles.declineButton]}
+                activeOpacity={0.85}
+                onPress={handleDeclineProposal}
+              >
+                <View style={styles.buttonInternalGroup}>
+                  <Ionicons name="close-circle" size={18} color="#EF4444" style={{ marginRight: 6 }} />
+                  <Text style={styles.declineButtonText}>Decline</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.acceptButton, userAccepted && styles.actionButtonDisabled]}
+                disabled={userAccepted}
+                activeOpacity={0.85}
+                onPress={handleAcceptProposal}
+              >
+                <View style={styles.buttonInternalGroup}>
+                  {userAccepted ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+                  ) : (
+                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  )}
+                  <Text style={styles.acceptButtonText}>
+                    {userAccepted ? "Waiting for driver..." : "Accept Hub"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
@@ -673,7 +705,7 @@ const styles = StyleSheet.create({
   driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginVertical: 8 },
   driverText: { marginLeft: 10, fontSize: 13, color: "#4B5563" },
   
-  // Footer
+  // Footer & Action Buttons
   drawerFooterSticky: { 
     paddingVertical: 10, 
     paddingBottom: Platform.OS === 'android' ? 24 : 12,
@@ -681,8 +713,12 @@ const styles = StyleSheet.create({
     borderTopColor: "#E5E7EB", 
     backgroundColor: "#F9FAFB" 
   },
-  actionButton: { backgroundColor: "#059669", paddingVertical: 14, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  actionButtonsRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
+  actionButton: { paddingVertical: 14, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   actionButtonDisabled: { backgroundColor: "#9CA3AF" },
+  declineButton: { flex: 1, backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5" },
+  declineButtonText: { color: "#EF4444", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
+  acceptButton: { flex: 2, backgroundColor: "#059669" },
+  acceptButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
   buttonInternalGroup: { flexDirection: "row", alignItems: "center" },
-  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
 });
