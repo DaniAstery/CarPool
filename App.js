@@ -28,6 +28,7 @@ import TripInProgressScreen from "./src/screens/Driver/TripInProgressScreen";
 import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryScreen";
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import StandardScreen from "./src/screens/StandardScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -102,6 +103,8 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
             <Stack.Screen name="TripCompletion" component={TripCompletionScreen} />
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
             <Stack.Screen name="Home" component={HomeScreen} />
+             <Stack.Screen name="Standard" component={StandardScreen} />
+
           </>
         )}
       </Stack.Navigator>

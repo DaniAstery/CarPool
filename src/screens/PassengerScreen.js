@@ -216,6 +216,52 @@ export default function PassengerScreen({ navigation }) {
     }
   };
 
+
+/* 🔄 AUTO-CHECK FOR ACTIVE/PENDING RIDE */
+  const hasCheckedActiveRide = useRef(false);
+
+  useEffect(() => {
+    const checkActiveRideSession = async () => {
+      if (!currentUserId || hasCheckedActiveRide.current) return;
+      hasCheckedActiveRide.current = true;
+
+      try {
+        const response = await fetch(`${API_URL}/rides/solo/active/${currentUserId}`);
+        
+        const contentType = response.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) return;
+
+        const data = await response.json();
+
+        if (response.ok && data.success && data.activeRide) {
+          const activeRide = data.activeRide;
+          console.log("🔄 Active pending ride found! Resuming matching for ID:", activeRide.id);
+
+          navigation.replace("Standard", {
+            userId: currentUserId,
+            standardRequestId: activeRide.id,
+            resolvedHubId: activeRide.hub_id,
+            bookingType: "solo",
+            ride: {
+              id: activeRide.id,
+              corridor: `Solo Direct ➔ ${activeRide.destination_name || "Destination"}`,
+              time: `${activeRide.distance_km || 0} km`,
+              price: `ETB ${activeRide.price || 0}`,
+              pickup_lat: activeRide.pickup_lat,
+              pickup_lng: activeRide.pickup_lng,
+            }
+          });
+        }
+      } catch (error) {
+        console.error("❌ Failed to verify active ride session:", error);
+      }
+    };
+
+    checkActiveRideSession();
+  }, [currentUserId, navigation]);
+
+
+
   const calculateHaversine = (lat1, lon1, lat2, lon2) => {
     const R = 6371; 
     const dLat = (lat2 - lat1) * Math.PI / 180;
