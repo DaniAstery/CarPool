@@ -8,15 +8,17 @@ import {
   Dimensions,
   Animated,
   Alert,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import io from "socket.io-client";
 
 const API_URL = "http://100.108.52.79:5000/api";
 const socket = io("http://100.108.52.79:5000");
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 
 export default function StandardScreen({ route, navigation }) {
   const { userId, standardRequestId, resolvedHubId, bookingType, ride } = route.params || {};
@@ -24,34 +26,48 @@ export default function StandardScreen({ route, navigation }) {
   const [status, setStatus] = useState("searching"); // 'searching' | 'matched' | 'driver_assigned' | 'cancelled'
   const [driverDetails, setDriverDetails] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [nearbyCars, setNearbyCars] = useState([]);
 
-  // Pulse animation for searching state
+  // Extract pickup coordinates from ride params or default to Addis Ababa center
+  const pickupLat = ride?.pickup_lat || 9.0022471;
+  const pickupLng = ride?.pickup_lng || 38.8100596;
+
+  const mapRef = useRef(null);
+
+  // Radar pulse animation for the pickup pin/hub
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    // Start pulsing radar animation
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
-          toValue: 1.2,
-          duration: 1000,
+          toValue: 1.4,
+          duration: 1500,
           useNativeDriver: true,
         }),
         Animated.timing(pulseAnim, {
           toValue: 1,
-          duration: 1000,
+          duration: 1500,
           useNativeDriver: true,
         }),
       ])
     ).start();
-  }, [pulseAnim]);
+
+    // Simulate nearby available cars around the pickup hub for visual radar effect
+    const mockCars = [
+      { id: 1, lat: pickupLat + 0.0025, lng: pickupLng + 0.002 },
+      { id: 2, lat: pickupLat - 0.003, lng: pickupLng + 0.0025 },
+      { id: 3, lat: pickupLat + 0.0015, lng: pickupLng - 0.003 },
+      { id: 4, lat: pickupLat - 0.002, lng: pickupLng - 0.0025 },
+    ];
+    setNearbyCars(mockCars);
+  }, [pickupLat, pickupLng, pulseAnim]);
 
   /* ⚡ SOCKET & POLLING STATUS SYNC */
   useEffect(() => {
-    if (!standardRequestId) return;
+    if (!standardRequestId || !userId) return;
 
-    // Join room or listen to solo ride updates
-    socket.emit("join_ride_room", { rideId: standardRequestId });
+    socket.emit("join_ride_room", { rideId: standardRequestId, userId: userId });
 
     const handleRideUpdate = (data) => {
       if (data && data.rideId === standardRequestId || data.id === standardRequestId) {
@@ -61,7 +77,6 @@ export default function StandardScreen({ route, navigation }) {
         if (newStatus === "matched" || newStatus === "accepted") {
           setDriverDetails(data.driver || data.driverInfo || null);
           
-          // Navigate to Live Tracking or Pickup Proposal once driver accepts
           setTimeout(() => {
             navigation.replace("LiveTracking", {
               rideId: standardRequestId,
@@ -75,7 +90,7 @@ export default function StandardScreen({ route, navigation }) {
 
     socket.on("solo_ride_status_updated", handleRideUpdate);
 
-    // Polling fallback every 5 seconds to check ride status
+    // Polling fallback every 5 seconds
     const statusInterval = setInterval(async () => {
       try {
         const res = await fetch(`${API_URL}/rides/solo/status/${standardRequestId}`);
@@ -108,8 +123,8 @@ export default function StandardScreen({ route, navigation }) {
   /* 🛑 CANCEL SOLO RIDE REQUEST */
   const handleCancelRequest = () => {
     Alert.alert(
-      "Cancel Solo Ride",
-      "Are you sure you want to cancel your direct ride request?",
+      "Cancel Direct Ride",
+      "Are you sure you want to cancel your dispatch request?",
       [
         { text: "Keep Waiting", style: "cancel" },
         {
@@ -143,168 +158,273 @@ export default function StandardScreen({ route, navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       
-      {/* HEADER */}
-      <View style={styles.headerRow}>
-        <View style={styles.headerBadge}>
-          <Ionicons name="car-sport" size={16} color="#2563EB" />
-          <Text style={styles.headerBadgeText}>Solo Direct Dispatch</Text>
-        </View>
-        <Text style={styles.requestIdText}>ID: #{standardRequestId || "---"}</Text>
-      </View>
-
-      {/* RADAR ANIMATION CONTAINER */}
-      <View style={styles.radarContainer}>
-        <Animated.View style={[styles.radarRing, { transform: [{ scale: pulseAnim }] }]} />
-        <View style={styles.radarCenterCircle}>
-          <FontAwesome5 name="car" size={32} color="#2563EB" />
-        </View>
-      </View>
-
-      {/* STATUS & DETAILS CARD */}
-      <View style={styles.statusCard}>
-        <Text style={styles.statusTitle}>
-          {status === "searching" ? "Finding Nearest Driver..." : "Driver Matched!"}
-        </Text>
-        <Text style={styles.statusSubtitle}>
-          {status === "searching" 
-            ? "Broadcasting your request to available solo drivers nearby."
-            : "Your driver is preparing to pick you up."}
-        </Text>
-
-        <View style={styles.divider} />
-
-        {/* RIDE SUMMARY */}
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryIconBox}>
-            <Ionicons name="location" size={18} color="#2563EB" />
+      {/* 🗺️ INTERACTIVE MAP BACKGROUND */}
+      <MapView
+        ref={mapRef}
+        provider={PROVIDER_GOOGLE}
+        style={styles.map}
+        initialRegion={{
+          latitude: pickupLat,
+          longitude: pickupLng,
+          latitudeDelta: 0.015,
+          longitudeDelta: 0.015,
+        }}
+        customMapStyle={mapStyleJson}
+      >
+        {/* Pickup Location Marker with Radar Wave */}
+        <Marker coordinate={{ latitude: pickupLat, longitude: pickupLng }}>
+          <View style={styles.markerContainer}>
+            <Animated.View style={[styles.radarRing, { transform: [{ scale: pulseAnim }] }]} />
+            <View style={styles.userPinCore}>
+              <Ionicons name="person" size={14} color="#FFFFFF" />
+            </View>
           </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.summaryLabel}>DESTINATION</Text>
-            <Text style={styles.summaryValue} numberOfLines={1}>
-              {ride?.corridor || "Direct Route"}
+        </Marker>
+
+        {/* Nearby Available Cars around the Hub */}
+        {nearbyCars.map((car) => (
+          <Marker key={car.id} coordinate={{ latitude: car.lat, longitude: car.lng }}>
+            <View style={styles.carMarkerBox}>
+              <FontAwesome5 name="car-side" size={12} color="#2563EB" />
+            </View>
+          </Marker>
+        ))}
+      </MapView>
+
+      {/* FLOATING HEADER BADGE */}
+      <SafeAreaView style={styles.headerSafeArea} pointerEvents="box-none">
+        <View style={styles.headerRow}>
+          <View style={styles.headerBadge}>
+            <View style={styles.activeDot} />
+            <Text style={styles.headerBadgeText}>Solo Direct Dispatch</Text>
+          </View>
+          <Text style={styles.requestIdText}>REF: #{standardRequestId || "---"}</Text>
+        </View>
+      </SafeAreaView>
+
+      {/* BOTTOM STATUS & DETAILS CARD */}
+      <View style={styles.bottomCardContainer}>
+        <View style={styles.statusCard}>
+          
+          {/* TITLE & SUBTITLE */}
+          <View style={styles.cardHeaderSection}>
+            <Text style={styles.statusTitle}>
+              {status === "searching" ? "Searching for a Driver" : "Driver Found!"}
+            </Text>
+            <Text style={styles.statusSubtitle}>
+              {status === "searching" 
+                ? "Broadcasting your direct trip to verified drivers nearby."
+                : "Connecting you with your assigned captain."}
             </Text>
           </View>
-        </View>
 
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryIconBox}>
-            <Ionicons name="wallet" size={18} color="#059669" />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.summaryLabel}>ESTIMATED FARE & DISTANCE</Text>
-            <Text style={styles.summaryValue}>
-              {ride?.price || "ETB 0"} • {ride?.time || "---"}
-            </Text>
-          </View>
-        </View>
+          <View style={styles.divider} />
 
-        {/* LOADING INDICATOR / ACTION */}
-        {status === "searching" && (
-          <View style={styles.searchingLoaderRow}>
-            <ActivityIndicator size="small" color="#2563EB" style={{ marginRight: 8 }} />
-            <Text style={styles.searchingLoaderText}>Waiting for driver response...</Text>
-          </View>
-        )}
+          {/* TRIP SUMMARY INFO */}
+          <View style={styles.summaryBox}>
+            
+            {/* Destination Row */}
+            <View style={styles.summaryRow}>
+              <View style={[styles.summaryIconBox, { backgroundColor: '#EFF6FF' }]}>
+                <Ionicons name="location-sharp" size={18} color="#2563EB" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={styles.summaryLabel}>DESTINATION</Text>
+                <Text style={styles.summaryValue} numberOfLines={1}>
+                  {ride?.corridor || "Direct Route"}
+                </Text>
+              </View>
+            </View>
 
-        {/* CANCEL BUTTON */}
-        <TouchableOpacity 
-          style={[styles.cancelButton, cancelling && { opacity: 0.6 }]}
-          onPress={handleCancelRequest}
-          disabled={cancelling}
-          activeOpacity={0.8}
-        >
-          {cancelling ? (
-            <ActivityIndicator size="small" color="#EF4444" />
-          ) : (
-            <Text style={styles.cancelButtonText}>Cancel Request</Text>
+            {/* Fare & Distance Row */}
+            <View style={[styles.summaryRow, { marginTop: 12 }]}>
+              <View style={[styles.summaryIconBox, { backgroundColor: '#ECFDF5' }]}>
+                <Ionicons name="wallet" size={18} color="#059669" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <Text style={styles.summaryLabel}>ESTIMATED FARE & TIME</Text>
+                <Text style={styles.summaryValue}>
+                  {ride?.price || "ETB 0"} • {ride?.time || "---"}
+                </Text>
+              </View>
+            </View>
+
+          </View>
+
+          {/* SEARCHING LOADER */}
+          {status === "searching" && (
+            <View style={styles.searchingLoaderRow}>
+              <ActivityIndicator size="small" color="#2563EB" style={{ marginRight: 10 }} />
+              <Text style={styles.searchingLoaderText}>Matching with closest available vehicle...</Text>
+            </View>
           )}
-        </TouchableOpacity>
-      </View>
 
-    </SafeAreaView>
+          {/* CANCEL BUTTON */}
+          <TouchableOpacity 
+            style={[styles.cancelButton, cancelling && { opacity: 0.6 }]}
+            onPress={handleCancelRequest}
+            disabled={cancelling}
+            activeOpacity={0.75}
+          >
+            {cancelling ? (
+              <ActivityIndicator size="small" color="#EF4444" />
+            ) : (
+              <Text style={styles.cancelButtonText}>Cancel Request</Text>
+            )}
+          </TouchableOpacity>
+
+        </View>
+      </SafeAreaView>
+
+    </View>
   );
 }
+
+// Clean professional map styling
+const mapStyleJson = [
+  {
+    featureType: "poi",
+    elementType: "labels",
+    stylers: [{ visibility: "off" }]
+  }
+];
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: "#0F172A",
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  headerSafeArea: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     paddingHorizontal: 20,
-    justifyContent: "space-between",
-    paddingVertical: 20,
   },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 10,
+    marginTop: 8,
   },
   headerBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#EFF6FF",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#BFDBFE",
+    borderColor: "#DBEAFE",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  activeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: "#2563EB",
+    marginRight: 6,
   },
   headerBadgeText: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#2563EB",
-    marginLeft: 6,
+    color: "#1D4ED8",
+    letterSpacing: 0.2,
   },
   requestIdText: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#64748B",
+    fontWeight: "700",
+    color: "#FFFFFF",
+    backgroundColor: "rgba(15, 23, 42, 0.75)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    overflow: 'hidden',
+    fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace',
   },
-  radarContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    marginVertical: 40,
-    height: 180,
+  markerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 50,
+    height: 50,
   },
   radarRing: {
     position: "absolute",
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: "rgba(37, 99, 235, 0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(37, 99, 235, 0.3)",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(37, 99, 235, 0.25)",
+    borderWidth: 1.5,
+    borderColor: "rgba(37, 99, 235, 0.6)",
   },
-  radarCenterCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  userPinCore: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "#2563EB",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  carMarkerBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: "#FFFFFF",
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  bottomCardContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 16,
   },
   statusCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-    marginBottom: 20,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: "#F1F5F9",
+  },
+  cardHeaderSection: {
+    alignItems: "center",
   },
   statusTitle: {
     fontSize: 18,
     fontWeight: "800",
     color: "#0F172A",
+    letterSpacing: -0.3,
     textAlign: "center",
   },
   statusSubtitle: {
@@ -312,22 +432,29 @@ const styles = StyleSheet.create({
     color: "#64748B",
     textAlign: "center",
     marginTop: 4,
+    lineHeight: 16,
+    paddingHorizontal: 10,
   },
   divider: {
     height: 1,
-    backgroundColor: "#E2E8F0",
-    marginVertical: 16,
+    backgroundColor: "#F1F5F9",
+    marginVertical: 14,
+  },
+  summaryBox: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   summaryRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
   },
   summaryIconBox: {
-    width: 36,
-    height: 36,
+    width: 34,
+    height: 34,
     borderRadius: 10,
-    backgroundColor: "#F1F5F9",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -335,7 +462,7 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: "800",
     color: "#94A3B8",
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
   },
   summaryValue: {
     fontSize: 13,
@@ -347,15 +474,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F8FAFC",
-    padding: 10,
-    borderRadius: 10,
-    marginVertical: 12,
+    backgroundColor: "#EFF6FF",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: "#DBEAFE",
   },
   searchingLoaderText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "600",
-    color: "#2563EB",
+    color: "#1D4ED8",
   },
   cancelButton: {
     backgroundColor: "#FEF2F2",
@@ -364,11 +494,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: "#FEE2E2",
-    marginTop: 6,
+    marginTop: 14,
   },
   cancelButtonText: {
     fontSize: 13,
     fontWeight: "700",
-    color: "#EF4444",
+    color: "#DC2626",
   },
 });

@@ -217,50 +217,6 @@ export default function PassengerScreen({ navigation }) {
   };
 
 
-/* 🔄 AUTO-CHECK FOR ACTIVE/PENDING RIDE */
-  const hasCheckedActiveRide = useRef(false);
-
-  useEffect(() => {
-    const checkActiveRideSession = async () => {
-      if (!currentUserId || hasCheckedActiveRide.current) return;
-      hasCheckedActiveRide.current = true;
-
-      try {
-        const response = await fetch(`${API_URL}/rides/solo/active/${currentUserId}`);
-        
-        const contentType = response.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) return;
-
-        const data = await response.json();
-
-        if (response.ok && data.success && data.activeRide) {
-          const activeRide = data.activeRide;
-          console.log("🔄 Active pending ride found! Resuming matching for ID:", activeRide.id);
-
-          navigation.replace("Standard", {
-            userId: currentUserId,
-            standardRequestId: activeRide.id,
-            resolvedHubId: activeRide.hub_id,
-            bookingType: "solo",
-            ride: {
-              id: activeRide.id,
-              corridor: `Solo Direct ➔ ${activeRide.destination_name || "Destination"}`,
-              time: `${activeRide.distance_km || 0} km`,
-              price: `ETB ${activeRide.price || 0}`,
-              pickup_lat: activeRide.pickup_lat,
-              pickup_lng: activeRide.pickup_lng,
-            }
-          });
-        }
-      } catch (error) {
-        console.error("❌ Failed to verify active ride session:", error);
-      }
-    };
-
-    checkActiveRideSession();
-  }, [currentUserId, navigation]);
-
-
 
   const calculateHaversine = (lat1, lon1, lat2, lon2) => {
     const R = 6371; 
@@ -478,62 +434,77 @@ export default function PassengerScreen({ navigation }) {
   };
 
   /* 🚗 STANDARD DIRECT RIDE REQUEST */
-  const requestStandardRide = () => {
-    if (!customDestinationInput.trim() || !selectedDestination || !fareEstimate) {
-      Alert.alert("Destination Required", "Please select a valid destination with calculated fare to proceed.");
-      return;
-    }
+ const requestStandardRide = () => {
+  if (!customDestinationInput.trim() || !selectedDestination || !fareEstimate) {
+    Alert.alert("Destination Required", "Please select a valid destination with calculated fare to proceed.");
+    return;
+  }
 
-    Alert.alert(
-      "Confirm Standard Direct Ride",
-      `Request a direct car for this ${fareEstimate.distanceKm} km trip to "${selectedDestination.name || customDestinationInput.trim()}" for ETB ${fareEstimate.estimatedPrice}? Proceed?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Request Standard Car",
-          style: "default",
-          onPress: async () => {
-            try {
-              playSound(1);
-              const payload = {
-                user_lat: userCoords?.latitude || 9.0022471,
-                user_lng: userCoords?.longitude || 38.8100596,
-                destination_lat: selectedDestination.lat,
-                destination_lng: selectedDestination.lng,
-                user_id: currentUserId,
-                destination_name: selectedDestination.name || customDestinationInput.trim(),
-                destination_address: selectedDestination.address,
-                booking_type: "standard",
-                estimated_price: fareEstimate.estimatedPrice,
-                distance_km: fareEstimate.distanceKm
-              };
+  Alert.alert(
+    "Confirm Standard Direct Ride",
+    `Request a direct car for this ${fareEstimate.distanceKm} km trip to "${selectedDestination.name || customDestinationInput.trim()}" for ETB ${fareEstimate.estimatedPrice}? Proceed?`,
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Request Standard Car",
+        style: "default",
+        onPress: async () => {
+          try {
+            playSound(1);
+            
+            // Payload mapped to your /rides/solo/create backend schema
+            const payload = {
+              user_id: currentUserId,
+              pickup_lat: userCoords?.latitude || 9.0022471,
+              pickup_lng: userCoords?.longitude || 38.8100596,
+              destination_lat: selectedDestination.lat,
+              destination_lng: selectedDestination.lng,
+              destination_name: selectedDestination.name || customDestinationInput.trim(),
+              destination_address: selectedDestination.address || '',
+              booking_type: "standard",
+              estimated_price: fareEstimate.estimatedPrice,
+              distance_km: fareEstimate.distanceKm
+            };
 
-              await fetch(`${API_URL}/routes/join`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
+            const response = await fetch(`${API_URL}/rides/solo/create`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
 
-              playSound(1);
+            const data = await response.json();
 
-              navigation.navigate("MatchingScreen", {
-                userId: currentUserId,
-                bookingType: "standard",
-                ride: {
-                  corridor: `Direct Pickup ➔ ${selectedDestination.name || customDestinationInput.trim()}`,
-                  time: `~${fareEstimate.durationText} (${fareEstimate.distanceKm} km)`,
-                  price: `ETB ${fareEstimate.estimatedPrice}`,
-                }
-              });
-            } catch (err) {
-              console.error("Standard ride request error:", err);
-              Alert.alert("Connection Error", "Failed to dispatch standard ride.");
+            if (!response.ok || !data.success) {
+              throw new Error(data.message || "Failed to create ride request.");
             }
+
+            playSound(1);
+
+            // Navigate to StandardScreen with the returned database request ID
+            navigation.navigate("Standard", {
+              userId: currentUserId,
+              standardRequestId: data.ride.id,
+              resolvedHubId: data.resolvedHubId,
+              bookingType: "standard",
+              ride: {
+                id: data.ride.id,
+                corridor: `Direct Pickup ➔ ${selectedDestination.name || customDestinationInput.trim()}`,
+                time: `~${fareEstimate.durationText || '10 mins'} (${fareEstimate.distanceKm} km)`,
+                price: `ETB ${fareEstimate.estimatedPrice}`,
+                pickup_lat: payload.pickup_lat,
+                pickup_lng: payload.pickup_lng,
+              }
+            });
+
+          } catch (err) {
+            console.error("Standard ride request error:", err);
+            Alert.alert("Dispatch Error", err.message || "Failed to dispatch standard ride.");
           }
         }
-      ]
-    );
-  };
+      }
+    ]
+  );
+};
 
   if (checkingGatekeeper) {
     return (
