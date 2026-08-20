@@ -29,7 +29,7 @@ import TripEarningsSummaryScreen from "./src/screens/Driver/TripEarningsSummaryS
 import TripPaymentScreen from "./src/screens/TripPaymentScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import StandardScreen from "./src/screens/StandardScreen";
-import DriverEnRouteScreeb from "./src/screens/Driver/DriverEnRouteScreen";
+import DriverEnRouteScreen from "./src/screens/Driver/DriverEnRouteScreen";
 
 const Stack = createNativeStackNavigator();
 
