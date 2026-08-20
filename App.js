@@ -91,6 +91,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
             <Stack.Screen name="TripInProgress" component={TripInProgressScreen} />
             <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
             <Stack.Screen name="DriverPendingVerification" component={DriverPendingVerification} />
+            <Stack.Screen name="DriverEnRoute" component={DriverEnRouteScreen} />
           </>
         ) : (
           // 🎒 PASSENGER WORKSPACE
@@ -105,7 +106,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
             <Stack.Screen name="TripPayment" component={TripPaymentScreen} />
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Standard" component={StandardScreen} />
-            <Stack.Screen name="DriverEnRoute" component={DriverEnRouteScreen} />
+          
 
           </>
         )}

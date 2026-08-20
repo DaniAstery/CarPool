@@ -4,319 +4,444 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
-  Alert,
   Dimensions,
   Linking,
-  ActivityIndicator,
+  Platform,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, Polyline, Circle, PROVIDER_DEFAULT } from "react-native-maps";
+import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { io } from "socket.io-client";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://100.108.52.79:5000";
+
+// Clean Uber/Lyft Minimal Map Style
+const cleanMinimalMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
+  { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#f5f5f5" }] },
+  { featureType: "administrative.land_parcel", elementType: "labels.text.fill", stylers: [{ color: "#bdbdbd" }] },
+  { featureType: "poi", elementType: "geometry", stylers: [{ color: "#eeeeee" }] },
+  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
+  { featureType: "road.arterial", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#e0e0e0" }] },
+  { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#e0e0e0" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#c9c9c9" }] },
+  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] },
+];
+
+// Helper to extract numeric pickup location strictly from ride_request_solo payload
+const resolvePickupCoordinates = (params) => {
+  const rawRide = params?.ride?.ride || params?.ride || params || {};
+
+  const lat = parseFloat(
+    rawRide.pickup_lat ?? rawRide.pickupLat ?? rawRide.passenger_lat ?? 9.0105
+  );
+  const lng = parseFloat(
+    rawRide.pickup_lng ?? rawRide.pickupLng ?? rawRide.passenger_lng ?? 38.7613
+  );
+
+  return {
+    latitude: isNaN(lat) ? 9.0105 : lat,
+    longitude: isNaN(lng) ? 38.7613 : lng,
+  };
+};
 
 export default function DriverEnRouteScreen({ route, navigation }) {
   const { rideId, ride } = route.params || {};
-
-  // Status flow: 'accepted' (En Route) -> 'arrived' -> 'in_progress' -> 'completed'
-  const [tripStatus, setTripStatus] = useState(ride?.status || "accepted");
-  const [driverCoords, setDriverCoords] = useState(null);
-  const [heading, setHeading] = useState(0);
-  const [loadingAction, setLoadingAction] = useState(false);
-
   const mapRef = useRef(null);
-  const socketRef = useRef(null);
 
-  const pickupLocation = {
-    latitude: parseFloat(ride?.pickup_lat || 9.0105),
-    longitude: parseFloat(ride?.pickup_lng || 38.7613),
-  };
+  // 1. Resolve Passenger Pickup Coordinates from ride_request_solo
+  const passengerPickupCoords = resolvePickupCoordinates(route.params);
 
-  const destinationLocation = {
-    latitude: parseFloat(ride?.destination_lat || 8.9806),
-    longitude: parseFloat(ride?.destination_lng || 38.7915),
-  };
+  // 2. Driver Location State
+  const [driverCoords, setDriverCoords] = useState({
+    latitude: parseFloat(ride?.driver_lat ?? 9.0300),
+    longitude: parseFloat(ride?.driver_lng ?? 38.7400),
+  });
+  const [heading, setHeading] = useState(0);
 
-  // Target coordinates for camera auto-fit based on current trip status
-  const currentTargetCoords =
-    tripStatus === "in_progress" ? destinationLocation : pickupLocation;
+  // Ride details
+  const rawRideData = ride?.ride || ride || {};
+  const passengerName = rawRideData.passenger_name || `Passenger #${rawRideData.user_id || ""}`;
+  const passengerPhone = rawRideData.passenger_phone || "";
+  const destinationName = rawRideData.destination_name || "Destination";
+  const farePrice = rawRideData.price || 150;
+  const distanceKm = rawRideData.distance_km || 5.2;
 
-  // 1. LIVE GPS TRACKING & BACKEND PINGS
+  // 3. Live Driver Tracking
   useEffect(() => {
-    let subscription;
+    let locationSubscription;
 
-    async function startLocationUpdates() {
-      let { status } = await Location.requestForegroundPermissionsAsync();
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
 
-      subscription = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, timeInterval: 3000, distanceInterval: 5 },
+      locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 10,
+        },
         (loc) => {
-          const coords = {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-          };
-          setDriverCoords(coords);
-          if (loc.coords.heading >= 0) setHeading(loc.coords.heading);
+          setDriverCoords({
+            latitude: Number(loc.coords.latitude),
+            longitude: Number(loc.coords.longitude),
+          });
+          if (loc.coords.heading) {
+            setHeading(Number(loc.coords.heading));
+          }
+        }
+      );
+    })();
 
-          // Ping backend driver position
-          fetch(`${API_URL}/api/drivers/ping`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              driver_id: ride?.driver_id,
-              lat: coords.latitude,
-              lng: coords.longitude,
-              heading: loc.coords.heading || 0,
-              status: "online",
-              operating_mode: "STANDARD",
-            }),
-          }).catch((err) => console.log("Ping err:", err));
+    return () => locationSubscription?.remove();
+  }, []);
+
+  // 4. Auto-Fit Map View Camera
+  useEffect(() => {
+    if (
+      mapRef.current &&
+      driverCoords?.latitude &&
+      passengerPickupCoords?.latitude
+    ) {
+      mapRef.current.fitToCoordinates(
+        [driverCoords, passengerPickupCoords],
+        {
+          edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
+          animated: true,
         }
       );
     }
+  }, [driverCoords.latitude, passengerPickupCoords.latitude]);
 
-    startLocationUpdates();
-    return () => subscription?.remove();
-  }, [ride?.driver_id]);
-
-  // 2. SOCKET LISTENERS (Listen for passenger cancellation)
-  useEffect(() => {
-    socketRef.current = io(API_URL);
-
-    if (rideId) {
-      socketRef.current.emit("join_ride_room", { rideId });
-
-      socketRef.current.on("ride_cancelled_by_passenger", () => {
-        Alert.alert("Trip Cancelled", "The passenger cancelled this request.", [
-          { text: "OK", onPress: () => navigation.navigate("CreateCorridor") },
-        ]);
-      });
-    }
-
-    return () => socketRef.current?.disconnect();
-  }, [rideId]);
-
-  // 3. AUTO-FIT MAP BOUNDS
-  useEffect(() => {
-    if (mapRef.current && driverCoords) {
-      mapRef.current.fitToCoordinates([driverCoords, currentTargetCoords], {
-        edgePadding: { top: 100, right: 60, bottom: 260, left: 60 },
-        animated: true,
-      });
-    }
-  }, [driverCoords, tripStatus]);
-
-  // 4. LAUNCH EXTERNAL GOOGLE MAPS / WAZE
-  const openExternalNavigation = () => {
-    const { latitude, longitude } = currentTargetCoords;
-    const label = tripStatus === "in_progress" ? "Destination" : "Pickup Location";
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&destination_place_name=${encodeURIComponent(label)}`;
-    Linking.openURL(url).catch(() => Alert.alert("Error", "Unable to launch maps app."));
-  };
-
-  // 5. UPDATE TRIP STATUS (API CALL)
-  const handleNextStatus = async () => {
-    let nextStatus = "arrived";
-    if (tripStatus === "arrived") nextStatus = "in_progress";
-    if (tripStatus === "in_progress") nextStatus = "completed";
-
-    setLoadingAction(true);
-    try {
-      const res = await fetch(`${API_URL}/api/rides/solo/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ride_id: rideId, status: nextStatus }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setTripStatus(nextStatus);
-
-        if (nextStatus === "completed") {
-          Alert.alert("Trip Completed!", `Collect ${ride?.fare || `ETB ${ride?.price}`} from passenger.`, [
-            { text: "Done", onPress: () => navigation.navigate("CreateCorridor") },
-          ]);
-        }
-      } else {
-        Alert.alert("Error", data.message || "Failed to update trip status.");
-      }
-    } catch (err) {
-      Alert.alert("Connection Error", "Could not update status on server.");
-    } finally {
-      setLoadingAction(false);
+  const handleCallPassenger = () => {
+    if (passengerPhone) {
+      Linking.openURL(`tel:${passengerPhone}`);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* MAP VIEW */}
+    <View style={StyleSheet.absoluteFillObject}>
+      {/* STANDARD UBER/LYFT MINIMAL MAP */}
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_DEFAULT}
         initialRegion={{
-          ...pickupLocation,
-          latitudeDelta: 0.02,
-          longitudeDelta: 0.02,
+          ...driverCoords,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
         }}
+        customMapStyle={cleanMinimalMapStyle}
+        showsUserLocation={false}
+        showsMyLocationButton={false}
+        showsCompass={false}
       >
-        {/* Driver Marker */}
-        {driverCoords && (
-          <Marker coordinate={driverCoords} rotation={heading} flat anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={styles.driverMarker}>
-              <Ionicons name="navigate" size={18} color="#FFFFFF" />
+        {/* PASSENGER PICKUP HUB MARKER WITH HALO */}
+        <Marker
+          coordinate={passengerPickupCoords}
+          title="Passenger Pickup"
+          description={passengerName}
+          anchor={{ x: 0.5, y: 0.5 }}
+          tracksViewChanges={false}
+        >
+          <View style={styles.destinationHalo}>
+            <View style={styles.targetBadge}>
+              <Text style={styles.targetBadgeText}>PICKUP POINT</Text>
+            </View>
+            <View style={styles.destinationBadge}>
+              <Ionicons name="person" size={13} color="#FFFFFF" />
+            </View>
+          </View>
+        </Marker>
+
+        {/* 2KM RADIUS GEOFENCE CIRCLE */}
+        <Circle
+          center={passengerPickupCoords}
+          radius={500}
+          strokeColor="#059669"
+          fillColor="rgba(5, 150, 105, 0.15)"
+          strokeWidth={2}
+        />
+
+        {/* DRIVER CAR MARKER */}
+        {driverCoords?.latitude && (
+          <Marker
+            coordinate={driverCoords}
+            title="Your Vehicle Location"
+            anchor={{ x: 0.5, y: 0.5 }}
+            rotation={heading}
+            flat={true}
+            tracksViewChanges={true}
+          >
+            <View style={styles.carMarkerWrapper}>
+              <View style={styles.carMarkerBubble}>
+                <Ionicons name="navigate" size={17} color="#FFFFFF" />
+              </View>
             </View>
           </Marker>
         )}
 
-        {/* Pickup Marker */}
-        <Marker coordinate={pickupLocation} title="Pickup Point">
-          <View style={styles.pickupMarker}>
-            <Ionicons name="person" size={16} color="#FFFFFF" />
-          </View>
-        </Marker>
-
-        {/* Destination Marker */}
-        <Marker coordinate={destinationLocation} title="Destination">
-          <View style={styles.destinationMarker}>
-            <Ionicons name="flag" size={16} color="#FFFFFF" />
-          </View>
-        </Marker>
-
-        {/* Route Line */}
-        {driverCoords && (
+        {/* ACTIVE DRIVER TO PICKUP POLYLINE */}
+        {driverCoords?.latitude && passengerPickupCoords?.latitude && (
           <Polyline
-            coordinates={[driverCoords, currentTargetCoords]}
-            strokeColor="#2563EB"
-            strokeWidth={4}
+            coordinates={[driverCoords, passengerPickupCoords]}
+            strokeColor="#059669"
+            strokeWidth={5}
+            geodesic={true}
           />
         )}
       </MapView>
 
-      {/* TOP FLOATING NAVIGATION BUTTON */}
-      <TouchableOpacity style={styles.navButton} onPress={openExternalNavigation}>
-        <Ionicons name="compass" size={20} color="#FFFFFF" />
-        <Text style={styles.navButtonText}>Navigate (Maps)</Text>
-      </TouchableOpacity>
+      {/* TOP FLOATING STATUS BAR */}
+      <View style={styles.topStatusCard}>
+        <View style={styles.statusDot} />
+        <Text style={styles.statusText}>En Route to Pickup Hub</Text>
+      </View>
 
-      {/* BOTTOM ACTION SHEET */}
-      <View style={styles.bottomCard}>
-        <View style={styles.statusHeader}>
-          <Text style={styles.statusTagText}>
-            {tripStatus === "accepted" && "EN ROUTE TO PICKUP"}
-            {tripStatus === "arrived" && "ARRIVED AT PICKUP"}
-            {tripStatus === "in_progress" && "TRIP IN PROGRESS"}
-          </Text>
-          <Text style={styles.fareText}>{ride?.fare || `ETB ${ride?.price || 150}`}</Text>
+      {/* BOTTOM CONTROL CARD */}
+      <View style={styles.bottomSheet}>
+        <View style={styles.passengerRow}>
+          <View style={styles.avatarCircle}>
+            <Text style={styles.avatarText}>
+              {passengerName.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+
+          <View style={styles.passengerInfo}>
+            <Text style={styles.passengerNameText}>{passengerName}</Text>
+            <Text style={styles.pickupSubtext}>Heading to Dropoff: {destinationName}</Text>
+          </View>
+
+          {passengerPhone ? (
+            <TouchableOpacity
+              style={styles.callButton}
+              onPress={handleCallPassenger}
+            >
+              <Ionicons name="call" size={20} color="#059669" />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
-        <View style={styles.addressRow}>
-          <Ionicons
-            name={tripStatus === "in_progress" ? "flag" : "location"}
-            size={20}
-            color={tripStatus === "in_progress" ? "#EF4444" : "#059669"}
-          />
-          <View style={{ marginLeft: 10, flex: 1 }}>
-            <Text style={styles.addressTitle}>
-              {tripStatus === "in_progress" ? ride?.destination_name : "Pickup Passenger"}
-            </Text>
-            <Text style={styles.addressSub} numberOfLines={1}>
-              {tripStatus === "in_progress" ? ride?.destination_address : "Tap navigate to open turn-by-turn"}
-            </Text>
+        {/* METRICS ROW */}
+        <View style={styles.metricsCard}>
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>FARE</Text>
+            <Text style={styles.metricValue}>{farePrice} ETB</Text>
+          </View>
+          <View style={styles.metricDivider} />
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>DISTANCE</Text>
+            <Text style={styles.metricValue}>{distanceKm} km</Text>
           </View>
         </View>
 
-        {/* ACTION BUTTON */}
+        {/* ARRIVED BUTTON */}
         <TouchableOpacity
-          style={[
-            styles.actionBtn,
-            tripStatus === "arrived" && { backgroundColor: "#059669" },
-            tripStatus === "in_progress" && { backgroundColor: "#DC2626" },
-          ]}
-          onPress={handleNextStatus}
-          disabled={loadingAction}
+          style={styles.arrivedButton}
+          onPress={() =>
+            navigation.navigate("WaitingForPassengers", {
+              rideId: rideId || rawRideData.id,
+              ride: rawRideData,
+            })
+          }
         >
-          {loadingAction ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.actionBtnText}>
-              {tripStatus === "accepted" && "I'VE ARRIVED AT PICKUP"}
-              {tripStatus === "arrived" && "START TRIP"}
-              {tripStatus === "in_progress" && "COMPLETE TRIP"}
-            </Text>
-          )}
+          <Text style={styles.arrivedButtonText}>Arrived at Pickup</Text>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F3F4F6" },
-  driverMarker: {
-    backgroundColor: "#2563EB",
-    padding: 6,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
+  // Target Pin / Halo Styles
+  destinationHalo: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(5, 150, 105, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  pickupMarker: {
-    backgroundColor: "#059669",
-    padding: 6,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  destinationMarker: {
-    backgroundColor: "#EF4444",
-    padding: 6,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  navButton: {
+  targetBadge: {
     position: "absolute",
-    top: 50,
-    right: 20,
-    backgroundColor: "#111827",
+    top: -20,
+    backgroundColor: "#059669",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  targetBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  destinationBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+  },
+
+  // Driver Car Marker Styles
+  carMarkerWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  carMarkerBubble: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#047857",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Top Bar
+  topStatusCard: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 54 : 36,
+    alignSelf: "center",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 25,
-    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  navButtonText: { color: "#FFFFFF", fontWeight: "600", marginLeft: 6, fontSize: 13 },
-  bottomCard: {
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#059669",
+    marginRight: 8,
+  },
+  statusText: {
+    color: "#111827",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+
+  // Bottom Sheet
+  bottomSheet: {
     position: "absolute",
     bottom: 0,
     width: width,
     backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     padding: 20,
+    paddingBottom: Platform.OS === "ios" ? 36 : 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
     elevation: 10,
   },
-  statusHeader: {
+  passengerRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 15,
+    marginBottom: 16,
   },
-  statusTagText: { color: "#2563EB", fontWeight: "700", fontSize: 13 },
-  fareText: { fontSize: 20, fontWeight: "800", color: "#111827" },
-  addressRow: { flexDirection: "row", alignItems: "center", marginBottom: 20 },
-  addressTitle: { fontSize: 16, fontWeight: "700", color: "#111827" },
-  addressSub: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  actionBtn: {
-    backgroundColor: "#2563EB",
-    paddingVertical: 15,
+  avatarCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  avatarText: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  passengerInfo: {
+    flex: 1,
+  },
+  passengerNameText: {
+    color: "#111827",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  pickupSubtext: {
+    color: "#6B7280",
+    fontSize: 13,
+    marginTop: 2,
+  },
+  callButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#ECFDF5",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Metrics Card
+  metricsCard: {
+    flexDirection: "row",
+    backgroundColor: "#F9FAFB",
     borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "space-around",
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  metricItem: {
     alignItems: "center",
   },
-  actionBtnText: { color: "#FFFFFF", fontSize: 16, fontWeight: "700" },
+  metricLabel: {
+    color: "#6B7280",
+    fontSize: 10,
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  metricValue: {
+    color: "#059669",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  metricDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: "#E5E7EB",
+  },
+
+  // Button
+  arrivedButton: {
+    backgroundColor: "#059669",
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: "center",
+  },
+  arrivedButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 });
