@@ -24,7 +24,7 @@ import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
-
+ 
 const FALLBACK_LOCATION = {
   latitude: 9.0220,
   longitude: 38.8450,
@@ -223,6 +223,7 @@ const DispatchMap = memo(({
   );
 });
 
+
 // ------------------------------------------------------------------
 // STANDARD RIDE DISPATCH OFFER MODAL
 // ------------------------------------------------------------------
@@ -259,7 +260,11 @@ const StandardOfferModal = ({ offer, onAccept, onDecline }) => {
           </View>
 
           <Text style={styles.modalFareText}>{offer.fare || "ETB 150"}</Text>
-          <Text style={styles.modalCorridorText}>{offer.routeText || "On-Demand Direct Trip"}</Text>
+          
+          {/* 🟢 Support routeText OR destinationName from backend payload */}
+          <Text style={styles.modalCorridorText}>
+            {offer.routeText || offer.destinationName || "On-Demand Direct Trip"}
+          </Text>
           
           <View style={styles.modalDistanceBadge}>
             <Ionicons name="location" size={14} color="#2563EB" />
@@ -281,10 +286,10 @@ const StandardOfferModal = ({ offer, onAccept, onDecline }) => {
   );
 };
 
+
 export default function CreateCorridorScreen({ navigation }) {
-  const { user, isLoading: isAuthLoading } = useAuth();
+  const { user } = useAuth();
   const currentDriverId = user?.id || user?.user_id || null;   
-  const activeVehicleId = 2; 
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const userRole = user?.role || "driver";
@@ -322,6 +327,10 @@ export default function CreateCorridorScreen({ navigation }) {
   const [currentRegion, setCurrentRegion] = useState(null);
   const [loadingLocation, setLoadingLocation] = useState(true);
 
+
+
+
+
   useEffect(() => {
     const backAction = () => true;
     const backHandler = BackHandler.addEventListener("hardwareBackPress", backAction);
@@ -345,51 +354,74 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   // 🔌 SOCKET & DISPATCH LISTENER LOGIC
-  useEffect(() => {
-    if (!currentDriverId) return;
+ // 🔌 FIXED SOCKET & DISPATCH LISTENER LOGIC
+    useEffect(() => {
+      if (!currentDriverId || !isStandardActive) {
+        if (socketRef.current) {
+          socketRef.current.disconnect();
+          socketRef.current = null;
+        }
+        setCurrentOffer(null);
+        return;
+      }
 
-    socketRef.current = io(API_URL);
+      // Connect socket
+      socketRef.current = io(API_URL, {
+        transports: ["websocket"],
+        reconnection: true,
+      });
 
-    if (isStandardActive) {
-      socketRef.current.emit("register_driver_channel", { driverId: currentDriverId });
+      // 🟢 1. Register room ONLY after connection is established
+      socketRef.current.on("connect", () => {
+        console.log(`⚡ Socket connected (${socketRef.current.id}). Registering Driver ${currentDriverId}...`);
+        socketRef.current.emit("register_driver_channel", { driverId: currentDriverId });
+      });
 
+      // 🟢 2. Receive offer & safely attempt sound playback
       socketRef.current.on("new_ride_offer", (offerData) => {
-        playSound("1.mp3");
+        console.log("🚕 Incoming Offer Payload Received:", offerData);
+        
+        try {
+          playSound("1.mp3");
+        } catch (soundErr) {
+          console.warn("Audio warning:", soundErr);
+        }
+
         setCurrentOffer(offerData);
       });
-    } else {
-      socketRef.current.off("new_ride_offer");
-      setCurrentOffer(null);
-    }
 
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-    };
-  }, [isStandardActive, currentDriverId]);
+      return () => {
+        if (socketRef.current) {
+          socketRef.current.off("connect");
+          socketRef.current.off("new_ride_offer");
+          socketRef.current.disconnect();
+        }
+      };
+    }, [isStandardActive, currentDriverId]);
 
-  // 📡 LOCATION PING BACKEND
-  const sendLocationPing = async (coords, headingVal) => {
-    if (!currentDriverId || !isOnline) return;
 
-    try {
-      await fetch(`${API_URL}/api/drivers/ping`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          driver_id: currentDriverId,
-          lat: coords.latitude,
-          lng: coords.longitude,
-          heading: headingVal || 0,
-          status: isOnline ? "online" : "offline",
-          operating_mode: operatingMode,
-        }),
-      });
-    } catch (err) {
-      console.log("❌ Driver ping error:", err);
-    }
-  };
+
+      // 📡 LOCATION PING BACKEND
+      const sendLocationPing = async (coords, headingVal) => {
+        if (!currentDriverId || !isOnline) return;
+
+        try {
+          await fetch(`${API_URL}/api/drivers/ping`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              driver_id: currentDriverId,
+              lat: coords.latitude,
+              lng: coords.longitude,
+              heading: headingVal || 0,
+              status: isOnline ? "online" : "offline",
+              operating_mode: operatingMode,
+            }),
+          });
+        } catch (err) {
+          console.log("❌ Driver ping error:", err);
+        }
+      };
 
   // 🌍 GPS LOCATION TRACKING
   useEffect(() => {
@@ -551,27 +583,51 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   }, []);
 
-  const handleAcceptStandardOffer = async (rideId) => {
-    try {
-      const res = await fetch(`${API_URL}/api/rides/standard/accept`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rideId, driverId: currentDriverId }),
-      });
 
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setCurrentOffer(null);
-        navigation.navigate("DriverEnRoute", { rideId, ride: data.ride });
-      } else {
-        Alert.alert("Offer Claimed", data.message || "Another driver accepted this request.");
-        setCurrentOffer(null);
-      }
-    } catch (err) {
-      Alert.alert("Connection Error", "Could not reach dispatch server.");
-    }
+  const handleAcceptStandardOffer = async (rideId) => {
+  // Fall back to offer state if rideId isn't passed directly
+  const targetRideId = rideId || currentOffer?.rideId;
+
+  if (!currentDriverId) {
+    Alert.alert("Session Error", "Driver ID missing from auth state.");
+    return;
+  }
+
+  const targetUrl = `${API_URL}/api/rides/solo/accept`;
+  const payload = { 
+    ride_id: targetRideId, 
+    driver_id: currentDriverId 
   };
 
+  try {
+    console.log(`📡 Sending Accept Request to ${targetUrl}:`, payload);
+
+    const res = await fetch(targetUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json();
+    console.log("📥 Accept Response:", data);
+
+    if (res.ok && data.success) {
+      setCurrentOffer(null);
+      navigation.navigate("DriverEnRoute", { 
+        rideId: data.ride?.id || targetRideId, 
+        ride: data.ride 
+      });
+    } else {
+      Alert.alert("Offer Claimed", data.message || "Ride request unavailable.");
+      setCurrentOffer(null);
+    }
+  } catch (err) {
+    console.error("❌ Accept fetch exception:", err);
+    Alert.alert("Connection Error", `Dispatch Error: ${err.message}`);
+  }
+};
+ 
+ 
   let currentDriverDistance = null;
   if (driverCoords && currentHub?.latitude && currentHub?.longitude) {
     currentDriverDistance = getDistanceFromLatLonInKm(
@@ -674,7 +730,7 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
-  if (isAuthLoading || loadingLocation || !currentRegion) {
+  if (loadingLocation || !currentRegion) {
     return (
       <SafeAreaView style={[styles.container, styles.centered]}>
         <ActivityIndicator size="large" color="#059669" />
@@ -721,8 +777,8 @@ export default function CreateCorridorScreen({ navigation }) {
             <Ionicons name="menu" size={22} color="#111111" />
           </TouchableOpacity>
           <View style={{ marginLeft: 10 }}>
-            <Text style={styles.headerTitleText}>Dispatch Center</Text>
-            <Text style={styles.headerSubtext}>Vehicle #{activeVehicleId}</Text>
+            <Text style={styles.headerTitleText}>Welcome Back </Text>
+           
           </View>
         </View>
 
