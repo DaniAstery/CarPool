@@ -7,12 +7,17 @@ import {
   Dimensions,
   Linking,
   Platform,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import MapView, { Marker, Polyline, Circle, PROVIDER_DEFAULT } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 
 const { width } = Dimensions.get("window");
+
+// Adjust API_URL to match your backend host
+const API_URL = "http://100.108.52.79:5000";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -32,7 +37,6 @@ const cleanMinimalMapStyle = [
   { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] },
 ];
 
-// Helper to extract numeric pickup location strictly from ride_request_solo payload
 const resolvePickupCoordinates = (params) => {
   const rawRide = params?.ride?.ride || params?.ride || params || {};
 
@@ -50,28 +54,35 @@ const resolvePickupCoordinates = (params) => {
 };
 
 export default function DriverEnRouteScreen({ route, navigation }) {
-  const { rideId, ride } = route.params || {};
+  const { rideId, ride, driverId } = route.params || {};
   const mapRef = useRef(null);
 
-  // 1. Resolve Passenger Pickup Coordinates from ride_request_solo
+  const rawRideData = ride?.ride || ride || {};
+  const currentRideId = rideId || rawRideData.id;
+  const currentDriverId = driverId || rawRideData.driver_id || 33;
+
+  // 1. Interactive Ride Status & Loading State
+  const [rideStatus, setRideStatus] = useState(rawRideData.status || "accepted");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // 2. Resolve Passenger Coordinates
   const passengerPickupCoords = resolvePickupCoordinates(route.params);
 
-  // 2. Driver Location State
+  // 3. Driver Coordinates & Heading State
   const [driverCoords, setDriverCoords] = useState({
-    latitude: parseFloat(ride?.driver_lat ?? 9.0300),
-    longitude: parseFloat(ride?.driver_lng ?? 38.7400),
+    latitude: parseFloat(rawRideData.driver_lat ?? 9.0300),
+    longitude: parseFloat(rawRideData.driver_lng ?? 38.7400),
   });
   const [heading, setHeading] = useState(0);
 
-  // Ride details
-  const rawRideData = ride?.ride || ride || {};
+  // Passenger & Ride Metadata
   const passengerName = rawRideData.passenger_name || `Passenger #${rawRideData.user_id || ""}`;
   const passengerPhone = rawRideData.passenger_phone || "";
   const destinationName = rawRideData.destination_name || "Destination";
   const farePrice = rawRideData.price || 150;
   const distanceKm = rawRideData.distance_km || 5.2;
 
-  // 3. Live Driver Tracking
+  // 4. Live GPS Tracking
   useEffect(() => {
     let locationSubscription;
 
@@ -99,7 +110,7 @@ export default function DriverEnRouteScreen({ route, navigation }) {
     return () => locationSubscription?.remove();
   }, []);
 
-  // 4. Auto-Fit Map View Camera
+  // 5. Auto-Fit Camera
   useEffect(() => {
     if (
       mapRef.current &&
@@ -109,12 +120,57 @@ export default function DriverEnRouteScreen({ route, navigation }) {
       mapRef.current.fitToCoordinates(
         [driverCoords, passengerPickupCoords],
         {
-          edgePadding: { top: 140, right: 60, bottom: 300, left: 60 },
+          edgePadding: { top: 140, right: 60, bottom: 320, left: 60 },
           animated: true,
         }
       );
     }
   }, [driverCoords.latitude, passengerPickupCoords.latitude]);
+
+  // Handle Arrival API Action
+const handleMarkArrived = async () => {
+  if (isSubmitting) return;
+  setIsSubmitting(true);
+
+  try {
+    const response = await fetch(`${API_URL}/api/rides/solo/arrived`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        driver_id: currentDriverId,
+      }),
+    });
+
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      throw new Error("Server returned an invalid non-JSON response.");
+    }
+
+    const data = await response.json();
+
+    if (data.success) {
+      setRideStatus("arrived");
+    } else {
+      Alert.alert("Notice", data.message || "Failed to notify arrival.");
+    }
+  } catch (err) {
+    console.error("❌ Arrival API error:", err);
+    Alert.alert("Network Error", "Could not connect to server. Check your connection.");
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+  // Handle Start Trip Action
+  const handleStartTrip = () => {
+    navigation.navigate("WaitingForPassengers", {
+      rideId: currentRideId,
+      ride: { ...rawRideData, status: "arrived" },
+      driverId: currentDriverId,
+    });
+  };
 
   const handleCallPassenger = () => {
     if (passengerPhone) {
@@ -124,7 +180,7 @@ export default function DriverEnRouteScreen({ route, navigation }) {
 
   return (
     <View style={StyleSheet.absoluteFillObject}>
-      {/* STANDARD UBER/LYFT MINIMAL MAP */}
+      {/* MINIMAL MAP */}
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFillObject}
@@ -139,7 +195,7 @@ export default function DriverEnRouteScreen({ route, navigation }) {
         showsMyLocationButton={false}
         showsCompass={false}
       >
-        {/* PASSENGER PICKUP HUB MARKER WITH HALO */}
+        {/* PASSENGER PICKUP MARKER */}
         <Marker
           coordinate={passengerPickupCoords}
           title="Passenger Pickup"
@@ -157,12 +213,16 @@ export default function DriverEnRouteScreen({ route, navigation }) {
           </View>
         </Marker>
 
-        {/* 2KM RADIUS GEOFENCE CIRCLE */}
+        {/* GEOFENCE CIRCLE */}
         <Circle
           center={passengerPickupCoords}
           radius={500}
-          strokeColor="#059669"
-          fillColor="rgba(5, 150, 105, 0.15)"
+          strokeColor={rideStatus === "arrived" ? "#2563EB" : "#059669"}
+          fillColor={
+            rideStatus === "arrived"
+              ? "rgba(37, 99, 235, 0.15)"
+              : "rgba(5, 150, 105, 0.15)"
+          }
           strokeWidth={2}
         />
 
@@ -170,7 +230,7 @@ export default function DriverEnRouteScreen({ route, navigation }) {
         {driverCoords?.latitude && (
           <Marker
             coordinate={driverCoords}
-            title="Your Vehicle Location"
+            title="Your Location"
             anchor={{ x: 0.5, y: 0.5 }}
             rotation={heading}
             flat={true}
@@ -184,11 +244,11 @@ export default function DriverEnRouteScreen({ route, navigation }) {
           </Marker>
         )}
 
-        {/* ACTIVE DRIVER TO PICKUP POLYLINE */}
+        {/* ROUTE POLYLINE */}
         {driverCoords?.latitude && passengerPickupCoords?.latitude && (
           <Polyline
             coordinates={[driverCoords, passengerPickupCoords]}
-            strokeColor="#059669"
+            strokeColor={rideStatus === "arrived" ? "#2563EB" : "#059669"}
             strokeWidth={5}
             geodesic={true}
           />
@@ -197,14 +257,28 @@ export default function DriverEnRouteScreen({ route, navigation }) {
 
       {/* TOP FLOATING STATUS BAR */}
       <View style={styles.topStatusCard}>
-        <View style={styles.statusDot} />
-        <Text style={styles.statusText}>En Route to Pickup Hub</Text>
+        <View
+          style={[
+            styles.statusDot,
+            { backgroundColor: rideStatus === "arrived" ? "#2563EB" : "#059669" },
+          ]}
+        />
+        <Text style={styles.statusText}>
+          {rideStatus === "arrived"
+            ? "Arrived • Passenger Notified"
+            : "En Route to Pickup Hub"}
+        </Text>
       </View>
 
-      {/* BOTTOM CONTROL CARD */}
+      {/* BOTTOM CONTROL SHEET */}
       <View style={styles.bottomSheet}>
         <View style={styles.passengerRow}>
-          <View style={styles.avatarCircle}>
+          <View
+            style={[
+              styles.avatarCircle,
+              { backgroundColor: rideStatus === "arrived" ? "#2563EB" : "#059669" },
+            ]}
+          >
             <Text style={styles.avatarText}>
               {passengerName.charAt(0).toUpperCase()}
             </Text>
@@ -212,15 +286,24 @@ export default function DriverEnRouteScreen({ route, navigation }) {
 
           <View style={styles.passengerInfo}>
             <Text style={styles.passengerNameText}>{passengerName}</Text>
-            <Text style={styles.pickupSubtext}>Heading to Dropoff: {destinationName}</Text>
+            <Text style={styles.pickupSubtext}>
+              Heading to Dropoff: {destinationName}
+            </Text>
           </View>
 
           {passengerPhone ? (
             <TouchableOpacity
-              style={styles.callButton}
+              style={[
+                styles.callButton,
+                { backgroundColor: rideStatus === "arrived" ? "#EFF6FF" : "#ECFDF5" },
+              ]}
               onPress={handleCallPassenger}
             >
-              <Ionicons name="call" size={20} color="#059669" />
+              <Ionicons
+                name="call"
+                size={20}
+                color={rideStatus === "arrived" ? "#2563EB" : "#059669"}
+              />
             </TouchableOpacity>
           ) : null}
         </View>
@@ -238,25 +321,34 @@ export default function DriverEnRouteScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* ARRIVED BUTTON */}
-        <TouchableOpacity
-          style={styles.arrivedButton}
-          onPress={() =>
-            navigation.navigate("WaitingForPassengers", {
-              rideId: rideId || rawRideData.id,
-              ride: rawRideData,
-            })
-          }
-        >
-          <Text style={styles.arrivedButtonText}>Arrived at Pickup</Text>
-        </TouchableOpacity>
+        {/* DYNAMIC ACTION BUTTON */}
+        {rideStatus === "arrived" ? (
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: "#2563EB" }]}
+            onPress={handleStartTrip}
+          >
+            <Text style={styles.actionButtonText}>Start Trip</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.actionButton, { backgroundColor: "#059669" }]}
+            onPress={handleMarkArrived}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.actionButtonText}>I Have Arrived</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Target Pin / Halo Styles
+  // Target Pin
   destinationHalo: {
     width: 48,
     height: 48,
@@ -289,7 +381,7 @@ const styles = StyleSheet.create({
     borderColor: "#FFFFFF",
   },
 
-  // Driver Car Marker Styles
+  // Driver Car Marker
   carMarkerWrapper: {
     width: 36,
     height: 36,
@@ -333,7 +425,6 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "#059669",
     marginRight: 8,
   },
   statusText: {
@@ -367,7 +458,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#059669",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -394,20 +484,19 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#ECFDF5",
     justifyContent: "center",
     alignItems: "center",
   },
 
   // Metrics Card
-  metricsCard: {
+ metricsCard: {
     flexDirection: "row",
     backgroundColor: "#F9FAFB",
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 16,
     alignItems: "center",
-    justifyContent: "space-around",
+    justifyContent: "space-around", // 👈 Fixed property name
     marginBottom: 16,
     borderWidth: 1,
     borderColor: "#E5E7EB",
@@ -432,14 +521,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#E5E7EB",
   },
 
-  // Button
-  arrivedButton: {
-    backgroundColor: "#059669",
+  // Action Button
+  actionButton: {
     borderRadius: 14,
     paddingVertical: 15,
     alignItems: "center",
+    justifyContent: "center",
   },
-  arrivedButtonText: {
+  actionButtonText: {
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "700",
