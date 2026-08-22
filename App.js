@@ -31,6 +31,8 @@ import HomeScreen from "./src/screens/HomeScreen";
 import StandardScreen from "./src/screens/StandardScreen";
 import DriverEnRouteScreen from "./src/screens/Driver/DriverEnRouteScreen";
 import TrackingDriverScreen from "./src/screens/TrackingDriverScreen";
+import DriverStandardTripInProgress from "./src/screens/Driver/DriverStandardTripInProgress";
+
 
 
 const Stack = createNativeStackNavigator();
@@ -94,6 +96,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
             <Stack.Screen name="TripEarningsSummary" component={TripEarningsSummaryScreen} />
             <Stack.Screen name="DriverPendingVerification" component={DriverPendingVerification} />
             <Stack.Screen name="DriverEnRoute" component={DriverEnRouteScreen} />
+            <Stack.Screen name="DriverStandardTripInProgress" component={DriverStandardTripInProgress} />
           </>
         ) : (
           // 🎒 PASSENGER WORKSPACE

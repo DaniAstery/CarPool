@@ -163,13 +163,40 @@ const handleMarkArrived = async () => {
   }
 };
 
-  // Handle Start Trip Action
-  const handleStartTrip = () => {
-    navigation.navigate("WaitingForPassengers", {
-      rideId: currentRideId,
-      ride: { ...rawRideData, status: "arrived" },
-      driverId: currentDriverId,
-    });
+ // Handle Start Trip Action
+  const handleStartTrip = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+
+    try {
+      // 1. Update status to 'in_trip' in ride_request_solo table via backend
+      const response = await fetch(`${API_URL}/api/rides/solo/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ride_id: currentRideId,
+          status: "in_trip",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // 2. Navigate to DriverStandardTripInProgress with updated status
+        navigation.navigate("DriverStandardTripInProgress", {
+          rideId: currentRideId,
+          ride: { ...rawRideData, status: "in_trip" },
+          driverId: currentDriverId,
+        });
+      } else {
+        Alert.alert("Notice", data.message || "Failed to start trip.");
+      }
+    } catch (err) {
+      console.error("❌ Start Trip API error:", err);
+      Alert.alert("Network Error", "Could not connect to server.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCallPassenger = () => {
