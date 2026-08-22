@@ -83,8 +83,8 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   });
   const [heading, setHeading] = useState(0);
 
-  // Start with estimated distance, then let live GPS accumulate actual distance traveled
-  const [distanceKm, setDistanceKm] = useState(parseFloat(rawRideData.distance_km || 1.0));
+  // TRUE METERED START: Start at 0.0 km so sitting still doesn't charge estimated route distance
+  const [distanceKm, setDistanceKm] = useState(0.0);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [livePrice, setLivePrice] = useState(0);
 
@@ -222,7 +222,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
           [
             {
               text: "Done",
-              onPress: () => navigation?.navigate("CreateCorridor"),
+              onPress: () => navigation.replace("CreateCorridor"),
             },
           ]
         );
