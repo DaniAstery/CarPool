@@ -44,9 +44,25 @@ const resolveDestinationCoordinates = (rawRide) => {
   };
 };
 
+// Haversine formula to calculate distance between two GPS coordinates in kilometers
+const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 export default function DriverStandardTripInProgress({ route, navigation }) {
   const { rideId, ride, driverId } = route.params || {};
   const mapRef = useRef(null);
+  const lastCoordsRef = useRef(null); // Tracks previous GPS point for distance accumulation
 
   const rawRideData = ride?.ride || ride || {};
   const currentRideId = rideId || rawRideData.id;
@@ -67,7 +83,8 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   });
   const [heading, setHeading] = useState(0);
 
-  const [distanceKm, setDistanceKm] = useState(parseFloat(rawRideData.distance_km || 5.2));
+  // Start with estimated distance, then let live GPS accumulate actual distance traveled
+  const [distanceKm, setDistanceKm] = useState(parseFloat(rawRideData.distance_km || 1.0));
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [livePrice, setLivePrice] = useState(0);
 
@@ -93,7 +110,6 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     setLoading(true);
     setError(null);
     try {
-      // Fetch pricing configuration by ID (1) from backend API
       const pricingRes = await fetch(`${API_URL}/api/pricing/1`);
       if (!pricingRes.ok) {
         throw new Error("Failed to fetch pricing configuration from database.");
@@ -112,12 +128,12 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   useEffect(() => {
     if (!pricingConfig) return;
 
-    const base = parseFloat(pricingConfig.base_flag_down || 95.00);
-    const ratePerKm = parseFloat(pricingConfig.rate_per_km || 16.00);
-    const ratePerMin = parseFloat(pricingConfig.rate_per_minute || 1.50);
+    const base = parseFloat(pricingConfig.base_flag_down || 130.00);
+    const ratePerKm = parseFloat(pricingConfig.rate_per_km || 28.00);
+    const ratePerMin = parseFloat(pricingConfig.rate_per_minute || 2.50);
     const fuelMult = parseFloat(pricingConfig.fuel_multiplier || 1.00);
     const surgeMult = parseFloat(pricingConfig.surge_multiplier || 1.00);
-    const minFare = parseFloat(pricingConfig.minimum_fare || 120.00);
+    const minFare = parseFloat(pricingConfig.minimum_fare || 160.00);
 
     const subtotal = (base + (distanceKm * ratePerKm) + (elapsedMinutes * ratePerMin)) * fuelMult * surgeMult;
     const calculatedFare = Math.round(Math.max(subtotal, minFare));
@@ -125,7 +141,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     setLivePrice(calculatedFare);
   }, [distanceKm, elapsedMinutes, pricingConfig]);
 
-  // 5. Live GPS Tracking
+  // 5. Live GPS Tracking & Meter Distance Accumulation
   useEffect(() => {
     let locationSubscription;
     (async () => {
@@ -135,13 +151,30 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
       locationSubscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          distanceInterval: 10,
+          distanceInterval: 5, // Check every 5 meters
         },
         (loc) => {
-          setDriverCoords({
-            latitude: Number(loc.coords.latitude),
-            longitude: Number(loc.coords.longitude),
-          });
+          const newLat = Number(loc.coords.latitude);
+          const newLng = Number(loc.coords.longitude);
+
+          // Accumulate actual metered distance traveled
+          if (lastCoordsRef.current) {
+            const deltaKm = calculateHaversineDistance(
+              lastCoordsRef.current.latitude,
+              lastCoordsRef.current.longitude,
+              newLat,
+              newLng
+            );
+
+            // Filter out GPS jump/jitter (ignore movements < 3 meters or unrealistically large teleports > 1 km)
+            if (deltaKm > 0.003 && deltaKm < 1.0) {
+              setDistanceKm((prevDist) => parseFloat((prevDist + deltaKm).toFixed(2)));
+            }
+          }
+
+          lastCoordsRef.current = { latitude: newLat, longitude: newLng };
+          setDriverCoords({ latitude: newLat, longitude: newLng });
+
           if (loc.coords.heading) {
             setHeading(Number(loc.coords.heading));
           }
@@ -162,14 +195,10 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     }
   }, [driverCoords.latitude, destinationCoords.latitude]);
 
-  // Handle Complete Trip against ride_request_solo
+  // Handle Complete Trip against backend completion endpoint
   const handleCompleteTrip = async () => {
     if (isSubmitting || !pricingConfig) return;
     setIsSubmitting(true);
-
-    const commRate = parseFloat(pricingConfig.platform_commission_rate || 0.0500);
-    const platformCommission = parseFloat((livePrice * commRate).toFixed(2));
-    const driverTakeHome = parseFloat((livePrice - platformCommission).toFixed(2));
 
     try {
       const response = await fetch(`${API_URL}/api/rides/solo/complete`, {
@@ -177,20 +206,19 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ride_id: currentRideId,
-          final_fare: livePrice,
-          platform_commission: platformCommission,
-          driver_take_home: driverTakeHome,
-          distance_km: distanceKm,
-          duration_minutes: elapsedMinutes,
+          actual_distance_km: distanceKm,
+          elapsed_minutes: elapsedMinutes,
         }),
       });
 
       const data = await response.json();
 
       if (response.ok && data.success) {
+        const { total_fare, driver_net_payout, platform_fee } = data.fare_breakdown || {};
+        
         Alert.alert(
           "Trip Completed!",
-          `Collect ${livePrice} ETB from rider.\n\nYour Earnings: ${driverTakeHome} ETB\nPlatform Fee: -${platformCommission} ETB`,
+          `Collect ${total_fare || livePrice} ETB from rider.\n\nYour Earnings: ${driver_net_payout || 'N/A'} ETB\nPlatform Fee: -${platform_fee || 'N/A'} ETB`,
           [
             {
               text: "Done",
@@ -301,7 +329,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
       {/* TOP FLOATING STATUS BAR */}
       <View style={styles.topStatusCard}>
         <View style={[styles.statusDot, { backgroundColor: "#10B981" }]} />
-        <Text style={styles.statusText}>Trip In Progress • Addis Ababa Meter</Text>
+        <Text style={styles.statusText}>Trip In Progress • Live Meter Active</Text>
       </View>
 
       {/* BOTTOM CONTROL SHEET */}
