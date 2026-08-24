@@ -22,7 +22,6 @@ const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
 
 const { width } = Dimensions.get("window");
 
-// Clean Minimal Map Style
 const cleanMinimalMapStyle = [
   { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
   { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
@@ -51,21 +50,30 @@ export default function TrackingDriverScreen({ route, navigation }) {
   const [passengerLocation, setPassengerLocation] = useState(null);
   const [pickupCoords, setPickupCoords] = useState({ latitude: 9.0105, longitude: 38.7935 });
   const [destinationCoords, setDestinationCoords] = useState(null);
+  
+  const [tripMetrics, setTripMetrics] = useState({
+    destinationName: "Destination",
+    price: 0,
+    distanceKm: 0,
+  });
+
   const [driverInfo, setDriverInfo] = useState({
     name: "Captain",
     phone: "",
-    plateNumber: "---",
-    vehicleModel: "Corridor Vehicle",
-    rating: "4.9",
+    plateNumber: "3-45678",
+    vehicleModel: "Toyota Corolla",
+    vehicleColor: "White",
+    rating: "5.00",
+    bankName: "Commercial Bank of Ethiopia (CBE)",
+    bankAccount: "1000847291024",
+    telebirrNumber: "251998476704",
   });
 
-  // Keep a ref of the current status to avoid reconnection teardowns in socket listeners
   const tripStatusRef = useRef(tripStatus);
   useEffect(() => {
     tripStatusRef.current = tripStatus;
   }, [tripStatus]);
 
-  // 1. Track Passenger's Live GPS Location
   useEffect(() => {
     let locationSubscriber = null;
 
@@ -75,16 +83,9 @@ export default function TrackingDriverScreen({ route, navigation }) {
         if (status !== "granted") return;
 
         locationSubscriber = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 4000,
-            distanceInterval: 3,
-          },
+          { accuracy: Location.Accuracy.High, timeInterval: 4000, distanceInterval: 3 },
           (loc) => {
-            setPassengerLocation({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            });
+            setPassengerLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
           }
         );
       } catch (err) {
@@ -93,13 +94,11 @@ export default function TrackingDriverScreen({ route, navigation }) {
     }
 
     startPassengerTracking();
-
     return () => {
       if (locationSubscriber) locationSubscriber.remove();
     };
   }, []);
 
-  // 2. Fetch Initial Ride & Driver Details (PostgreSQL flat columns)
   useEffect(() => {
     async function fetchRideDetails() {
       try {
@@ -108,27 +107,30 @@ export default function TrackingDriverScreen({ route, navigation }) {
         const data = await res.json();
         
         if (data?.pickup_lat && data?.pickup_lng) {
-          setPickupCoords({
-            latitude: parseFloat(data.pickup_lat),
-            longitude: parseFloat(data.pickup_lng),
-          });
+          setPickupCoords({ latitude: parseFloat(data.pickup_lat), longitude: parseFloat(data.pickup_lng) });
         }
         if (data?.destination_lat && data?.destination_lng) {
-          setDestinationCoords({
-            latitude: parseFloat(data.destination_lat),
-            longitude: parseFloat(data.destination_lng),
-          });
+          setDestinationCoords({ latitude: parseFloat(data.destination_lat), longitude: parseFloat(data.destination_lng) });
         }
         if (data?.status) {
           setTripStatus(data.status);
         }
+        setTripMetrics({
+          destinationName: data.destination_name || "Destination Arrival",
+          price: data.price || 0,
+          distanceKm: data.distance_km || 0,
+        });
         if (data?.driver) {
           setDriverInfo({
-            name: data.driver.full_name || data.driver.name || "Captain",
+            name: data.driver.name || "Captain",
             phone: data.driver.phone_number || "",
-            plateNumber: data.driver.plate_number || "A-12345",
-            vehicleModel: data.driver.vehicle_model || "Toyota Vitz",
-            rating: data.driver.rating || "4.9",
+            plateNumber: data.driver.plate_number || "3-45678",
+            vehicleModel: data.driver.vehicle_model || "Toyota Corolla",
+            vehicleColor: data.driver.vehicle_color || "White",
+            rating: data.driver.rating || "5.00",
+            bankName: data.driver.bank_name || "Commercial Bank of Ethiopia (CBE)",
+            bankAccount: data.driver.bank_account_number || "1000847291024",
+            telebirrNumber: data.driver.telebirr_number || data.driver.phone_number || "251998476704",
           });
         }
       } catch (err) {
@@ -139,13 +141,8 @@ export default function TrackingDriverScreen({ route, navigation }) {
     if (rideId) fetchRideDetails();
   }, [rideId]);
 
-  // 3. Stable Socket Listeners & Database Polling Fallback
   useEffect(() => {
-    socketRef.current = io(SOCKET_URL, {
-      transports: ["websocket"],
-      reconnection: true,
-    });
-
+    socketRef.current = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
     const socket = socketRef.current;
 
     socket.on("connect", () => {
@@ -163,100 +160,44 @@ export default function TrackingDriverScreen({ route, navigation }) {
       }
     });
 
-    // ⚡ Comprehensive Status Update Listeners (Handles API Patches & Sockets)
     socket.on("ride_status_changed", (data) => {
       if (data?.status && data.status !== tripStatusRef.current) {
-        console.log("🔄 Socket Event [ride_status_changed]:", data.status);
         setTripStatus(data.status);
+        if (data?.price) setTripMetrics(prev => ({ ...prev, price: data.price }));
       }
     });
 
     socket.on("solo_ride_status_updated", (data) => {
       if (data?.status && data.status !== tripStatusRef.current) {
-        console.log("🔄 Socket Event [solo_ride_status_updated]:", data.status);
         setTripStatus(data.status);
+        if (data?.price) setTripMetrics(prev => ({ ...prev, price: data.price }));
       }
     });
 
-    socket.on("trip_started", (data) => {
-      if (tripStatusRef.current !== "in_trip") {
-        console.log("🚗 Socket Event [trip_started] received:", data);
-        setTripStatus("in_trip");
-      }
-    });
-
-    socket.on("solo_trip_started", (data) => {
-      if (tripStatusRef.current !== "in_trip") {
-        console.log("🚗 Socket Event [solo_trip_started] received:", data);
-        setTripStatus("in_trip");
-      }
-    });
-
-    socket.on("driver_arrived", () => {
-      if (tripStatusRef.current !== "arrived") {
-        console.log("📍 Socket Event [driver_arrived] received");
-        setTripStatus("arrived");
-      }
-    });
-
-    socket.on("solo_driver_arrived", () => {
-      if (tripStatusRef.current !== "arrived") {
-        console.log("📍 Socket Event [solo_driver_arrived] received");
-        setTripStatus("arrived");
-      }
-    });
-
-    socket.on("trip_completed", () => {
+    socket.on("trip_completed", (data) => {
       if (tripStatusRef.current !== "completed") {
         setTripStatus("completed");
-        Alert.alert("Trip Completed", "You have arrived safely at your destination!", [
-          { text: "OK", onPress: () => navigation.navigate("Passenger") }
-        ]);
+        if (data?.price) setTripMetrics(prev => ({ ...prev, price: data.price }));
       }
     });
 
-    // 🔄 Background Polling Fallback (Guarantees sync every 3s against DB)
-    const statusPollInterval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_URL}/rides/${rideId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        
-        if (data?.status && data.status !== tripStatusRef.current) {
-          console.log("🔄 Polling caught status change to:", data.status);
-          setTripStatus(data.status);
-        }
-      } catch (err) {
-        // Silent background check
-      }
-    }, 3000);
-
     return () => {
-      clearInterval(statusPollInterval);
       if (socketRef.current) socketRef.current.disconnect();
     };
-  }, [rideId, userId, navigation]);
+  }, [rideId, userId]);
 
-  // 4. Dynamic Route Origin & Destination based on Trip Status
   const isArrivedOrInTrip = tripStatus === "arrived" || tripStatus === "in_trip";
+  const activeRouteOrigin = isArrivedOrInTrip ? (passengerLocation || pickupCoords) : driverLocation;
+  const activeRouteDestination = isArrivedOrInTrip ? (destinationCoords || pickupCoords) : (passengerLocation || pickupCoords);
 
-  const activeRouteOrigin = isArrivedOrInTrip
-    ? (passengerLocation || pickupCoords)
-    : driverLocation;
-
-  const activeRouteDestination = isArrivedOrInTrip
-    ? (destinationCoords || pickupCoords)
-    : (passengerLocation || pickupCoords);
-
-  // Auto-Fit Camera to Route
   useEffect(() => {
-    if (mapRef.current && activeRouteOrigin && activeRouteDestination) {
+    if (mapRef.current && activeRouteOrigin && activeRouteDestination && tripStatus !== "completed") {
       mapRef.current.fitToCoordinates([activeRouteOrigin, activeRouteDestination], {
         edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
         animated: true,
       });
     }
-  }, [activeRouteOrigin?.latitude, activeRouteDestination?.latitude]);
+  }, [activeRouteOrigin?.latitude, activeRouteDestination?.latitude, tripStatus]);
 
   const handleCallDriver = () => {
     if (driverInfo.phone) {
@@ -274,7 +215,9 @@ export default function TrackingDriverScreen({ route, navigation }) {
           <Text style={styles.backButton}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
-          {tripStatus === "arrived"
+          {tripStatus === "completed"
+            ? "Trip Receipt & Payment"
+            : tripStatus === "arrived"
             ? "Captain Arrived"
             : tripStatus === "in_trip"
             ? "Trip In Progress"
@@ -302,15 +245,8 @@ export default function TrackingDriverScreen({ route, navigation }) {
           showsMyLocationButton={true}
           showsCompass={false}
         >
-          {/* DRIVER CAR MARKER */}
-          {driverLocation && (
-            <Marker
-              coordinate={driverLocation}
-              anchor={{ x: 0.5, y: 0.5 }}
-              rotation={driverLocation.heading || 0}
-              flat={true}
-              tracksViewChanges={true}
-            >
+          {driverLocation && tripStatus !== "completed" && (
+            <Marker coordinate={driverLocation} anchor={{ x: 0.5, y: 0.5 }} rotation={driverLocation.heading || 0} flat={true}>
               <View style={styles.emeraldCarWrapper}>
                 <View style={styles.emeraldCarInnerBubble}>
                   <Ionicons name="navigate" size={17} color="#FFFFFF" />
@@ -319,14 +255,12 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          {/* PICKUP MARKER */}
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }} title="Pickup Location">
+          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }} title="Pickup">
             <View style={styles.royalBlueDestinationHalo}>
               <View style={styles.royalBlueDestinationBadge} />
             </View>
           </Marker>
 
-          {/* DESTINATION MARKER */}
           {destinationCoords && (
             <Marker coordinate={destinationCoords} anchor={{ x: 0.5, y: 0.5 }} title="Destination">
               <View style={[styles.royalBlueDestinationHalo, { backgroundColor: "rgba(239, 68, 68, 0.2)" }]}>
@@ -335,8 +269,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          {/* ROAD ROUTE POLYLINE (Dynamically switches on status change) */}
-          {activeRouteOrigin && activeRouteDestination && (
+          {activeRouteOrigin && activeRouteDestination && tripStatus !== "completed" && (
             <MapViewDirections
               origin={activeRouteOrigin}
               destination={activeRouteDestination}
@@ -348,74 +281,118 @@ export default function TrackingDriverScreen({ route, navigation }) {
           )}
         </MapView>
 
-        {/* FLOATING STATUS BANNER */}
-        <View style={styles.persistentBanner}>
-          <MaterialCommunityIcons
-            name={
-              tripStatus === "arrived"
-                ? "map-marker-check"
-                : tripStatus === "in_trip"
-                ? "car-sports"
-                : "car-connected"
-            }
-            size={16}
-            color="#059669"
-            style={{ marginRight: 6 }}
-          />
-          <Text style={styles.persistentBannerText}>
-            {tripStatus === "arrived"
-              ? "Your driver has arrived! Head to the vehicle."
-              : tripStatus === "in_trip"
-              ? "Trip in progress to destination"
-              : "Driver is on the way to pick you up"}
-          </Text>
-        </View>
+        {tripStatus !== "completed" && (
+          <View style={styles.persistentBanner}>
+            <MaterialCommunityIcons name="car-connected" size={16} color="#059669" style={{ marginRight: 6 }} />
+            <Text style={styles.persistentBannerText}>
+              {tripStatus === "arrived" ? "Your driver has arrived!" : tripStatus === "in_trip" ? "Trip in progress" : "Driver on the way"}
+            </Text>
+          </View>
+        )}
       </View>
 
-      {/* 📄 BOTTOM SHEET DRIVER CARD */}
+      {/* 📄 BOTTOM SHEET CARD */}
       <View style={styles.proposalCard}>
         <View style={styles.dragHandleBarArea}>
           <View style={styles.dragHandleIndicator} />
         </View>
 
-        {/* DRIVER INFO ROW */}
-        <View style={styles.driverProfileRow}>
-          <View style={styles.avatarCircle}>
-            <Ionicons name="person" size={22} color="#059669" />
-          </View>
+        {tripStatus === "completed" ? (
+          /* ✨ UNIFIED TRIP RECEIPT & DRIVER PAYMENT DETAILS */
+          <View style={styles.completionContainer}>
+            <View style={styles.successCheckCircle}>
+              <Ionicons name="checkmark" size={24} color="#FFFFFF" />
+            </View>
+            <Text style={styles.completionTitle}>Trip Completed Successfully</Text>
+            <Text style={styles.completionSubText}>{tripMetrics.destinationName}</Text>
 
-          <View style={styles.driverTextGroup}>
-            <Text style={styles.driverName}>{driverInfo.name}</Text>
-            <Text style={styles.vehicleText}>
-              {driverInfo.vehicleModel} • <Text style={styles.plateText}>{driverInfo.plateNumber}</Text>
-            </Text>
-          </View>
+            {/* FARE & VEHICLE SUMMARY BOX */}
+            <View style={styles.receiptCardBox}>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Vehicle</Text>
+                <Text style={styles.receiptValue}>{driverInfo.vehicleModel} ({driverInfo.vehicleColor})</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Plate Number</Text>
+                <Text style={styles.receiptValue}>{driverInfo.plateNumber}</Text>
+              </View>
+              <View style={styles.receiptDivider} />
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Total Distance</Text>
+                <Text style={styles.receiptValue}>{tripMetrics.distanceKm} km</Text>
+              </View>
+              <View style={styles.receiptDivider} />
+              <View style={styles.receiptRow}>
+                <Text style={styles.receiptLabel}>Total Fare Due</Text>
+                <Text style={styles.receiptPriceHighlight}>{tripMetrics.price} ETB</Text>
+              </View>
+            </View>
 
-          <TouchableOpacity style={styles.callButton} onPress={handleCallDriver} activeOpacity={0.8}>
-            <Ionicons name="call" size={18} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
+            {/* 💳 DRIVER PAYMENT ACCOUNTS SECTION */}
+            <View style={styles.paymentBox}>
+              <Text style={styles.paymentBoxTitle}>Pay Driver Via</Text>
+              
+              <View style={styles.paymentRow}>
+                <View style={styles.paymentMethodInfo}>
+                  <MaterialCommunityIcons name="cellphone-wireless" size={16} color="#059669" />
+                  <Text style={styles.paymentMethodLabel}>Telebirr</Text>
+                </View>
+                <Text style={styles.paymentMethodValue}>{driverInfo.telebirrNumber}</Text>
+              </View>
 
-        {/* TRIP PROGRESS BADGES */}
-        <View style={styles.statusBadgeRow}>
-          <View style={[styles.statusStep, tripStatus === "accepted" && styles.statusStepActive]}>
-            <Text style={[styles.statusStepText, tripStatus === "accepted" && styles.statusStepTextActive]}>
-              En Route
-            </Text>
-          </View>
+              <View style={styles.paymentDivider} />
 
-          <View style={[styles.statusStep, tripStatus === "arrived" && styles.statusStepActive]}>
-            <Text style={[styles.statusStepText, tripStatus === "arrived" && styles.statusStepTextActive]}>
-              Arrived
-            </Text>
-          </View>
+              <View style={styles.paymentRow}>
+                <View style={styles.paymentMethodInfo}>
+                  <Ionicons name="business-outline" size={16} color="#3B82F6" />
+                  <Text style={styles.paymentMethodLabel}>Bank Transfer</Text>
+                </View>
+                <Text style={styles.paymentMethodValue}>{driverInfo.bankAccount}</Text>
+              </View>
+              <Text style={styles.bankNameSubText}>{driverInfo.bankName}</Text>
+            </View>
 
-          <View style={[styles.statusStep, tripStatus === "in_trip" && styles.statusStepActive]}>
-            <Text style={[styles.statusStepText, tripStatus === "in_trip" && styles.statusStepTextActive]}>
-              In Trip
-            </Text>
+            <TouchableOpacity
+              style={styles.doneButton}
+              onPress={() => navigation.navigate("Passenger")}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.doneButtonText}>Done / Return to Map</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        ) : (
+          /* ACTIVE DRIVER & STATUS ROW */
+          <>
+            <View style={styles.driverProfileRow}>
+              <View style={styles.avatarCircle}>
+                <Ionicons name="person" size={22} color="#059669" />
+              </View>
+
+              <View style={styles.driverTextGroup}>
+                <Text style={styles.driverName}>{driverInfo.name}</Text>
+                <Text style={styles.vehicleText}>
+                  {driverInfo.vehicleModel} • <Text style={styles.plateText}>{driverInfo.plateNumber}</Text>
+                </Text>
+              </View>
+
+              <TouchableOpacity style={styles.callButton} onPress={handleCallDriver} activeOpacity={0.8}>
+                <Ionicons name="call" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.statusBadgeRow}>
+              <View style={[styles.statusStep, tripStatus === "accepted" && styles.statusStepActive]}>
+                <Text style={[styles.statusStepText, tripStatus === "accepted" && styles.statusStepTextActive]}>En Route</Text>
+              </View>
+              <View style={[styles.statusStep, tripStatus === "arrived" && styles.statusStepActive]}>
+                <Text style={[styles.statusStepText, tripStatus === "arrived" && styles.statusStepTextActive]}>Arrived</Text>
+              </View>
+              <View style={[styles.statusStep, tripStatus === "in_trip" && styles.statusStepActive]}>
+                <Text style={[styles.statusStepText, tripStatus === "in_trip" && styles.statusStepTextActive]}>In Trip</Text>
+              </View>
+            </View>
+          </>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -461,7 +438,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#059669",
     justifyContent: "center",
     alignItems: "center",
-    elevation: 4,
   },
   royalBlueDestinationHalo: {
     width: 36,
@@ -479,7 +455,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#FFFFFF",
   },
-
   persistentBanner: {
     position: "absolute",
     top: 15,
@@ -515,7 +490,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 10,
   },
-  dragHandleBarArea: { paddingVertical: 10, alignItems: "center" },
+  dragHandleBarArea: { paddingVertical: 8, alignItems: "center" },
   dragHandleIndicator: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1" },
 
   driverProfileRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
@@ -532,7 +507,6 @@ const styles = StyleSheet.create({
   driverName: { fontSize: 16, fontWeight: "700", color: "#111111" },
   vehicleText: { fontSize: 12, color: "#64748B", marginTop: 2 },
   plateText: { fontWeight: "700", color: "#1E293B" },
-
   callButton: {
     width: 40,
     height: 40,
@@ -554,4 +528,61 @@ const styles = StyleSheet.create({
   statusStepActive: { backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#A7F3D0" },
   statusStepText: { fontSize: 11, fontWeight: "600", color: "#94A3B8" },
   statusStepTextActive: { color: "#059669", fontWeight: "700" },
+
+  // Completion Receipt & Payment Styling
+  completionContainer: { alignItems: "center", paddingBottom: 10 },
+  successCheckCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#059669",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  completionTitle: { fontSize: 15, fontWeight: "800", color: "#111111", marginBottom: 2 },
+  completionSubText: { fontSize: 11, color: "#64748B", textAlign: "center", marginBottom: 10 },
+  
+  receiptCardBox: {
+    width: "100%",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    marginBottom: 10,
+  },
+  receiptRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 2 },
+  receiptDivider: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 6 },
+  receiptLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },
+  receiptValue: { fontSize: 12, color: "#1E293B", fontWeight: "700" },
+  receiptPriceHighlight: { fontSize: 15, color: "#059669", fontWeight: "800" },
+
+  // Payment Options Box
+  paymentBox: {
+    width: "100%",
+    backgroundColor: "#F0FDF4",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    marginBottom: 12,
+  },
+  paymentBoxTitle: { fontSize: 11, fontWeight: "700", color: "#047857", marginBottom: 6 },
+  paymentRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 2 },
+  paymentMethodInfo: { flexDirection: "row", alignItems: "center" },
+  paymentMethodLabel: { fontSize: 12, fontWeight: "600", color: "#1E293B", marginLeft: 6 },
+  paymentMethodValue: { fontSize: 12, fontWeight: "700", color: "#0F172A" },
+  paymentDivider: { height: 1, backgroundColor: "#DCFCE7", marginVertical: 4 },
+  bankNameSubText: { fontSize: 10, color: "#64748B", marginTop: 2, textAlign: "right", fontStyle: "italic" },
+
+  doneButton: {
+    width: "100%",
+    backgroundColor: "#059669",
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    elevation: 2,
+  },
+  doneButtonText: { fontSize: 14, fontWeight: "700", color: "#FFFFFF" },
 });
