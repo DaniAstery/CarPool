@@ -10,9 +10,10 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, PROVIDER_DEFAULT } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import io from "socket.io-client";
 
 const API_URL = "http://100.108.52.79:5000/api";
@@ -21,16 +22,34 @@ const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
 
 const { width } = Dimensions.get("window");
 
+// Clean Minimal Map Style
+const cleanMinimalMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
+  { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#f5f5f5" }] },
+  { featureType: "administrative.land_parcel", elementType: "labels.text.fill", stylers: [{ color: "#bdbdbd" }] },
+  { featureType: "poi", elementType: "geometry", stylers: [{ color: "#eeeeee" }] },
+  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
+  { featureType: "road.arterial", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#e0e0e0" }] },
+  { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#e0e0e0" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#c9c9c9" }] },
+  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] },
+];
+
 export default function TrackingDriverScreen({ route, navigation }) {
-  const { rideId, userId, driverId, initialStatus } = route.params || {};
+  const { rideId, userId, initialStatus } = route.params || {};
 
   const mapRef = useRef(null);
   const socketRef = useRef(null);
 
-  const [tripStatus, setTripStatus] = useState(initialStatus || "accepted"); // accepted, arrived, in_trip, completed
+  const [tripStatus, setTripStatus] = useState(initialStatus || "accepted");
   const [driverLocation, setDriverLocation] = useState(null);
+  const [passengerLocation, setPassengerLocation] = useState(null); // Passenger's live GPS position
   const [pickupCoords, setPickupCoords] = useState({ latitude: 9.0105, longitude: 38.7935 });
-  const [destinationCoords, setDestinationCoords] = useState(null);
   const [driverInfo, setDriverInfo] = useState({
     name: "Captain",
     phone: "",
@@ -39,7 +58,46 @@ export default function TrackingDriverScreen({ route, navigation }) {
     rating: "4.9",
   });
 
-  // 1. Fetch Initial Ride & Driver Details
+  // 1. Track Passenger's Live GPS Location
+  useEffect(() => {
+    let locationSubscriber = null;
+
+    async function startPassengerTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          console.log("Location permission denied");
+          return;
+        }
+
+        locationSubscriber = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 3,
+          },
+          (loc) => {
+            setPassengerLocation({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            });
+          }
+        );
+      } catch (err) {
+        console.error("Error watching passenger location:", err);
+      }
+    }
+
+    startPassengerTracking();
+
+    return () => {
+      if (locationSubscriber) {
+        locationSubscriber.remove();
+      }
+    };
+  }, []);
+
+  // 2. Fetch Initial Ride & Driver Details
   useEffect(() => {
     async function fetchRideDetails() {
       try {
@@ -51,12 +109,6 @@ export default function TrackingDriverScreen({ route, navigation }) {
           setPickupCoords({
             latitude: parseFloat(data.pickup.lat || data.pickup.latitude),
             longitude: parseFloat(data.pickup.lng || data.pickup.longitude),
-          });
-        }
-        if (data?.destination) {
-          setDestinationCoords({
-            latitude: parseFloat(data.destination.lat || data.destination.latitude),
-            longitude: parseFloat(data.destination.lng || data.destination.longitude),
           });
         }
         if (data?.driver) {
@@ -76,7 +128,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
     if (rideId) fetchRideDetails();
   }, [rideId]);
 
-  // 2. Socket Listeners for Driver Movement and Trip Lifecycle
+  // 3. Socket Listeners for Driver Movement & Lifecycle
   useEffect(() => {
     socketRef.current = io(SOCKET_URL, {
       transports: ["websocket"],
@@ -86,11 +138,10 @@ export default function TrackingDriverScreen({ route, navigation }) {
     const socket = socketRef.current;
 
     socket.on("connect", () => {
-      socket.emit("register_user_channel", { userId });
-      socket.emit("join_ride_room", { rideId, userId });
+      if (userId) socket.emit("register_user_channel", { userId });
+      if (rideId) socket.emit("join_ride_room", { rideId, userId });
     });
 
-    // Real-time Driver GPS updates
     socket.on("driver_location_update", (data) => {
       if (data?.latitude && data?.longitude) {
         setDriverLocation({
@@ -101,7 +152,6 @@ export default function TrackingDriverScreen({ route, navigation }) {
       }
     });
 
-    // Lifecycle Status Changes
     socket.on("driver_arrived", () => setTripStatus("arrived"));
     socket.on("solo_driver_arrived", () => setTripStatus("arrived"));
     socket.on("trip_started", () => setTripStatus("in_trip"));
@@ -119,6 +169,19 @@ export default function TrackingDriverScreen({ route, navigation }) {
     };
   }, [rideId, userId, navigation]);
 
+  // 4. EXCLUSIVELY route from Driver to Passenger's Current Location (fallback to pickup pin)
+  const activeRouteDestination = passengerLocation || pickupCoords;
+
+  // Auto-Fit Camera between Driver and Passenger Location
+  useEffect(() => {
+    if (mapRef.current && driverLocation && activeRouteDestination) {
+      mapRef.current.fitToCoordinates([driverLocation, activeRouteDestination], {
+        edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
+        animated: true,
+      });
+    }
+  }, [driverLocation?.latitude, activeRouteDestination?.latitude]);
+
   const handleCallDriver = () => {
     if (driverInfo.phone) {
       Linking.openURL(`tel:${driverInfo.phone}`);
@@ -126,8 +189,6 @@ export default function TrackingDriverScreen({ route, navigation }) {
       Alert.alert("Notice", "Driver phone number unavailable.");
     }
   };
-
-  const activeTargetCoords = tripStatus === "in_trip" ? destinationCoords : pickupCoords;
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
@@ -152,7 +213,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
       <View style={styles.mapContainer}>
         <MapView
           ref={mapRef}
-          provider={PROVIDER_GOOGLE}
+          provider={PROVIDER_DEFAULT}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
             latitude: pickupCoords.latitude,
@@ -160,16 +221,19 @@ export default function TrackingDriverScreen({ route, navigation }) {
             latitudeDelta: 0.015,
             longitudeDelta: 0.015,
           }}
-          showsUserLocation={false}
+          customMapStyle={cleanMinimalMapStyle}
+          showsUserLocation={true}      // Native passenger blue GPS dot
+          showsMyLocationButton={true}  // Native re-center control
           showsCompass={false}
         >
-          {/* DRIVER CAR MARKER (Emerald Palette) */}
+          {/* DRIVER CAR MARKER */}
           {driverLocation && (
             <Marker
               coordinate={driverLocation}
               anchor={{ x: 0.5, y: 0.5 }}
               rotation={driverLocation.heading || 0}
               flat={true}
+              tracksViewChanges={true}
             >
               <View style={styles.emeraldCarWrapper}>
                 <View style={styles.emeraldCarInnerBubble}>
@@ -179,30 +243,22 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          {/* PICKUP / TARGET HUB MARKER */}
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }}>
+          {/* PICKUP MARKER */}
+          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }} title="Pickup Location">
             <View style={styles.royalBlueDestinationHalo}>
               <View style={styles.royalBlueDestinationBadge} />
             </View>
           </Marker>
 
-          {/* DESTINATION MARKER */}
-          {destinationCoords && (
-            <Marker coordinate={destinationCoords} anchor={{ x: 0.5, y: 0.5 }}>
-              <View style={styles.royalBlueDestinationHalo}>
-                <View style={styles.royalBlueDestinationBadge} />
-              </View>
-            </Marker>
-          )}
-
-          {/* ROAD ROUTE */}
-          {driverLocation && activeTargetCoords && (
+          {/* ROAD ROUTE POLYLINE (Strictly Driver -> Passenger Live Location) */}
+          {driverLocation && activeRouteDestination && (
             <MapViewDirections
               origin={driverLocation}
-              destination={activeTargetCoords}
+              destination={activeRouteDestination}
               apikey={GOOGLE_MAPS_API_KEY}
-              strokeWidth={4}
-              strokeColor="#059669"
+              strokeWidth={5}
+              strokeColor="#111827"
+              geodesic={true}
             />
           )}
         </MapView>
@@ -219,7 +275,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
             {tripStatus === "arrived"
               ? "Your driver is waiting at the pickup spot"
               : tripStatus === "in_trip"
-              ? "Heading to destination"
+              ? "Trip in progress"
               : "Driver is on the way to pick you up"}
           </Text>
         </View>
@@ -251,50 +307,20 @@ export default function TrackingDriverScreen({ route, navigation }) {
 
         {/* TRIP PROGRESS BADGES */}
         <View style={styles.statusBadgeRow}>
-          <View
-            style={[
-              styles.statusStep,
-              tripStatus === "accepted" && styles.statusStepActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusStepText,
-                tripStatus === "accepted" && styles.statusStepTextActive,
-              ]}
-            >
+          <View style={[styles.statusStep, tripStatus === "accepted" && styles.statusStepActive]}>
+            <Text style={[styles.statusStepText, tripStatus === "accepted" && styles.statusStepTextActive]}>
               En Route
             </Text>
           </View>
 
-          <View
-            style={[
-              styles.statusStep,
-              tripStatus === "arrived" && styles.statusStepActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusStepText,
-                tripStatus === "arrived" && styles.statusStepTextActive,
-              ]}
-            >
+          <View style={[styles.statusStep, tripStatus === "arrived" && styles.statusStepActive]}>
+            <Text style={[styles.statusStepText, tripStatus === "arrived" && styles.statusStepTextActive]}>
               Arrived
             </Text>
           </View>
 
-          <View
-            style={[
-              styles.statusStep,
-              tripStatus === "in_trip" && styles.statusStepActive,
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusStepText,
-                tripStatus === "in_trip" && styles.statusStepTextActive,
-              ]}
-            >
+          <View style={[styles.statusStep, tripStatus === "in_trip" && styles.statusStepActive]}>
+            <Text style={[styles.statusStepText, tripStatus === "in_trip" && styles.statusStepTextActive]}>
               In Trip
             </Text>
           </View>
@@ -310,7 +336,7 @@ const styles = StyleSheet.create({
     height: 56,
     flexDirection: "row",
     alignItems: "center",
-    justify: "space-between",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
@@ -334,7 +360,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     backgroundColor: "rgba(5, 150, 105, 0.2)",
-    justify: "center",
+    justifyContent: "center",
     alignItems: "center",
   },
   emeraldCarInnerBubble: {
@@ -342,7 +368,7 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 14,
     backgroundColor: "#059669",
-    justify: "center",
+    justifyContent: "center",
     alignItems: "center",
     elevation: 4,
   },
@@ -351,7 +377,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     backgroundColor: "rgba(59, 130, 246, 0.2)",
-    justify: "center",
+    justifyContent: "center",
     alignItems: "center",
   },
   royalBlueDestinationBadge: {
@@ -408,7 +434,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     backgroundColor: "#ECFDF5",
     alignItems: "center",
-    justify: "center",
+    justifyContent: "center",
     marginRight: 12,
   },
   driverTextGroup: { flex: 1 },
@@ -422,7 +448,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "#059669",
     alignItems: "center",
-    justify: "center",
+    justifyContent: "center",
   },
 
   statusBadgeRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },

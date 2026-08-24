@@ -13,9 +13,11 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import io from "socket.io-client";
 
 const { width } = Dimensions.get("window");
 const API_URL = "http://100.108.52.79:5000";
+const SOCKET_URL = "http://100.108.52.79:5000";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -62,7 +64,8 @@ const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
 export default function DriverStandardTripInProgress({ route, navigation }) {
   const { rideId, ride, driverId } = route.params || {};
   const mapRef = useRef(null);
-  const lastCoordsRef = useRef(null); // Tracks previous GPS point for distance accumulation
+  const lastCoordsRef = useRef(null);
+  const socketRef = useRef(null);
 
   const rawRideData = ride?.ride || ride || {};
   const currentRideId = rideId || rawRideData.id;
@@ -83,7 +86,6 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   });
   const [heading, setHeading] = useState(0);
 
-  // TRUE METERED START: Start at 0.0 km so sitting still doesn't charge estimated route distance
   const [distanceKm, setDistanceKm] = useState(0.0);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [livePrice, setLivePrice] = useState(0);
@@ -94,11 +96,30 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   const destinationName = rawRideData.destination_name || "Bole Medhanialem";
   const destinationAddress = rawRideData.destination_address || "Bole Road, Addis Ababa";
 
-  // 3. Fetch Pricing Config (ID: 1 for Addis Ababa) on Mount
+  // 3. Initialize Socket.io Connection & Room Join
+  useEffect(() => {
+    socketRef.current = io(SOCKET_URL, {
+      transports: ["websocket"],
+      reconnection: true,
+    });
+
+    const socket = socketRef.current;
+
+    socket.on("connect", () => {
+      if (currentRideId) {
+        socket.emit("join_ride_room", { rideId: currentRideId, userId: currentDriverId });
+      }
+    });
+
+    return () => {
+      if (socketRef.current) socketRef.current.disconnect();
+    };
+  }, [currentRideId, currentDriverId]);
+
+  // 4. Fetch Pricing Config on Mount & Start Timer
   useEffect(() => {
     initTripSession();
 
-    // Timer incrementing elapsed minutes every 60s for time-based fare calculation
     const timer = setInterval(() => {
       setElapsedMinutes((prev) => prev + 1);
     }, 60000);
@@ -124,7 +145,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     }
   };
 
-  // 4. Dynamic Fare Engine (Powered by DB pricing_configs row #1)
+  // 5. Dynamic Fare Engine
   useEffect(() => {
     if (!pricingConfig) return;
 
@@ -141,7 +162,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     setLivePrice(calculatedFare);
   }, [distanceKm, elapsedMinutes, pricingConfig]);
 
-  // 5. Live GPS Tracking & Meter Distance Accumulation
+  // 6. Live GPS Tracking, Meter Accumulation & Socket Emission
   useEffect(() => {
     let locationSubscription;
     (async () => {
@@ -156,6 +177,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         (loc) => {
           const newLat = Number(loc.coords.latitude);
           const newLng = Number(loc.coords.longitude);
+          const newHeading = Number(loc.coords.heading || 0);
 
           // Accumulate actual metered distance traveled
           if (lastCoordsRef.current) {
@@ -166,7 +188,6 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
               newLng
             );
 
-            // Filter out GPS jump/jitter (ignore movements < 3 meters or unrealistically large teleports > 1 km)
             if (deltaKm > 0.003 && deltaKm < 1.0) {
               setDistanceKm((prevDist) => parseFloat((prevDist + deltaKm).toFixed(2)));
             }
@@ -174,18 +195,27 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
 
           lastCoordsRef.current = { latitude: newLat, longitude: newLng };
           setDriverCoords({ latitude: newLat, longitude: newLng });
+          setHeading(newHeading);
 
-          if (loc.coords.heading) {
-            setHeading(Number(loc.coords.heading));
+          // 🚀 BROADCAST GPS TO BACKEND (`active_user_sessions` & Passenger Socket Room)
+          if (socketRef.current && socketRef.current.connected) {
+            socketRef.current.emit("update_driver_location", {
+              driver_id: currentDriverId,
+              ride_id: currentRideId,
+              user_id: passengerId,
+              latitude: newLat,
+              longitude: newLng,
+              heading: newHeading,
+            });
           }
         }
       );
     })();
 
     return () => locationSubscription?.remove();
-  }, []);
+  }, [currentDriverId, currentRideId, passengerId]);
 
-  // 6. Auto-Fit Camera
+  // 7. Auto-Fit Camera
   useEffect(() => {
     if (mapRef.current && driverCoords?.latitude && destinationCoords?.latitude) {
       mapRef.current.fitToCoordinates([driverCoords, destinationCoords], {
@@ -195,7 +225,6 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
     }
   }, [driverCoords.latitude, destinationCoords.latitude]);
 
-  // Handle Complete Trip against backend completion endpoint
   const handleCompleteTrip = async () => {
     if (isSubmitting || !pricingConfig) return;
     setIsSubmitting(true);
