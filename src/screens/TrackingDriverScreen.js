@@ -48,8 +48,9 @@ export default function TrackingDriverScreen({ route, navigation }) {
 
   const [tripStatus, setTripStatus] = useState(initialStatus || "accepted");
   const [driverLocation, setDriverLocation] = useState(null);
-  const [passengerLocation, setPassengerLocation] = useState(null); // Passenger's live GPS position
+  const [passengerLocation, setPassengerLocation] = useState(null);
   const [pickupCoords, setPickupCoords] = useState({ latitude: 9.0105, longitude: 38.7935 });
+  const [destinationCoords, setDestinationCoords] = useState(null);
   const [driverInfo, setDriverInfo] = useState({
     name: "Captain",
     phone: "",
@@ -58,6 +59,12 @@ export default function TrackingDriverScreen({ route, navigation }) {
     rating: "4.9",
   });
 
+  // Keep a ref of the current status to avoid reconnection teardowns in socket listeners
+  const tripStatusRef = useRef(tripStatus);
+  useEffect(() => {
+    tripStatusRef.current = tripStatus;
+  }, [tripStatus]);
+
   // 1. Track Passenger's Live GPS Location
   useEffect(() => {
     let locationSubscriber = null;
@@ -65,10 +72,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
     async function startPassengerTracking() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          console.log("Location permission denied");
-          return;
-        }
+        if (status !== "granted") return;
 
         locationSubscriber = await Location.watchPositionAsync(
           {
@@ -91,13 +95,11 @@ export default function TrackingDriverScreen({ route, navigation }) {
     startPassengerTracking();
 
     return () => {
-      if (locationSubscriber) {
-        locationSubscriber.remove();
-      }
+      if (locationSubscriber) locationSubscriber.remove();
     };
   }, []);
 
-  // 2. Fetch Initial Ride & Driver Details
+  // 2. Fetch Initial Ride & Driver Details (PostgreSQL flat columns)
   useEffect(() => {
     async function fetchRideDetails() {
       try {
@@ -105,11 +107,20 @@ export default function TrackingDriverScreen({ route, navigation }) {
         if (!res.ok) return;
         const data = await res.json();
         
-        if (data?.pickup) {
+        if (data?.pickup_lat && data?.pickup_lng) {
           setPickupCoords({
-            latitude: parseFloat(data.pickup.lat || data.pickup.latitude),
-            longitude: parseFloat(data.pickup.lng || data.pickup.longitude),
+            latitude: parseFloat(data.pickup_lat),
+            longitude: parseFloat(data.pickup_lng),
           });
+        }
+        if (data?.destination_lat && data?.destination_lng) {
+          setDestinationCoords({
+            latitude: parseFloat(data.destination_lat),
+            longitude: parseFloat(data.destination_lng),
+          });
+        }
+        if (data?.status) {
+          setTripStatus(data.status);
         }
         if (data?.driver) {
           setDriverInfo({
@@ -128,7 +139,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
     if (rideId) fetchRideDetails();
   }, [rideId]);
 
-  // 3. Socket Listeners for Driver Movement & Lifecycle
+  // 3. Stable Socket Listeners & Database Polling Fallback
   useEffect(() => {
     socketRef.current = io(SOCKET_URL, {
       transports: ["websocket"],
@@ -152,35 +163,100 @@ export default function TrackingDriverScreen({ route, navigation }) {
       }
     });
 
-    socket.on("driver_arrived", () => setTripStatus("arrived"));
-    socket.on("solo_driver_arrived", () => setTripStatus("arrived"));
-    socket.on("trip_started", () => setTripStatus("in_trip"));
-    socket.on("solo_trip_started", () => setTripStatus("in_trip"));
-    
-    socket.on("trip_completed", () => {
-      setTripStatus("completed");
-      Alert.alert("Trip Completed", "You have arrived safely at your destination!", [
-        { text: "OK", onPress: () => navigation.navigate("Passenger") }
-      ]);
+    // ⚡ Comprehensive Status Update Listeners (Handles API Patches & Sockets)
+    socket.on("ride_status_changed", (data) => {
+      if (data?.status && data.status !== tripStatusRef.current) {
+        console.log("🔄 Socket Event [ride_status_changed]:", data.status);
+        setTripStatus(data.status);
+      }
     });
 
+    socket.on("solo_ride_status_updated", (data) => {
+      if (data?.status && data.status !== tripStatusRef.current) {
+        console.log("🔄 Socket Event [solo_ride_status_updated]:", data.status);
+        setTripStatus(data.status);
+      }
+    });
+
+    socket.on("trip_started", (data) => {
+      if (tripStatusRef.current !== "in_trip") {
+        console.log("🚗 Socket Event [trip_started] received:", data);
+        setTripStatus("in_trip");
+      }
+    });
+
+    socket.on("solo_trip_started", (data) => {
+      if (tripStatusRef.current !== "in_trip") {
+        console.log("🚗 Socket Event [solo_trip_started] received:", data);
+        setTripStatus("in_trip");
+      }
+    });
+
+    socket.on("driver_arrived", () => {
+      if (tripStatusRef.current !== "arrived") {
+        console.log("📍 Socket Event [driver_arrived] received");
+        setTripStatus("arrived");
+      }
+    });
+
+    socket.on("solo_driver_arrived", () => {
+      if (tripStatusRef.current !== "arrived") {
+        console.log("📍 Socket Event [solo_driver_arrived] received");
+        setTripStatus("arrived");
+      }
+    });
+
+    socket.on("trip_completed", () => {
+      if (tripStatusRef.current !== "completed") {
+        setTripStatus("completed");
+        Alert.alert("Trip Completed", "You have arrived safely at your destination!", [
+          { text: "OK", onPress: () => navigation.navigate("Passenger") }
+        ]);
+      }
+    });
+
+    // 🔄 Background Polling Fallback (Guarantees sync every 3s against DB)
+    const statusPollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_URL}/rides/${rideId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (data?.status && data.status !== tripStatusRef.current) {
+          console.log("🔄 Polling caught status change to:", data.status);
+          setTripStatus(data.status);
+        }
+      } catch (err) {
+        // Silent background check
+      }
+    }, 3000);
+
     return () => {
+      clearInterval(statusPollInterval);
       if (socketRef.current) socketRef.current.disconnect();
     };
   }, [rideId, userId, navigation]);
 
-  // 4. EXCLUSIVELY route from Driver to Passenger's Current Location (fallback to pickup pin)
-  const activeRouteDestination = passengerLocation || pickupCoords;
+  // 4. Dynamic Route Origin & Destination based on Trip Status
+  const isArrivedOrInTrip = tripStatus === "arrived" || tripStatus === "in_trip";
 
-  // Auto-Fit Camera between Driver and Passenger Location
+  const activeRouteOrigin = isArrivedOrInTrip
+    ? (passengerLocation || pickupCoords)
+    : driverLocation;
+
+  const activeRouteDestination = isArrivedOrInTrip
+    ? (destinationCoords || pickupCoords)
+    : (passengerLocation || pickupCoords);
+
+  // Auto-Fit Camera to Route
   useEffect(() => {
-    if (mapRef.current && driverLocation && activeRouteDestination) {
-      mapRef.current.fitToCoordinates([driverLocation, activeRouteDestination], {
+    if (mapRef.current && activeRouteOrigin && activeRouteDestination) {
+      mapRef.current.fitToCoordinates([activeRouteOrigin, activeRouteDestination], {
         edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
         animated: true,
       });
     }
-  }, [driverLocation?.latitude, activeRouteDestination?.latitude]);
+  }, [activeRouteOrigin?.latitude, activeRouteDestination?.latitude]);
 
   const handleCallDriver = () => {
     if (driverInfo.phone) {
@@ -222,8 +298,8 @@ export default function TrackingDriverScreen({ route, navigation }) {
             longitudeDelta: 0.015,
           }}
           customMapStyle={cleanMinimalMapStyle}
-          showsUserLocation={true}      // Native passenger blue GPS dot
-          showsMyLocationButton={true}  // Native re-center control
+          showsUserLocation={true}
+          showsMyLocationButton={true}
           showsCompass={false}
         >
           {/* DRIVER CAR MARKER */}
@@ -250,10 +326,19 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </View>
           </Marker>
 
-          {/* ROAD ROUTE POLYLINE (Strictly Driver -> Passenger Live Location) */}
-          {driverLocation && activeRouteDestination && (
+          {/* DESTINATION MARKER */}
+          {destinationCoords && (
+            <Marker coordinate={destinationCoords} anchor={{ x: 0.5, y: 0.5 }} title="Destination">
+              <View style={[styles.royalBlueDestinationHalo, { backgroundColor: "rgba(239, 68, 68, 0.2)" }]}>
+                <View style={[styles.royalBlueDestinationBadge, { backgroundColor: "#EF4444" }]} />
+              </View>
+            </Marker>
+          )}
+
+          {/* ROAD ROUTE POLYLINE (Dynamically switches on status change) */}
+          {activeRouteOrigin && activeRouteDestination && (
             <MapViewDirections
-              origin={driverLocation}
+              origin={activeRouteOrigin}
               destination={activeRouteDestination}
               apikey={GOOGLE_MAPS_API_KEY}
               strokeWidth={5}
@@ -266,16 +351,22 @@ export default function TrackingDriverScreen({ route, navigation }) {
         {/* FLOATING STATUS BANNER */}
         <View style={styles.persistentBanner}>
           <MaterialCommunityIcons
-            name={tripStatus === "arrived" ? "map-marker-check" : "car-connected"}
+            name={
+              tripStatus === "arrived"
+                ? "map-marker-check"
+                : tripStatus === "in_trip"
+                ? "car-sports"
+                : "car-connected"
+            }
             size={16}
             color="#059669"
             style={{ marginRight: 6 }}
           />
           <Text style={styles.persistentBannerText}>
             {tripStatus === "arrived"
-              ? "Your driver is waiting at the pickup spot"
+              ? "Your driver has arrived! Head to the vehicle."
               : tripStatus === "in_trip"
-              ? "Trip in progress"
+              ? "Trip in progress to destination"
               : "Driver is on the way to pick you up"}
           </Text>
         </View>
