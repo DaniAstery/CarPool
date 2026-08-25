@@ -497,27 +497,33 @@ export default function CreateCorridorScreen({ navigation }) {
   }, [isOnline, operatingMode]);
 
   
-  useEffect(() => {
-    if (!currentHub?.name) return;
+ useEffect(() => {
+  if (!currentHub?.name) return;
 
-    const socket = io(API_URL);
+  const hubName = currentHub.name;
+  const socket = io(API_URL, {
+    transports: ["websocket"],
+    autoConnect: true,
+  });
 
-    socket.on("connect", () => {
-      // Join room for this specific hub
-      socket.emit("join_hub", { hub_name: currentHub.name });
-    });
+  socket.on("connect", () => {
+    socket.emit("join_hub", { hub_name: hubName });
+  });
 
-    // Receives exact result.rows array from SQL query
-    socket.on("queue_update", (updatedCorridors) => {
-      if (Array.isArray(updatedCorridors)) {
-        setPredefinedCorridors(updatedCorridors);
-      }
-    });
+  socket.on("queue_update", (updatedCorridors) => {
+    if (Array.isArray(updatedCorridors)) {
+      setPredefinedCorridors(updatedCorridors);
+    }
+  });
 
-    return () => {
-      socket.disconnect();
-    };
-  }, [currentHub?.name]);
+  return () => {
+    socket.off("queue_update");
+    socket.off("connect");
+    socket.disconnect();
+  };
+}, [currentHub?.name]);
+
+
     
   useEffect(() => {
     async function fetchAllHubs() {
