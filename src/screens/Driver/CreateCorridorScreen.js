@@ -983,117 +983,135 @@ useEffect(() => {
             })}
           </ScrollView>
           {operatingMode === "CORRIDOR" && (
-  <View style={styles.corridorSection}>
-    <Text style={[styles.sectionHeadingLabel, !isCorridorActive && styles.disabledTextLabel]}>
-      Available Corridor Routes
-    </Text>
+ <View style={styles.corridorSection}>
+  <Text style={[styles.sectionHeadingLabel, !isCorridorActive && styles.disabledTextLabel]}>
+    Available Corridor Routes
+  </Text>
 
-    {loadingCorridors ? (
-      <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 15 }} />
-    ) : predefinedCorridors.length === 0 ? (
-      <Text style={styles.emptyText}>No live corridors available for this hub.</Text>
-    ) : (
-      predefinedCorridors.map((route, idx) => {
-        const isRouteSelected = selectedRoute?.route_id === route.route_id;
+  {loadingCorridors ? (
+    <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 15 }} />
+  ) : predefinedCorridors.length === 0 ? (
+    <Text style={styles.emptyText}>No live corridors available for this hub.</Text>
+  ) : (
+    predefinedCorridors.map((route, idx) => {
+      const isRouteSelected = selectedRoute?.route_id === route.route_id;
 
-        // 1. Dynamic Route Path Display
-        const pickup = route.pickup_hub_name || currentHub?.name || "Hub";
-        const passThrough = route.pass_through_name;
-        const destination = route.destination_name || "Destination";
+      // 1. Dynamic Route Path Display
+      const pickup = route.pickup_hub_name || currentHub?.name || "Hub";
+      const passThrough = route.pass_through_name;
+      const destination = route.destination_name || "Destination";
 
-        const routeDisplayName = route.route_name || (
-          passThrough
-            ? `${pickup} ➔ ${passThrough} ➔ ${destination}`
-            : `${pickup} ➔ ${destination}`
-        );
+      const routeDisplayName = route.route_name || (
+        passThrough
+          ? `${pickup} ➔ ${passThrough} ➔ ${destination}`
+          : `${pickup} ➔ ${destination}`
+      );
 
-        // 2. Pricing & Capacity Details
-        const basePrice = route.recommended_base_price ?? 100;
-        const availableSeats = route.available_seats ?? 4;
-        const totalCapacity = route.capacity ?? 4;
-        const offerStatus = route.offer_status ? String(route.offer_status).toUpperCase() : null;
+      // 2. Pure Base Price & Capacity
+      const basePrice = route.recommended_base_price ?? 100;
+      const availableSeats = route.available_seats ?? 4;
+      const totalCapacity = route.capacity ?? 4;
+      const offerStatus = route.offer_status ? String(route.offer_status).toUpperCase() : null;
 
-        // 3. Queue Stats & Dynamic Wait Time
-        const queueCount = Number(route.driver_queue_count ?? 0);
-        const avgWaitMins = Number(route.average_wait_mins ?? 0);
-        const dynamicWaitTime =
-          queueCount === 0
-            ? "Instant"
-            : avgWaitMins > 0
-            ? `~${avgWaitMins} mins`
-            : `~${Math.round(queueCount * 2.5)} mins`;
+      // 3. Driver Queue & Unmet Passenger Demand
+      const queueCount = Number(route.driver_queue_count ?? 0);
+      const waitingPassengers = Number(route.waiting_passengers ?? 0);
+      const avgWaitMins = Number(route.average_wait_mins ?? 0);
+      const dynamicWaitTime =
+        queueCount === 0
+          ? "Instant"
+          : avgWaitMins > 0
+          ? `~${avgWaitMins} mins`
+          : `~${Math.round(queueCount * 2.5)} mins`;
 
-        return (
-          <TouchableOpacity
-            key={`route-${route.route_id || idx}`}
-            style={[
-              styles.corridorCard,
-              isRouteSelected && styles.corridorCardSelected,
-              !isCorridorActive && styles.corridorCardDisabled,
-            ]}
-            onPress={() => isCorridorActive && setSelectedRoute(route)}
-            disabled={!isCorridorActive}
-          >
-            {/* Header: Route Path & Base Price */}
-            <View style={styles.corridorCardHeader}>
-              <View style={styles.routeTitleContainer}>
-                <Ionicons
-                  name="git-commit-outline"
-                  size={18}
-                  color={isRouteSelected ? "#059669" : "#374151"}
-                />
-                <Text style={styles.corridorRouteName} numberOfLines={1}>
-                  {routeDisplayName}
-                </Text>
-              </View>
-              <View style={styles.priceBadge}>
-                <Text style={styles.priceBadgeText}>{basePrice} ETB</Text>
-              </View>
+      return (
+        <TouchableOpacity
+          key={`route-${route.route_id || idx}`}
+          style={[
+            styles.corridorCard,
+            isRouteSelected && styles.corridorCardSelected,
+            !isCorridorActive && styles.corridorCardDisabled,
+          ]}
+          onPress={() => isCorridorActive && setSelectedRoute(route)}
+          disabled={!isCorridorActive}
+        >
+          {/* Header: Route Path & Standard Price */}
+          <View style={styles.corridorCardHeader}>
+            <View style={styles.routeTitleContainer}>
+              <Ionicons
+                name="git-commit-outline"
+                size={18}
+                color={isRouteSelected ? "#059669" : "#374151"}
+              />
+              <Text style={styles.corridorRouteName} numberOfLines={1}>
+                {routeDisplayName}
+              </Text>
+            </View>
+            <View style={styles.priceBadge}>
+              <Text style={styles.priceBadgeText}>{basePrice} ETB</Text>
+            </View>
+          </View>
+
+          {/* Description (if provided) */}
+          {route.description ? (
+            <Text style={styles.corridorDescription}>{route.description}</Text>
+          ) : null}
+
+          {/* Offer Metadata Row: Capacity & Active Offer Status */}
+          <View style={styles.corridorMetaRow}>
+            <View style={styles.metaItem}>
+              <Ionicons name="car-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+              <Text style={styles.metaText}>
+                Seats: <Text style={styles.boldText}>{availableSeats}/{totalCapacity}</Text>
+              </Text>
             </View>
 
-            {/* Description (if provided) */}
-            {route.description ? (
-              <Text style={styles.corridorDescription}>{route.description}</Text>
-            ) : null}
-
-            {/* Offer Metadata Row: Capacity & Active Offer Status */}
-            <View style={styles.corridorMetaRow}>
-              <View style={styles.metaItem}>
-                <Ionicons name="car-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
-                <Text style={styles.metaText}>
-                  Seats: <Text style={styles.boldText}>{availableSeats}/{totalCapacity}</Text>
-                </Text>
+            {offerStatus && (
+              <View style={styles.statusBadge}>
+                <Text style={styles.statusBadgeText}>{offerStatus}</Text>
               </View>
+            )}
+          </View>
 
-              {offerStatus && (
-                <View style={styles.statusBadge}>
-                  <Text style={styles.statusBadgeText}>{offerStatus}</Text>
-                </View>
-              )}
+          {/* Live Driver Queue, Unmet Passenger Demand & Wait Stats */}
+          <View style={styles.queueStatsFooter}>
+            {/* DRIVERS QUEUED */}
+            <View style={styles.queueInfoBadge}>
+              <Ionicons name="car-sport-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
+              <Text style={styles.queueInfoText}>
+                Drivers: <Text style={styles.boldText}>{queueCount}</Text>
+              </Text>
             </View>
 
-            {/* Live Driver Queue & Wait Stats */}
-            <View style={styles.queueStatsFooter}>
-              <View style={styles.queueInfoBadge}>
-                <Ionicons name="people-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
-                <Text style={styles.queueInfoText}>
-                  Queue: <Text style={styles.boldText}>{queueCount} active</Text>
+            {/* UNMET PASSENGER DEMAND FROM route_pool */}
+            <View style={[styles.queueInfoBadge, waitingPassengers > 0 && styles.demandBadgeActive]}>
+              <Ionicons
+                name="people-outline"
+                size={14}
+                color={waitingPassengers > 0 ? "#059669" : "#6B7280"}
+                style={{ marginRight: 4 }}
+              />
+              <Text style={styles.queueInfoText}>
+                Waiting:{" "}
+                <Text style={[styles.boldText, waitingPassengers > 0 && { color: "#059669" }]}>
+                  {waitingPassengers} pax
                 </Text>
-              </View>
-
-              <View style={styles.queueInfoBadge}>
-                <Ionicons name="time-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
-                <Text style={styles.queueInfoText}>
-                  Wait: <Text style={styles.boldText}>{dynamicWaitTime}</Text>
-                </Text>
-              </View>
+              </Text>
             </View>
-          </TouchableOpacity>
-        );
-      })
-    )}
 
-  </View>
+            {/* ESTIMATED WAIT */}
+            <View style={styles.queueInfoBadge}>
+              <Ionicons name="time-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+              <Text style={styles.queueInfoText}>
+                Wait: <Text style={styles.boldText}>{dynamicWaitTime}</Text>
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    })
+  )}
+</View>
 )}
  </ScrollView>
       </View>
@@ -1491,6 +1509,11 @@ launchButtonText: {
   color: "#FFFFFF",
   fontSize: 16,
   fontWeight: "700",
+},
+demandBadgeActive: {
+  backgroundColor: "#ECFDF5", // Light green background
+  borderColor: "#A7F3D0",
+  borderWidth: 1,
 },
 
 });
