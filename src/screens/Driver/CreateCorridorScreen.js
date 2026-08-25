@@ -1093,28 +1093,32 @@ useEffect(() => {
       })
     )}
 
-    <TouchableOpacity
-      style={[
-        styles.launchButton,
-        (!isCorridorActive || !selectedRoute || isPublishing) && styles.launchButtonDisabled,
-      ]}
-      onPress={handleGoOnlineCorridor}
-      disabled={!isCorridorActive || !selectedRoute || isPublishing}
-    >
-      {isPublishing ? (
-        <ActivityIndicator color="#FFFFFF" />
-      ) : (
-        <>
-          <Ionicons name="rocket-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-          <Text style={styles.launchButtonText}>Launch Corridor Pool</Text>
-        </>
-      )}
-    </TouchableOpacity>
   </View>
 )}
-
-        </ScrollView>
+ </ScrollView>
       </View>
+    {/* FIXED STICKY FOOTER BUTTON */}
+      <View style={styles.stickyFooterContainer}>
+        <TouchableOpacity
+          style={[
+            styles.launchButton,
+            (!isCorridorActive || !selectedRoute || isPublishing) && styles.launchButtonDisabled,
+          ]}
+          onPress={handleGoOnlineCorridor}
+          disabled={!isCorridorActive || !selectedRoute || isPublishing}
+        >
+          {isPublishing ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <>
+              <Ionicons name="rocket-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.launchButtonText}>Launch Corridor Pool</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+
+
 
       {isDrawerOpen && (
         <CorridorDrawer
@@ -1458,6 +1462,34 @@ queueInfoText: {
   color: "#047857",
 },
 boldText: {
+  fontWeight: "700",
+},
+corridorSection: {
+  flex: 1, // Ensures section fills available sheet height
+},
+stickyFooterContainer: {
+  paddingTop: 10,
+  paddingBottom: 15,
+  paddingHorizontal: 4,
+  backgroundColor: "#FFFFFF",
+  borderTopWidth: 1,
+  borderTopColor: "#F3F4F6", // Subtle separator line
+},
+launchButton: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "#059669",
+  paddingVertical: 14,
+  borderRadius: 14,
+  elevation: 2,
+},
+launchButtonDisabled: {
+  backgroundColor: "#D1D5DB",
+},
+launchButtonText: {
+  color: "#FFFFFF",
+  fontSize: 16,
   fontWeight: "700",
 },
 
