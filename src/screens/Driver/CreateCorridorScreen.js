@@ -496,37 +496,29 @@ export default function CreateCorridorScreen({ navigation }) {
     };
   }, [isOnline, operatingMode]);
 
+  
+  useEffect(() => {
+    if (!currentHub?.name) return;
 
-      useEffect(() => {
-        if (!currentHub || !currentHub.name) return;
+    const socket = io(API_URL);
 
-        const socket = io(API_URL);
+    socket.on("connect", () => {
+      // Join room for this specific hub
+      socket.emit("join_hub", { hub_name: currentHub.name });
+    });
 
-        socket.on("connect", () => {
-          socket.emit("join_hub", { hub_name: currentHub.name });
-        });
+    // Receives exact result.rows array from SQL query
+    socket.on("queue_update", (updatedCorridors) => {
+      if (Array.isArray(updatedCorridors)) {
+        setPredefinedCorridors(updatedCorridors);
+      }
+    });
 
-        // ⚡ Instantly updates corridors and driver queue counts
-        socket.on("queue_update", (updatedCorridors) => {
-          if (Array.isArray(updatedCorridors)) {
-            setPredefinedCorridors(updatedCorridors);
-          }
-        });
-
-        return () => {
-          socket.disconnect();
-        };
-      }, [currentHub]);
-
-
-
-
-
-
-
-
-
-
+    return () => {
+      socket.disconnect();
+    };
+  }, [currentHub?.name]);
+    
   useEffect(() => {
     async function fetchAllHubs() {
       try {
@@ -957,8 +949,7 @@ export default function CreateCorridorScreen({ navigation }) {
               );
             })}
           </ScrollView>
-
-      {operatingMode === "CORRIDOR" && (
+          {operatingMode === "CORRIDOR" && (
   <View style={styles.corridorSection}>
     <Text style={[styles.sectionHeadingLabel, !isCorridorActive && styles.disabledTextLabel]}>
       Available Corridor Routes
@@ -972,18 +963,24 @@ export default function CreateCorridorScreen({ navigation }) {
       predefinedCorridors.map((route, idx) => {
         const isRouteSelected = selectedRoute?.route_id === route.route_id;
 
-        // 1. Dynamic Route Naming (e.g. Ayat ➔ CMC ➔ Megenagna)
-        const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
-        const passThroughName = route.pass_through_hub_name || route.pass_through_name;
-        const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
+        // 1. Dynamic Route Path Display
+        const pickup = route.pickup_hub_name || currentHub?.name || "Hub";
+        const passThrough = route.pass_through_name;
+        const destination = route.destination_name || "Destination";
 
         const routeDisplayName = route.route_name || (
-          passThroughName
-            ? `${pickupName} ➔ ${passThroughName} ➔ ${dropOffName}`
-            : `${pickupName} ➔ ${dropOffName}`
+          passThrough
+            ? `${pickup} ➔ ${passThrough} ➔ ${destination}`
+            : `${pickup} ➔ ${destination}`
         );
 
-        // 2. Queue Stats & Dynamic Wait Time Calculation
+        // 2. Pricing & Capacity Details
+        const basePrice = route.recommended_base_price ?? 100;
+        const availableSeats = route.available_seats ?? 4;
+        const totalCapacity = route.capacity ?? 4;
+        const offerStatus = route.offer_status ? String(route.offer_status).toUpperCase() : null;
+
+        // 3. Queue Stats & Dynamic Wait Time
         const queueCount = Number(route.driver_queue_count ?? 0);
         const avgWaitMins = Number(route.average_wait_mins ?? 0);
         const dynamicWaitTime =
@@ -1004,22 +1001,45 @@ export default function CreateCorridorScreen({ navigation }) {
             onPress={() => isCorridorActive && setSelectedRoute(route)}
             disabled={!isCorridorActive}
           >
+            {/* Header: Route Path & Base Price */}
             <View style={styles.corridorCardHeader}>
-              <Ionicons
-                name="git-commit-outline"
-                size={18}
-                color={isRouteSelected ? "#059669" : "#374151"}
-              />
-              <Text style={styles.corridorRouteName} numberOfLines={1}>
-                {routeDisplayName}
-              </Text>
+              <View style={styles.routeTitleContainer}>
+                <Ionicons
+                  name="git-commit-outline"
+                  size={18}
+                  color={isRouteSelected ? "#059669" : "#374151"}
+                />
+                <Text style={styles.corridorRouteName} numberOfLines={1}>
+                  {routeDisplayName}
+                </Text>
+              </View>
+              <View style={styles.priceBadge}>
+                <Text style={styles.priceBadgeText}>{basePrice} ETB</Text>
+              </View>
             </View>
 
+            {/* Description (if provided) */}
             {route.description ? (
               <Text style={styles.corridorDescription}>{route.description}</Text>
             ) : null}
 
-            {/* Dynamic Real-time Queue Badge */}
+            {/* Offer Metadata Row: Capacity & Active Offer Status */}
+            <View style={styles.corridorMetaRow}>
+              <View style={styles.metaItem}>
+                <Ionicons name="car-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                <Text style={styles.metaText}>
+                  Seats: <Text style={styles.boldText}>{availableSeats}/{totalCapacity}</Text>
+                </Text>
+              </View>
+
+              {offerStatus && (
+                <View style={styles.statusBadge}>
+                  <Text style={styles.statusBadgeText}>{offerStatus}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Live Driver Queue & Wait Stats */}
             <View style={styles.queueStatsFooter}>
               <View style={styles.queueInfoBadge}>
                 <Ionicons name="people-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
@@ -1027,6 +1047,7 @@ export default function CreateCorridorScreen({ navigation }) {
                   Queue: <Text style={styles.boldText}>{queueCount} active</Text>
                 </Text>
               </View>
+
               <View style={styles.queueInfoBadge}>
                 <Ionicons name="time-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
                 <Text style={styles.queueInfoText}>
@@ -1058,6 +1079,7 @@ export default function CreateCorridorScreen({ navigation }) {
     </TouchableOpacity>
   </View>
 )}
+
         </ScrollView>
       </View>
 
@@ -1305,6 +1327,69 @@ const styles = StyleSheet.create({
   modalAcceptButton: { flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: "#059669", alignItems: "center" },
   modalAcceptText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
 
+queueStatsFooter: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginTop: 10,
+  paddingTop: 8,
+  borderTopWidth: 1,
+  borderTopColor: "#F3F4F6",
+},
+queueInfoBadge: {
+  flexDirection: "row",
+  alignItems: "center",
+  backgroundColor: "#ECFDF5",
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+queueInfoText: {
+  fontSize: 12,
+  color: "#047857",
+},
+routeTitleContainer: {
+  flexDirection: "row",
+  alignItems: "center",
+  flex: 1,
+  marginRight: 8,
+},
+priceBadge: {
+  backgroundColor: "#10B981",
+  paddingHorizontal: 8,
+  paddingVertical: 3,
+  borderRadius: 6,
+},
+priceBadgeText: {
+  color: "#FFFFFF",
+  fontSize: 12,
+  fontWeight: "700",
+},
+corridorMetaRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginTop: 6,
+},
+metaItem: {
+  flexDirection: "row",
+  alignItems: "center",
+},
+metaText: {
+  fontSize: 12,
+  color: "#6B7280",
+},
+statusBadge: {
+  backgroundColor: "#E5E7EB",
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 4,
+},
+statusBadgeText: {
+  fontSize: 10,
+  fontWeight: "600",
+  color: "#374151",
+},
 queueStatsFooter: {
   flexDirection: "row",
   alignItems: "center",
