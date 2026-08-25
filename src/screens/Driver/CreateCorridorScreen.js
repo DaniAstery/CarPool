@@ -496,33 +496,65 @@ export default function CreateCorridorScreen({ navigation }) {
     };
   }, [isOnline, operatingMode]);
 
-  
- useEffect(() => {
+useEffect(() => {
   if (!currentHub?.name) return;
 
-  const hubName = currentHub.name;
+  const normalizedHub = currentHub.name.toLowerCase().trim();
+
   const socket = io(API_URL, {
     transports: ["websocket"],
     autoConnect: true,
   });
 
   socket.on("connect", () => {
-    socket.emit("join_hub", { hub_name: hubName });
+    socket.emit("join_hub", { hub_name: normalizedHub });
   });
 
-  socket.on("queue_update", (updatedCorridors) => {
+  // Handler for full list refreshes sent by broadcastHubQueueUpdate
+  const handleFullRefresh = (updatedCorridors) => {
     if (Array.isArray(updatedCorridors)) {
       setPredefinedCorridors(updatedCorridors);
     }
+  };
+
+  // Listen for both common event names for full updates
+  socket.on("hub_corridors_updated", handleFullRefresh);
+  socket.on("queue_update", handleFullRefresh);
+
+  // Partial incremental updates for seats and queue counts
+  socket.on("seat_updated", (data) => {
+    setPredefinedCorridors((prevCorridors) =>
+      prevCorridors.map((route) => {
+        const isTargetRoute = String(route.route_id || route.id) === String(data.route_id);
+        if (!isTargetRoute) return route;
+
+        // Recalculate queue count if payload comes from driver_queue
+        let currentQueue = Number(route.driver_queue_count ?? 0);
+        if (data.queue_id || data.driver_id) {
+          currentQueue = data.status === "queued" ? currentQueue + 1 : Math.max(0, currentQueue - 1);
+        }
+
+        return {
+          ...route,
+          // Update available seats if provided
+          available_seats: data.available_seats !== undefined ? data.available_seats : route.available_seats,
+          // Map total_seats to capacity for JSX rendering
+          capacity: data.total_seats !== undefined ? data.total_seats : (route.capacity ?? 4),
+          // Update queue count for JSX rendering
+          driver_queue_count: currentQueue,
+        };
+      })
+    );
   });
 
   return () => {
-    socket.off("queue_update");
     socket.off("connect");
+    socket.off("hub_corridors_updated");
+    socket.off("queue_update");
+    socket.off("seat_updated");
     socket.disconnect();
   };
 }, [currentHub?.name]);
-
 
     
   useEffect(() => {
