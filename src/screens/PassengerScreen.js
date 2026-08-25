@@ -33,11 +33,8 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const { width, height } = Dimensions.get('window');
 
-
 // Calculate dynamic lock-in fare for the joining passenger
 const getDynamicSeatPrice = (route, activePaxCount) => {
-  // activePaxCount represents riders ALREADY in the pool (searching + matched)
-  // The joining passenger becomes rider #(activePaxCount + 1)
   switch (activePaxCount) {
     case 0:
       return route.standard_solo_fare ?? route.recommended_base_price ?? 0;
@@ -55,7 +52,6 @@ const getDynamicSeatPrice = (route, activePaxCount) => {
 const getRemainingSeconds = (route) => {
   if (!route.matched_at && !route.match_expires_at) return 0;
   
-  // Default 3-minute (180s) departure buffer once pool is matched
   const expiryTime = route.match_expires_at 
     ? new Date(route.match_expires_at).getTime() 
     : new Date(route.matched_at).getTime() + (3 * 60 * 1000);
@@ -70,7 +66,6 @@ const formatCountdown = (seconds) => {
   const secs = seconds % 60;
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
-
 
 export default function PassengerScreen({ navigation }) {
   const { user } = useAuth();
@@ -94,7 +89,6 @@ export default function PassengerScreen({ navigation }) {
   const [distanceToHub, setDistanceToHub] = useState(null);
   const [routes, setRoutes] = useState([]);
   
-  // 'shared' | 'standard'
   const [rideMode, setRideMode] = useState("shared"); 
 
   // Standard direct ride state
@@ -104,12 +98,9 @@ export default function PassengerScreen({ navigation }) {
   const [calculatingStandardFare, setCalculatingStandardFare] = useState(false);
   const [fareEstimate, setFareEstimate] = useState(null);
   
-  // 🔽 Standard Card Collapse state (Anchored at Top)
   const [isStandardCardCollapsed, setIsStandardCardCollapsed] = useState(false);
 
   const activeHubNameRef = useRef(null);
-
-
 
   useEffect(() => {
     if (selectedPickupHub?.name) {
@@ -168,20 +159,46 @@ export default function PassengerScreen({ navigation }) {
     return () => { isMounted = false; };
   }, [navigation, currentUserId]);
 
-  /* ⚡ WEBSOCKET LISTENER */
-  useEffect(() => {
-    function handleRoutePoolUpdated() {
-      const targetHub = activeHubNameRef.current;
-      if (targetHub) {
-        fetchActiveCorridors(targetHub, false); 
-      }
-    }
+  // route_pool change listener
 
-    socket.on("route_pool_updated", handleRoutePoolUpdated);
-    return () => {
-      socket.off("route_pool_updated", handleRoutePoolUpdated);
-    };
-  }, []); 
+ useEffect(() => {
+  if (!socket) return;
+
+  const handleRoutePoolUpdate = (updatedData) => {
+    console.log("⚡ [Socket] Route pool update received:", updatedData);
+    // updatedData: { route_id: 10, searching_pax: 2, matched_pax: 0, current_pax: 2, status: 'searching', price: 170 }
+
+    // 👇 MUST MATCH YOUR STATE VARIABLE NAME (routes)
+    setRoutes((prevRoutes) =>
+      prevRoutes.map((route) => {
+        const routeId = String(route.route_id || route.id);
+        const incomingId = String(updatedData.route_id);
+
+        if (routeId === incomingId) {
+          console.log(`✅ [UI Match] Updating Route #${routeId} -> Pax: ${updatedData.searching_pax}, Price: ${updatedData.price}`);
+          return {
+            ...route,
+            searching_pax: updatedData.searching_pax,
+            matched_pax: updatedData.matched_pax,
+            current_pax: updatedData.current_pax,
+            // Save both so the JSX can read either one safely
+            price: updatedData.price,
+            dynamic_price: updatedData.price, 
+            status: updatedData.status,
+          };
+        }
+        return route;
+      })
+    );
+  };
+
+  socket.on('route_pool_updated', handleRoutePoolUpdate);
+
+  return () => {
+    socket.off('route_pool_updated', handleRoutePoolUpdate);
+  };
+}, [socket]);
+
 
   /* 📍 GEOLOCATION & HUB TRACKING */
   useEffect(() => {
@@ -226,84 +243,6 @@ export default function PassengerScreen({ navigation }) {
     };
   }, []);
 
-
-useEffect(() => {
-  if (!socket) {
-    console.log("⚠️ Socket not initialized yet");
-    return;
-  }
-
-  console.log("🔌 Socket listeners attached for corridor updates");
-
- const handleRouteNotification = (payload) => {
-  console.log("==========================================");
-  console.log("⚡ [SOCKET DEBUGGER] Event received:", payload);
-  console.log("==========================================");
-
-  if (!payload) {
-    console.log("❌ [DEBUGGER] Payload is null/undefined!");
-    return;
-  }
-
-  const targetRouteId = String(payload.route_id ?? payload.id ?? payload.corridor_id ?? "");
-  const targetPoolId = String(payload.pool_id ?? "");
-
-  console.log(`🔍 [DEBUGGER] Searching state for Route ID: '${targetRouteId}' or Pool ID: '${targetPoolId}'`);
-
-  setRoutes((prevRoutes) => {
-    console.log(`📋 [DEBUGGER] Current routes in React state before map:`, prevRoutes.map(r => ({
-      id: r.route_id || r.id,
-      name: r.name,
-      searching: r.searching_pax,
-      matched: r.matched_pax,
-      current: r.current_pax
-    })));
-
-    let matchedAnyRoute = false;
-
-    const updatedRoutes = prevRoutes.map((route) => {
-      const currentRouteId = String(route.route_id ?? route.id ?? "");
-      const currentPoolId = String(route.pool_id ?? "");
-
-      const isMatch = (targetRouteId && currentRouteId === targetRouteId) || 
-                      (targetPoolId && currentPoolId === targetPoolId);
-
-      if (isMatch) {
-        matchedAnyRoute = true;
-        console.log(`✅ [DEBUGGER] MATCH FOUND! Updating Route ID #${currentRouteId}`);
-        console.log(`👉 Old Values -> searching: ${route.searching_pax}, matched: ${route.matched_pax}, current: ${route.current_pax}`);
-
-        const newSearching = parseInt(payload.searching_pax ?? payload.searching_count ?? route.searching_pax ?? 0, 10);
-        const newMatched = parseInt(payload.matched_pax ?? payload.matched_count ?? route.matched_pax ?? 0, 10);
-        const newCurrent = payload.current_pax ?? payload.active_pax ?? (newSearching + newMatched);
-
-        console.log(`👉 New Values -> searching: ${newSearching}, matched: ${newMatched}, current: ${newCurrent}`);
-
-        return {
-          ...route,
-          searching_pax: newSearching,
-          matched_pax: newMatched,
-          current_pax: newCurrent,
-          status: payload.status ?? route.status,
-          matched_at: payload.matched_at ?? route.matched_at,
-          match_expires_at: payload.match_expires_at ?? route.match_expires_at,
-          dynamic_price: payload.dynamic_price ?? payload.price ?? route.dynamic_price,
-        };
-      }
-      return route;
-    });
-
-    if (!matchedAnyRoute) {
-      console.warn(`⚠️ [DEBUGGER WARNING] Socket payload ID '${targetRouteId}' did NOT match any loaded routes in state! Check if your backend is emitting the correct route ID.`);
-    } else {
-      console.log("🚀 [DEBUGGER] State successfully updated. Forcing component re-render.");
-    }
-
-    return matchedAnyRoute ? [...updatedRoutes] : prevRoutes;
-  });
-};
-
-
   const resolveClosestHub = async (lat, lng) => {
     try {
       const response = await fetch(`${API_URL}/passenger/validate-location`, {
@@ -335,8 +274,6 @@ useEffect(() => {
     }
   };
 
-
-
   const calculateHaversine = (lat1, lon1, lat2, lon2) => {
     const R = 6371; 
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -365,7 +302,6 @@ useEffect(() => {
     }
   };
 
-  /* 🗺️ MAP TAP DISMISS KEYBOARD & COLLAPSE CARD IN PLACE */
   const handleMapPress = () => {
     Keyboard.dismiss();
     setPlacePredictions([]);
@@ -374,7 +310,6 @@ useEffect(() => {
     }
   };
 
-  /* 🔍 GOOGLE PLACES AUTOCOMPLETE */
   const handleDestinationInput = async (text) => {
     setCustomDestinationInput(text);
     setSelectedDestination(null);
@@ -468,7 +403,6 @@ useEffect(() => {
     }
   };
 
-  /* 🚀 JOIN CORRIDOR POOL */
   const joinPool = async (item) => {
     const routePrice = parseFloat(item.price) || 150;
 
@@ -527,7 +461,7 @@ useEffect(() => {
                 ? `${item.pickup_hub_name}${passThrough} ➔ ${item.name}` 
                 : `Route #${targetRouteId}`;
 
-              navigation.navigate(targetScreen, {
+            /** navigation.navigate(targetScreen, {
                 routeId: targetRouteId,
                 hubId: pickupHubId,
                 userId: currentUserId,
@@ -540,7 +474,7 @@ useEffect(() => {
                   time: "Evaluating Corridor Options...",
                   price: `ETB ${routePrice}`, 
                 }
-              });
+              }); */  
 
             } catch (err) {
               console.error("❌ Join Pool Exception caught:", err);
@@ -552,78 +486,75 @@ useEffect(() => {
     );
   };
 
-  /* 🚗 STANDARD DIRECT RIDE REQUEST */
- const requestStandardRide = () => {
-  if (!customDestinationInput.trim() || !selectedDestination || !fareEstimate) {
-    Alert.alert("Destination Required", "Please select a valid destination with calculated fare to proceed.");
-    return;
-  }
+  const requestStandardRide = () => {
+    if (!customDestinationInput.trim() || !selectedDestination || !fareEstimate) {
+      Alert.alert("Destination Required", "Please select a valid destination with calculated fare to proceed.");
+      return;
+    }
 
-  Alert.alert(
-    "Confirm Standard Direct Ride",
-    `Request a direct car for this ${fareEstimate.distanceKm} km trip to "${selectedDestination.name || customDestinationInput.trim()}" for ETB ${fareEstimate.estimatedPrice}? Proceed?`,
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Request Standard Car",
-        style: "default",
-        onPress: async () => {
-          try {
-            playSound(1);
-            
-            // Payload mapped to your /rides/solo/create backend schema
-            const payload = {
-              user_id: currentUserId,
-              pickup_lat: userCoords?.latitude || 9.0022471,
-              pickup_lng: userCoords?.longitude || 38.8100596,
-              destination_lat: selectedDestination.lat,
-              destination_lng: selectedDestination.lng,
-              destination_name: selectedDestination.name || customDestinationInput.trim(),
-              destination_address: selectedDestination.address || '',
-              booking_type: "standard",
-              estimated_price: fareEstimate.estimatedPrice,
-              distance_km: fareEstimate.distanceKm
-            };
+    Alert.alert(
+      "Confirm Standard Direct Ride",
+      `Request a direct car for this ${fareEstimate.distanceKm} km trip to "${selectedDestination.name || customDestinationInput.trim()}" for ETB ${fareEstimate.estimatedPrice}? Proceed?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Request Standard Car",
+          style: "default",
+          onPress: async () => {
+            try {
+              playSound(1);
+              
+              const payload = {
+                user_id: currentUserId,
+                pickup_lat: userCoords?.latitude || 9.0022471,
+                pickup_lng: userCoords?.longitude || 38.8100596,
+                destination_lat: selectedDestination.lat,
+                destination_lng: selectedDestination.lng,
+                destination_name: selectedDestination.name || customDestinationInput.trim(),
+                destination_address: selectedDestination.address || '',
+                booking_type: "standard",
+                estimated_price: fareEstimate.estimatedPrice,
+                distance_km: fareEstimate.distanceKm
+              };
 
-            const response = await fetch(`${API_URL}/rides/solo/create`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
+              const response = await fetch(`${API_URL}/rides/solo/create`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
 
-            const data = await response.json();
+              const data = await response.json();
 
-            if (!response.ok || !data.success) {
-              throw new Error(data.message || "Failed to create ride request.");
-            }
-
-            playSound(1);
-
-            // Navigate to StandardScreen with the returned database request ID
-            navigation.navigate("Standard", {
-              userId: currentUserId,
-              standardRequestId: data.ride.id,
-              resolvedHubId: data.resolvedHubId,
-              bookingType: "standard",
-              ride: {
-                id: data.ride.id,
-                corridor: `Direct Pickup ➔ ${selectedDestination.name || customDestinationInput.trim()}`,
-                time: `~${fareEstimate.durationText || '10 mins'} (${fareEstimate.distanceKm} km)`,
-                price: `ETB ${fareEstimate.estimatedPrice}`,
-                pickup_lat: payload.pickup_lat,
-                pickup_lng: payload.pickup_lng,
+              if (!response.ok || !data.success) {
+                throw new Error(data.message || "Failed to create ride request.");
               }
-            });
 
-          } catch (err) {
-            console.error("Standard ride request error:", err);
-            Alert.alert("Dispatch Error", err.message || "Failed to dispatch standard ride.");
+              playSound(1);
+
+              navigation.navigate("Standard", {
+                userId: currentUserId,
+                standardRequestId: data.ride.id,
+                resolvedHubId: data.resolvedHubId,
+                bookingType: "standard",
+                ride: {
+                  id: data.ride.id,
+                  corridor: `Direct Pickup ➔ ${selectedDestination.name || customDestinationInput.trim()}`,
+                  time: `~${fareEstimate.durationText || '10 mins'} (${fareEstimate.distanceKm} km)`,
+                  price: `ETB ${fareEstimate.estimatedPrice}`,
+                  pickup_lat: payload.pickup_lat,
+                  pickup_lng: payload.pickup_lng,
+                }
+              });
+
+            } catch (err) {
+              console.error("Standard ride request error:", err);
+              Alert.alert("Dispatch Error", err.message || "Failed to dispatch standard ride.");
+            }
           }
         }
-      }
-    ]
-  );
-};
+      ]
+    );
+  };
 
   if (checkingGatekeeper) {
     return (
@@ -661,7 +592,6 @@ useEffect(() => {
         showsUserLocation={true}
         showsMyLocationButton={false}
       >
-        {/* User Current Location Marker */}
         {userCoords && (
           <Marker
             coordinate={{ latitude: userCoords.latitude, longitude: userCoords.longitude }}
@@ -674,7 +604,6 @@ useEffect(() => {
           </Marker>
         )}
 
-        {/* 🟢 SHARED MODE: Hub Pin & Street Line */}
         {rideMode === "shared" && pickupHubCoords && (
           <>
             <Marker
@@ -716,7 +645,6 @@ useEffect(() => {
           </>
         )}
 
-        {/* 🔵 STANDARD MODE: Destination Pin & Street Line */}
         {rideMode === "standard" && selectedDestination && (
           <>
             <Marker
@@ -839,10 +767,9 @@ useEffect(() => {
           </View>
         </View>
 
-        {/* 🚗 STANDARD RIDE CARD (STAYS ANCHORED AT THE TOP) */}
+        {/* 🚗 STANDARD RIDE CARD */}
         {rideMode === "standard" && (
           isStandardCardCollapsed ? (
-            /* 🚘 COLLAPSED STANDARD CARD AT THE TOP */
             <TouchableOpacity 
               style={styles.collapsedStandardCardTop}
               onPress={() => setIsStandardCardCollapsed(false)}
@@ -867,7 +794,6 @@ useEffect(() => {
               </View>
             </TouchableOpacity>
           ) : (
-            /* 🚘 FULL EXPANDED STANDARD CARD AT THE TOP */
             <KeyboardAvoidingView
               behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
               style={styles.keyboardAvoidContainerTop}
@@ -889,7 +815,6 @@ useEffect(() => {
                       <Text style={styles.standardSub}>Door-to-door service • KM-based fare</Text>
                     </View>
                     
-                    {/* 🔽 Collapse Chevron Button */}
                     <TouchableOpacity 
                       style={styles.collapseChevronBtn}
                       onPress={() => {
@@ -979,216 +904,190 @@ useEffect(() => {
           )
         )}
 
-        {/* 🚀 SHARED MODE BOTTOM CORRIDORS */}
-       {/* 🟩 SHARED MODE: BOTTOM CORRIDORS LIST (PASSENGER SIDE) */}
-{rideMode === "shared" && (
-  <View style={styles.bottomCorridorsContainer}>
-    <View style={styles.corridorsWrapperCard}>
-      <View style={styles.listSectionHeader}>
-        <Text style={styles.sectionTitle}>
-          Available Corridors ({routes.length})
-        </Text>
-        {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
-      </View>
-
-      {routes.length === 0 ? (
-        <View style={styles.fallbackBlock}>
-          <Ionicons name="map-outline" size={28} color="#9CA3AF" />
-          <Text style={styles.fallbackTitle}>No Corridors Found</Text>
-          <Text style={styles.fallbackSub}>
-            {selectedPickupHub 
-              ? `No active routes originating from ${selectedPickupHub.name}` 
-              : "Scanning for nearby departure hubs..."}
-          </Text>
-        </View>
-      ) : (
-        <View style={{ position: 'relative' }}>
-        <View style={styles.corridorContainer}>
-  <ScrollView
-    ref={corridorScrollRef}
-    style={styles.corridorScrollList}
-    showsVerticalScrollIndicator={false}
-    nestedScrollEnabled={true}
-  >
-    {routes.map((route, index) => {
-      const routeId = route.id || route.route_id;
-      const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
-      const routeTitle = route.pickup_hub_name && route.name 
-        ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
-        : `Route #${routeId}`;
-
-      const maxSeats = parseInt(route.total_seats, 10) || 4;
-
-      // 1. Safe parsing of active passenger counts with zero-fallback protection
-      const searchingPax = parseInt(
-        route.searching_pax ?? route.searching_count ?? 0, 
-        10
-      ) || 0;
-      
-      const matchedPax = parseInt(
-        route.matched_pax ?? route.matched_count ?? 0, 
-        10
-      ) || 0;
-      
-      const calculatedSum = searchingPax + matchedPax;
-
-      const rawCurrentPax = route.current_pax !== undefined && route.current_pax !== null 
-        ? parseInt(route.current_pax, 10) 
-        : 0;
-
-      const totalActivePax = rawCurrentPax > 0 ? rawCurrentPax : calculatedSum;
-      console.log(`🎨 [RENDER DEBUG] Route #${routeId} (${route.name}) -> searching: ${searchingPax}, matched: ${matchedPax}, totalActive: ${totalActivePax}`);
-
-      // 2. Check if route is in "Matched Window" status
-      const isMatchedStatus = route.status === 'matched' || matchedPax > 0;
-      const remainingSeconds = typeof getRemainingSeconds === 'function' ? getRemainingSeconds(route) : 0;
-      const isJoinWindowOpen = isMatchedStatus && remainingSeconds > 0;
-
-      // 3. Dynamic tier price calculation for THIS joining passenger
-      const dynamicPrice = route.dynamic_price !== undefined && route.dynamic_price !== null
-        ? route.dynamic_price
-        : (typeof getDynamicSeatPrice === 'function' 
-            ? getDynamicSeatPrice(route, totalActivePax) 
-            : (route.recommended_base_price || 0));
-
-      const formattedPrice = Number(dynamicPrice).toFixed(0);
-
-      return (
-        <TouchableOpacity 
-          key={route.route_id || route.id || `route-${index}`} 
-          style={[
-            styles.supremeCard,
-            isOutOfRange && styles.disabledCard,
-            isJoinWindowOpen && styles.matchedCardBorder
-          ]} 
-          onPress={() => joinPool({ 
-            ...route, 
-            route_id: routeId, 
-            dynamicPrice, 
-            activePaxCount: totalActivePax,
-            isMatchedPool: isJoinWindowOpen 
-          })}
-          disabled={isOutOfRange}
-          activeOpacity={0.8}
-        >
-            {/* Card Header & Live Passenger Counter Badge */}
-            <View style={styles.cardHeader}>
-              <View style={styles.routePill}>
-                <Text style={styles.routeLabel}>{routeTitle}</Text>
-              </View>
-              
-              <View style={[
-                styles.seatBadge, 
-                isJoinWindowOpen 
-                  ? styles.amberBadge 
-                  : (totalActivePax > 0 ? styles.activeSeatBadge : styles.emptySeatBadge)
-              ]}>
-                <View style={[
-                  styles.pulseDot, 
-                  { 
-                    backgroundColor: isJoinWindowOpen 
-                      ? "#F59E0B" 
-                      : (totalActivePax > 0 ? "#10B981" : "#9CA3AF") 
-                  }
-                ]} />
-                <Text style={[
-                  styles.seatText, 
-                  { 
-                    color: isJoinWindowOpen 
-                      ? "#B45309" 
-                      : (totalActivePax > 0 ? "#047857" : "#4B5563") 
-                  }
-                ]}>
-                  {totalActivePax > 0 
-                    ? `${totalActivePax}/${maxSeats} ${isJoinWindowOpen ? 'Matched' : 'Waiting'}` 
-                    : "0 Waiting"}
+        {/* 🟩 SHARED MODE: BOTTOM CORRIDORS LIST */}
+        {rideMode === "shared" && (
+          <View style={styles.bottomCorridorsContainer}>
+            <View style={styles.corridorsWrapperCard}>
+              <View style={styles.listSectionHeader}>
+                <Text style={styles.sectionTitle}>
+                  Available Corridors ({routes.length})
                 </Text>
+                {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
               </View>
-            </View>
 
-          {/* ⏱️ Matched Window Joining Timer (Only renders when pool matched) */}
-          {isJoinWindowOpen && (
-            <View style={styles.matchedTimerBanner}>
-              <Ionicons name="timer-outline" size={16} color="#B45309" />
-              <Text style={styles.matchedTimerText}>
-                Driver matched! Join window closes in{" "}
-                <Text style={styles.countdownBold}>
-                  {typeof formatCountdown === 'function' ? formatCountdown(remainingSeconds) : `${remainingSeconds}s`}
-                </Text>
-              </Text>
-            </View>
-          )}
-          
-          {/* Card Footer & Dynamic Price */}
-          <View style={styles.cardFooter}>
-            <View style={styles.priceContainer}>
-              <Text style={styles.priceLabel}>
-                {isJoinWindowOpen 
-                  ? `MATCHED FARE (Rider #${totalActivePax + 1})` 
-                  : (totalActivePax > 0 ? `LOCK-IN FARE (Rider #${totalActivePax + 1})` : "STARTING FARE (1st Pax)")}
-              </Text>
-              <Text style={styles.priceText}>
-                ETB {formattedPrice}
-              </Text>
-            </View>
+              {routes.length === 0 ? (
+                <View style={styles.fallbackBlock}>
+                  <Ionicons name="map-outline" size={28} color="#9CA3AF" />
+                  <Text style={styles.fallbackTitle}>No Corridors Found</Text>
+                  <Text style={styles.fallbackSub}>
+                    {selectedPickupHub 
+                      ? `No active routes originating from ${selectedPickupHub.name}` 
+                      : "Scanning for nearby departure hubs..."}
+                  </Text>
+                </View>
+              ) : (
+                <View style={{ position: 'relative' }}>
+                  <View style={styles.corridorContainer}>
+                    <ScrollView
+                      ref={corridorScrollRef}
+                      style={styles.corridorScrollList}
+                      showsVerticalScrollIndicator={false}
+                      nestedScrollEnabled={true}
+                    >
+                      {routes.map((route, index) => {
+                        const routeId = route.id || route.route_id;
+                        const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
+                        const routeTitle = route.pickup_hub_name && route.name 
+                          ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
+                          : `Route #${routeId}`;
 
-            <View style={styles.actionArrowZone}>
-              <Text style={[
-                styles.actionText, 
-                { 
-                  color: isOutOfRange 
-                    ? "#9CA3AF" 
-                    : (isJoinWindowOpen ? "#D97706" : "#059669") 
-                }
-              ]}>
-                {isOutOfRange 
-                  ? "Out of Range" 
-                  : (isJoinWindowOpen ? "Join Matched Pool" : (totalActivePax > 0 ? "Join Pool" : "Request Pool"))}
-              </Text>
-              <Ionicons 
-                name="chevron-forward-circle" 
-                size={22} 
-                color={isOutOfRange ? "#D1D5DB" : (isJoinWindowOpen ? "#D97706" : "#059669")} 
-              />
+                        const maxSeats = parseInt(route.total_seats, 10) || 4;
+
+                        const searchingPax = parseInt(route.searching_pax ?? route.searching_count ?? 0, 10) || 0;
+                        const matchedPax = parseInt(route.matched_pax ?? route.matched_count ?? 0, 10) || 0;
+                        const calculatedSum = searchingPax + matchedPax;
+
+                        const rawCurrentPax = route.current_pax !== undefined && route.current_pax !== null 
+                          ? parseInt(route.current_pax, 10) 
+                          : 0;
+
+                        const totalActivePax = rawCurrentPax > 0 ? rawCurrentPax : calculatedSum;
+
+                        const isMatchedStatus = route.status === 'matched' || matchedPax > 0;
+                        const remainingSeconds = getRemainingSeconds(route);
+                        const isJoinWindowOpen = isMatchedStatus && remainingSeconds > 0;
+
+                      
+                      const dynamicPrice = route.price !== undefined && route.price !== null
+                        ? route.price
+                        : (route.dynamic_price !== undefined && route.dynamic_price !== null
+                            ? route.dynamic_price
+                            : getDynamicSeatPrice(route, totalActivePax));
+
+                        const formattedPrice = Number(dynamicPrice).toFixed(0);
+
+                        // 🎨 RENDER CONSOLE LOG DEBUGGER
+                        console.log(`🎨 [RENDER DEBUG] Route #${routeId} (${route.name}) -> searching: ${searchingPax}, matched: ${matchedPax}, totalActive: ${totalActivePax}`);
+
+                        return (
+                          <TouchableOpacity 
+                            key={route.route_id || route.id || `route-${index}`} 
+                            style={[
+                              styles.supremeCard,
+                              isOutOfRange && styles.disabledCard,
+                              isJoinWindowOpen && styles.matchedCardBorder
+                            ]} 
+                            onPress={() => joinPool({ 
+                              ...route, 
+                              route_id: routeId, 
+                              dynamicPrice, 
+                              activePaxCount: totalActivePax,
+                              isMatchedPool: isJoinWindowOpen 
+                            })}
+                            disabled={isOutOfRange}
+                            activeOpacity={0.8}
+                          >
+                            <View style={styles.cardHeader}>
+                              <View style={styles.routePill}>
+                                <Text style={styles.routeLabel}>{routeTitle}</Text>
+                              </View>
+                              
+                              <View style={[
+                                styles.seatBadge, 
+                                isJoinWindowOpen 
+                                  ? styles.amberBadge 
+                                  : (totalActivePax > 0 ? styles.activeSeatBadge : styles.emptySeatBadge)
+                              ]}>
+                                <View style={[
+                                  styles.pulseDot, 
+                                  { 
+                                    backgroundColor: isJoinWindowOpen 
+                                      ? "#F59E0B" 
+                                      : (totalActivePax > 0 ? "#10B981" : "#9CA3AF") 
+                                  }
+                                ]} />
+                                <Text style={[
+                                  styles.seatText, 
+                                  { 
+                                    color: isJoinWindowOpen 
+                                      ? "#B45309" 
+                                      : (totalActivePax > 0 ? "#047857" : "#4B5563") 
+                                  }
+                                ]}>
+                                  {totalActivePax > 0 
+                                    ? `${totalActivePax}/${maxSeats} ${isJoinWindowOpen ? 'Matched' : 'Waiting'}` 
+                                    : "0 Waiting"}
+                                </Text>
+                              </View>
+                            </View>
+
+                            {isJoinWindowOpen && (
+                              <View style={styles.matchedTimerBanner}>
+                                <Ionicons name="timer-outline" size={16} color="#B45309" />
+                                <Text style={styles.matchedTimerText}>
+                                  Driver matched! Join window closes in{" "}
+                                  <Text style={styles.countdownBold}>
+                                    {formatCountdown(remainingSeconds)}
+                                  </Text>
+                                </Text>
+                              </View>
+                            )}
+                            
+                            <View style={styles.cardFooter}>
+                              <View style={styles.priceContainer}>
+                                <Text style={styles.priceLabel}>
+                                  {isJoinWindowOpen 
+                                    ? `MATCHED FARE (Rider #${totalActivePax + 1})` 
+                                    : (totalActivePax > 0 ? `LOCK-IN FARE (Rider #${totalActivePax + 1})` : "STARTING FARE (1st Pax)")}
+                                </Text>
+                                <Text style={styles.priceText}>
+                                  ETB {formattedPrice}
+                                </Text>
+                              </View>
+
+                              <View style={styles.actionArrowZone}>
+                                <Text style={[
+                                  styles.actionText, 
+                                  { 
+                                    color: isOutOfRange 
+                                      ? "#9CA3AF" 
+                                      : (isJoinWindowOpen ? "#D97706" : "#059669") 
+                                  }
+                                ]}>
+                                  {isOutOfRange 
+                                    ? "Out of Range" 
+                                    : (isJoinWindowOpen ? "Join Matched Pool" : (totalActivePax > 0 ? "Join Pool" : "Request Pool"))}
+                                </Text>
+                                <Ionicons 
+                                  name="chevron-forward-circle" 
+                                  size={22} 
+                                  color={isOutOfRange ? "#D1D5DB" : (isJoinWindowOpen ? "#D97706" : "#059669")} 
+                                />
+                              </View>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+
+                  {canScrollCorridors && (
+                    <TouchableOpacity 
+                      style={styles.floatingScrollIndicator}
+                      onPress={() => {
+                        corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.floatingScrollText}>More corridors below</Text>
+                      <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
             </View>
           </View>
-        </TouchableOpacity>
-      );
-    })}
-  </ScrollView>
-
-  {canScrollCorridors && (
-    <TouchableOpacity 
-      style={styles.floatingScrollIndicator}
-      onPress={() => {
-        corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
-      }}
-      activeOpacity={0.85}
-    >
-      <Text style={styles.floatingScrollText}>More corridors below</Text>
-      <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
-    </TouchableOpacity>
-  )}
-</View>
- 
-
-          {canScrollCorridors && (
-            <TouchableOpacity 
-              style={styles.floatingScrollIndicator}
-              onPress={() => {
-                corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
-              }}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.floatingScrollText}>More corridors below</Text>
-              <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-    </View>
-  </View>
-)}
+        )}
 
         <CorridorDrawer
           visible={isDrawerOpen}
@@ -1441,7 +1340,6 @@ const styles = StyleSheet.create({
   },
   standardButtonText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
 
-  /* 🚘 COLLAPSED STANDARD CARD STYLES (TOP ANCHORED) */
   collapsedStandardCardTop: {
     backgroundColor: "#FFFFFF",
     marginHorizontal: 16,
@@ -1591,30 +1489,30 @@ const styles = StyleSheet.create({
   },
 
   matchedCardBorder: {
-  borderColor: '#F59E0B',
-  borderWidth: 1.5,
-  backgroundColor: '#FFFDF5',
-},
-amberBadge: {
-  backgroundColor: '#FEF3C7',
-},
-matchedTimerBanner: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  backgroundColor: '#FEF3C7',
-  paddingHorizontal: 10,
-  paddingVertical: 6,
-  borderRadius: 6,
-  marginTop: 8,
-},
-matchedTimerText: {
-  fontSize: 12,
-  color: '#92400E',
-  marginLeft: 6,
-  fontWeight: '500',
-},
-countdownBold: {
-  fontWeight: '700',
-  color: '#B45309',
-},
+    borderColor: '#F59E0B',
+    borderWidth: 1.5,
+    backgroundColor: '#FFFDF5',
+  },
+  amberBadge: {
+    backgroundColor: '#FEF3C7',
+  },
+  matchedTimerBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginTop: 8,
+  },
+  matchedTimerText: {
+    fontSize: 12,
+    color: '#92400E',
+    marginLeft: 6,
+    fontWeight: '500',
+  },
+  countdownBold: {
+    fontWeight: '700',
+    color: '#B45309',
+  },
 });
