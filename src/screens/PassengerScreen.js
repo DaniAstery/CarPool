@@ -33,6 +33,45 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const { width, height } = Dimensions.get('window');
 
+
+// Calculate dynamic lock-in fare for the joining passenger
+const getDynamicSeatPrice = (route, activePaxCount) => {
+  // activePaxCount represents riders ALREADY in the pool (searching + matched)
+  // The joining passenger becomes rider #(activePaxCount + 1)
+  switch (activePaxCount) {
+    case 0:
+      return route.standard_solo_fare ?? route.recommended_base_price ?? 0;
+    case 1:
+      return route.seat_price_2pax ?? route.recommended_base_price ?? 0;
+    case 2:
+      return route.seat_price_3pax ?? route.seat_price_2pax ?? 0;
+    case 3:
+    default:
+      return route.seat_price_4pax ?? route.seat_price_3pax ?? 0;
+  }
+};
+
+// Calculate remaining countdown seconds for matched corridors
+const getRemainingSeconds = (route) => {
+  if (!route.matched_at && !route.match_expires_at) return 0;
+  
+  // Default 3-minute (180s) departure buffer once pool is matched
+  const expiryTime = route.match_expires_at 
+    ? new Date(route.match_expires_at).getTime() 
+    : new Date(route.matched_at).getTime() + (3 * 60 * 1000);
+
+  const seconds = Math.floor((expiryTime - Date.now()) / 1000);
+  return seconds > 0 ? seconds : 0;
+};
+
+// Format seconds to MM:SS
+const formatCountdown = (seconds) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
+
+
 export default function PassengerScreen({ navigation }) {
   const { user } = useAuth();
   
@@ -69,6 +108,8 @@ export default function PassengerScreen({ navigation }) {
   const [isStandardCardCollapsed, setIsStandardCardCollapsed] = useState(false);
 
   const activeHubNameRef = useRef(null);
+
+
 
   useEffect(() => {
     if (selectedPickupHub?.name) {
@@ -184,6 +225,84 @@ export default function PassengerScreen({ navigation }) {
       if (locationSubscription) locationSubscription.remove();
     };
   }, []);
+
+
+useEffect(() => {
+  if (!socket) {
+    console.log("⚠️ Socket not initialized yet");
+    return;
+  }
+
+  console.log("🔌 Socket listeners attached for corridor updates");
+
+ const handleRouteNotification = (payload) => {
+  console.log("==========================================");
+  console.log("⚡ [SOCKET DEBUGGER] Event received:", payload);
+  console.log("==========================================");
+
+  if (!payload) {
+    console.log("❌ [DEBUGGER] Payload is null/undefined!");
+    return;
+  }
+
+  const targetRouteId = String(payload.route_id ?? payload.id ?? payload.corridor_id ?? "");
+  const targetPoolId = String(payload.pool_id ?? "");
+
+  console.log(`🔍 [DEBUGGER] Searching state for Route ID: '${targetRouteId}' or Pool ID: '${targetPoolId}'`);
+
+  setRoutes((prevRoutes) => {
+    console.log(`📋 [DEBUGGER] Current routes in React state before map:`, prevRoutes.map(r => ({
+      id: r.route_id || r.id,
+      name: r.name,
+      searching: r.searching_pax,
+      matched: r.matched_pax,
+      current: r.current_pax
+    })));
+
+    let matchedAnyRoute = false;
+
+    const updatedRoutes = prevRoutes.map((route) => {
+      const currentRouteId = String(route.route_id ?? route.id ?? "");
+      const currentPoolId = String(route.pool_id ?? "");
+
+      const isMatch = (targetRouteId && currentRouteId === targetRouteId) || 
+                      (targetPoolId && currentPoolId === targetPoolId);
+
+      if (isMatch) {
+        matchedAnyRoute = true;
+        console.log(`✅ [DEBUGGER] MATCH FOUND! Updating Route ID #${currentRouteId}`);
+        console.log(`👉 Old Values -> searching: ${route.searching_pax}, matched: ${route.matched_pax}, current: ${route.current_pax}`);
+
+        const newSearching = parseInt(payload.searching_pax ?? payload.searching_count ?? route.searching_pax ?? 0, 10);
+        const newMatched = parseInt(payload.matched_pax ?? payload.matched_count ?? route.matched_pax ?? 0, 10);
+        const newCurrent = payload.current_pax ?? payload.active_pax ?? (newSearching + newMatched);
+
+        console.log(`👉 New Values -> searching: ${newSearching}, matched: ${newMatched}, current: ${newCurrent}`);
+
+        return {
+          ...route,
+          searching_pax: newSearching,
+          matched_pax: newMatched,
+          current_pax: newCurrent,
+          status: payload.status ?? route.status,
+          matched_at: payload.matched_at ?? route.matched_at,
+          match_expires_at: payload.match_expires_at ?? route.match_expires_at,
+          dynamic_price: payload.dynamic_price ?? payload.price ?? route.dynamic_price,
+        };
+      }
+      return route;
+    });
+
+    if (!matchedAnyRoute) {
+      console.warn(`⚠️ [DEBUGGER WARNING] Socket payload ID '${targetRouteId}' did NOT match any loaded routes in state! Check if your backend is emitting the correct route ID.`);
+    } else {
+      console.log("🚀 [DEBUGGER] State successfully updated. Forcing component re-render.");
+    }
+
+    return matchedAnyRoute ? [...updatedRoutes] : prevRoutes;
+  });
+};
+
 
   const resolveClosestHub = async (lat, lng) => {
     try {
@@ -861,136 +980,215 @@ export default function PassengerScreen({ navigation }) {
         )}
 
         {/* 🚀 SHARED MODE BOTTOM CORRIDORS */}
-        {rideMode === "shared" && (
-          <View style={styles.bottomCorridorsContainer} pointerEvents="box-none">
-            <View style={styles.corridorsWrapperCard}>
-              <View style={styles.listSectionHeader}>
-                <Text style={styles.sectionTitle}>
-                  Available Corridors {routes.length > 0 ? `(${routes.length})` : ""}
-                </Text>
-                {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
+       {/* 🟩 SHARED MODE: BOTTOM CORRIDORS LIST (PASSENGER SIDE) */}
+{rideMode === "shared" && (
+  <View style={styles.bottomCorridorsContainer}>
+    <View style={styles.corridorsWrapperCard}>
+      <View style={styles.listSectionHeader}>
+        <Text style={styles.sectionTitle}>
+          Available Corridors ({routes.length})
+        </Text>
+        {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
+      </View>
+
+      {routes.length === 0 ? (
+        <View style={styles.fallbackBlock}>
+          <Ionicons name="map-outline" size={28} color="#9CA3AF" />
+          <Text style={styles.fallbackTitle}>No Corridors Found</Text>
+          <Text style={styles.fallbackSub}>
+            {selectedPickupHub 
+              ? `No active routes originating from ${selectedPickupHub.name}` 
+              : "Scanning for nearby departure hubs..."}
+          </Text>
+        </View>
+      ) : (
+        <View style={{ position: 'relative' }}>
+        <View style={styles.corridorContainer}>
+  <ScrollView
+    ref={corridorScrollRef}
+    style={styles.corridorScrollList}
+    showsVerticalScrollIndicator={false}
+    nestedScrollEnabled={true}
+  >
+    {routes.map((route, index) => {
+      const routeId = route.id || route.route_id;
+      const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
+      const routeTitle = route.pickup_hub_name && route.name 
+        ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
+        : `Route #${routeId}`;
+
+      const maxSeats = parseInt(route.total_seats, 10) || 4;
+
+      // 1. Safe parsing of active passenger counts with zero-fallback protection
+      const searchingPax = parseInt(
+        route.searching_pax ?? route.searching_count ?? 0, 
+        10
+      ) || 0;
+      
+      const matchedPax = parseInt(
+        route.matched_pax ?? route.matched_count ?? 0, 
+        10
+      ) || 0;
+      
+      const calculatedSum = searchingPax + matchedPax;
+
+      const rawCurrentPax = route.current_pax !== undefined && route.current_pax !== null 
+        ? parseInt(route.current_pax, 10) 
+        : 0;
+
+      const totalActivePax = rawCurrentPax > 0 ? rawCurrentPax : calculatedSum;
+      console.log(`🎨 [RENDER DEBUG] Route #${routeId} (${route.name}) -> searching: ${searchingPax}, matched: ${matchedPax}, totalActive: ${totalActivePax}`);
+
+      // 2. Check if route is in "Matched Window" status
+      const isMatchedStatus = route.status === 'matched' || matchedPax > 0;
+      const remainingSeconds = typeof getRemainingSeconds === 'function' ? getRemainingSeconds(route) : 0;
+      const isJoinWindowOpen = isMatchedStatus && remainingSeconds > 0;
+
+      // 3. Dynamic tier price calculation for THIS joining passenger
+      const dynamicPrice = route.dynamic_price !== undefined && route.dynamic_price !== null
+        ? route.dynamic_price
+        : (typeof getDynamicSeatPrice === 'function' 
+            ? getDynamicSeatPrice(route, totalActivePax) 
+            : (route.recommended_base_price || 0));
+
+      const formattedPrice = Number(dynamicPrice).toFixed(0);
+
+      return (
+        <TouchableOpacity 
+          key={route.route_id || route.id || `route-${index}`} 
+          style={[
+            styles.supremeCard,
+            isOutOfRange && styles.disabledCard,
+            isJoinWindowOpen && styles.matchedCardBorder
+          ]} 
+          onPress={() => joinPool({ 
+            ...route, 
+            route_id: routeId, 
+            dynamicPrice, 
+            activePaxCount: totalActivePax,
+            isMatchedPool: isJoinWindowOpen 
+          })}
+          disabled={isOutOfRange}
+          activeOpacity={0.8}
+        >
+            {/* Card Header & Live Passenger Counter Badge */}
+            <View style={styles.cardHeader}>
+              <View style={styles.routePill}>
+                <Text style={styles.routeLabel}>{routeTitle}</Text>
               </View>
+              
+              <View style={[
+                styles.seatBadge, 
+                isJoinWindowOpen 
+                  ? styles.amberBadge 
+                  : (totalActivePax > 0 ? styles.activeSeatBadge : styles.emptySeatBadge)
+              ]}>
+                <View style={[
+                  styles.pulseDot, 
+                  { 
+                    backgroundColor: isJoinWindowOpen 
+                      ? "#F59E0B" 
+                      : (totalActivePax > 0 ? "#10B981" : "#9CA3AF") 
+                  }
+                ]} />
+                <Text style={[
+                  styles.seatText, 
+                  { 
+                    color: isJoinWindowOpen 
+                      ? "#B45309" 
+                      : (totalActivePax > 0 ? "#047857" : "#4B5563") 
+                  }
+                ]}>
+                  {totalActivePax > 0 
+                    ? `${totalActivePax}/${maxSeats} ${isJoinWindowOpen ? 'Matched' : 'Waiting'}` 
+                    : "0 Waiting"}
+                </Text>
+              </View>
+            </View>
 
-              {isLocating ? (
-                <View style={styles.fallbackBlock}>
-                  <ActivityIndicator size="large" color="#059669" style={{ marginBottom: 12 }} />
-                  <Text style={styles.fallbackTitle}>Locating Your Nearest Hub...</Text>
-                  <Text style={styles.fallbackSub}>Calculating GPS telemetry values.</Text>
-                </View>
-              ) : routes.length === 0 ? (
-                <View style={styles.fallbackBlock}>
-                  <MaterialCommunityIcons name="transit-connection-variant" size={40} color="#D1D5DB" style={{ marginBottom: 6 }} />
-                  <Text style={styles.fallbackTitle}>No Open Corridors Found</Text>
-                  <Text style={styles.fallbackSub}>
-                    There are currently no active routes mapped from {selectedPickupHub?.name || "your location"}.
-                  </Text>
-                </View>
-              ) : (
-                <View style={{ position: 'relative' }}>
-                  <ScrollView 
-                    ref={corridorScrollRef}
-                    style={styles.corridorScrollList} 
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 10 }}
-                    onScroll={(event) => {
-                      const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-                      const paddingToBottom = 20;
-                      const isAtBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
-                      const hasOverflow = contentSize.height > layoutMeasurement.height + 10;
-                      setCanScrollCorridors(hasOverflow && !isAtBottom);
-                    }}
-                    scrollEventThrottle={150}
-                  >
-                   {routes.map((route, index) => {
-                      const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
-                      const routeTitle = route.pickup_hub_name && route.name 
-                        ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
-                        : `Route #${route.id || route.route_id}`;
+          {/* ⏱️ Matched Window Joining Timer (Only renders when pool matched) */}
+          {isJoinWindowOpen && (
+            <View style={styles.matchedTimerBanner}>
+              <Ionicons name="timer-outline" size={16} color="#B45309" />
+              <Text style={styles.matchedTimerText}>
+                Driver matched! Join window closes in{" "}
+                <Text style={styles.countdownBold}>
+                  {typeof formatCountdown === 'function' ? formatCountdown(remainingSeconds) : `${remainingSeconds}s`}
+                </Text>
+              </Text>
+            </View>
+          )}
+          
+          {/* Card Footer & Dynamic Price */}
+          <View style={styles.cardFooter}>
+            <View style={styles.priceContainer}>
+              <Text style={styles.priceLabel}>
+                {isJoinWindowOpen 
+                  ? `MATCHED FARE (Rider #${totalActivePax + 1})` 
+                  : (totalActivePax > 0 ? `LOCK-IN FARE (Rider #${totalActivePax + 1})` : "STARTING FARE (1st Pax)")}
+              </Text>
+              <Text style={styles.priceText}>
+                ETB {formattedPrice}
+              </Text>
+            </View>
 
-                      const maxSeats = parseInt(route.total_seats, 10) || 4;
-                      const availableSeats = parseInt(route.available_seats, 10);
-                      const seatCount = isNaN(availableSeats) ? 0 : (maxSeats - availableSeats);
-                      const hasActiveQueue = !!route.ride_offer_id; 
-
-                      const routePrice = parseFloat(route.price) || 150;
-
-                      return (
-                        <TouchableOpacity 
-                          key={route.route_id || route.id || `route-${index}`} 
-                          style={[
-                            styles.supremeCard,
-                            isOutOfRange && styles.disabledCard
-                          ]} 
-                          onPress={() => joinPool(route)}
-                          disabled={isOutOfRange}
-                          activeOpacity={0.8}
-                        >
-                          <View style={styles.cardHeader}>
-                            <View style={styles.routePill}>
-                              <Text style={styles.routeLabel}>{routeTitle}</Text>
-                            </View>
-                            
-                            <View style={[
-                              styles.seatBadge, 
-                              hasActiveQueue ? styles.activeSeatBadge : styles.emptySeatBadge
-                            ]}>
-                              <View style={[
-                                styles.pulseDot, 
-                                { backgroundColor: hasActiveQueue ? "#10B981" : "#9CA3AF" }
-                              ]} />
-                              <Text style={[
-                                styles.seatText, 
-                                { color: hasActiveQueue ? "#047857" : "#4B5563" }
-                              ]}>
-                                {hasActiveQueue ? `${seatCount}/${maxSeats} Filled` : "Car Required"}
-                              </Text>
-                            </View>
-                          </View>
-                          
-                          <View style={styles.cardFooter}>
-                            <View style={styles.priceContainer}>
-                              <Text style={styles.priceLabel}>ESTIMATED FARE</Text>
-                              <Text style={styles.priceText}>
-                                ETB {routePrice}
-                              </Text>
-                            </View>
-
-                            <View style={styles.actionArrowZone}>
-                              <Text style={[
-                                styles.actionText, 
-                                { color: isOutOfRange ? "#9CA3AF" : "#059669" }
-                              ]}>
-                                {isOutOfRange ? "Out of Range" : "Request Pool"}
-                              </Text>
-                              <Ionicons 
-                                name="chevron-forward-circle" 
-                                size={22} 
-                                color={isOutOfRange ? "#D1D5DB" : "#059669"} 
-                              />
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-
-                  {canScrollCorridors && (
-                    <TouchableOpacity 
-                      style={styles.floatingScrollIndicator}
-                      onPress={() => {
-                        corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.floatingScrollText}>More corridors below</Text>
-                      <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
+            <View style={styles.actionArrowZone}>
+              <Text style={[
+                styles.actionText, 
+                { 
+                  color: isOutOfRange 
+                    ? "#9CA3AF" 
+                    : (isJoinWindowOpen ? "#D97706" : "#059669") 
+                }
+              ]}>
+                {isOutOfRange 
+                  ? "Out of Range" 
+                  : (isJoinWindowOpen ? "Join Matched Pool" : (totalActivePax > 0 ? "Join Pool" : "Request Pool"))}
+              </Text>
+              <Ionicons 
+                name="chevron-forward-circle" 
+                size={22} 
+                color={isOutOfRange ? "#D1D5DB" : (isJoinWindowOpen ? "#D97706" : "#059669")} 
+              />
             </View>
           </View>
-        )}
+        </TouchableOpacity>
+      );
+    })}
+  </ScrollView>
+
+  {canScrollCorridors && (
+    <TouchableOpacity 
+      style={styles.floatingScrollIndicator}
+      onPress={() => {
+        corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
+      }}
+      activeOpacity={0.85}
+    >
+      <Text style={styles.floatingScrollText}>More corridors below</Text>
+      <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
+    </TouchableOpacity>
+  )}
+</View>
+ 
+
+          {canScrollCorridors && (
+            <TouchableOpacity 
+              style={styles.floatingScrollIndicator}
+              onPress={() => {
+                corridorScrollRef.current?.scrollTo({ y: 180, animated: true });
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.floatingScrollText}>More corridors below</Text>
+              <Ionicons name="chevron-down" size={14} color="#059669" style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  </View>
+)}
 
         <CorridorDrawer
           visible={isDrawerOpen}
@@ -1391,4 +1589,32 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#059669',
   },
+
+  matchedCardBorder: {
+  borderColor: '#F59E0B',
+  borderWidth: 1.5,
+  backgroundColor: '#FFFDF5',
+},
+amberBadge: {
+  backgroundColor: '#FEF3C7',
+},
+matchedTimerBanner: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#FEF3C7',
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 6,
+  marginTop: 8,
+},
+matchedTimerText: {
+  fontSize: 12,
+  color: '#92400E',
+  marginLeft: 6,
+  fontWeight: '500',
+},
+countdownBold: {
+  fontWeight: '700',
+  color: '#B45309',
+},
 });
