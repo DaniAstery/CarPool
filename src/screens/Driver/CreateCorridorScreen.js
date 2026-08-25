@@ -820,33 +820,28 @@ useEffect(() => {
         />
       </View>
 
-      {/* TOP FLOATING HEADER WITH MASTER TOGGLE */}
+     {/* FLOATING CONTROLS (HAMBURGER & TOGGLE ONLY) */}
       <View style={styles.topFloatingHeader}>
-        <View style={styles.headerLeftCluster}>
-          <TouchableOpacity 
-            style={styles.hamburgerButton} 
-            onPress={() => setIsDrawerOpen(true)}
-          >
-            <Ionicons name="menu" size={22} color="#111111" />
-          </TouchableOpacity>
-          <View style={{ marginLeft: 10 }}>
-            <Text style={styles.headerTitleText}>Welcome Back, {userName}</Text>
-          </View>
-        </View>
+        <TouchableOpacity 
+          style={styles.hamburgerButton} 
+          onPress={() => setIsDrawerOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="menu" size={22} color="#111111" />
+        </TouchableOpacity>
 
         <View style={styles.toggleContainer}>
-          <Text style={[styles.toggleLabelText, { color: isOnline ? "#059669" : "#6B7280" }]}>
-            {isOnline ? "ONLINE" : "OFFLINE"}
+          <Text style={[styles.toggleLabelText, { color: isOnline ? "#059669" : "#DC2626" }]}>
+          {isOnline ? "ONLINE" : "OFFLINE"}
           </Text>
           <Switch
             value={isOnline}
             onValueChange={handleToggleOnline}
-            trackColor={{ false: "#D1D5DB", true: "#A7F3D0" }}
-            thumbColor={isOnline ? "#059669" : "#9CA3AF"}
+            trackColor={{ false: "#ee2222", true: "#A7F3D0" }}
+            thumbColor={isOnline ? "#059669" : "#DC2626"}
           />
         </View>
       </View>
-
       {/* SLIDING DRAWER PANEL */}
       <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
         <Pressable 
@@ -1166,27 +1161,29 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "#047857",
   },
-  persistentDistanceBanner: {
-    position: "absolute",
-    top: 75,
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
+ persistentDistanceBanner: {
+  position: "absolute",
+  top: 100, // Pushes banner down clear of floating header controls
+  alignSelf: "center",
+  flexDirection: "row",
+  alignItems: "center",
+  backgroundColor: "rgba(255, 255, 255, 0.95)",
+  paddingHorizontal: 14,
+  paddingVertical: 8,
+  borderRadius: 20,
+  elevation: 3,
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 4,
+  zIndex: 5,
+},
   persistentDistanceText: { fontSize: 13, color: "#374151" },
   boldText: { fontWeight: "700" },
+  
   radarToggleFloatingButton: {
     position: "absolute",
-    top: 75,
+    top: 150, // Clears both the top header (top: 40) and distance banner (top: 100)
     right: 15,
     flexDirection: "row",
     alignItems: "center",
@@ -1195,30 +1192,41 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 16,
     elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    zIndex: 5,
   },
   radarToggleText: { fontSize: 11, marginLeft: 4, color: "#6B7280" },
 
   // TOP HEADER
   topFloatingHeader: {
     position: "absolute",
-    top: 15,
+    top: 40, // Adjusted down slightly to clear status bar notch area
     left: 15,
     right: 15,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    backgroundColor: "transparent", // Completely removes the white background card
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    elevation: 0,                    // Removes Android card shadow
+    shadowOpacity: 0,                // Removes iOS card shadow
+    zIndex: 10,
+  },
+  headerLeftCluster: { flexDirection: "row", alignItems: "center" },
+  hamburgerButton: {
     backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 16,
+    padding: 10,
+    borderRadius: 12,
     elevation: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
-    shadowRadius: 6,
+    shadowRadius: 4,
   },
-  headerLeftCluster: { flexDirection: "row", alignItems: "center" },
-  hamburgerButton: { padding: 4 },
   headerTitleText: { fontSize: 14, fontWeight: "700", color: "#111827" },
   toggleContainer: { flexDirection: "row", alignItems: "center" },
   toggleLabelText: { fontSize: 12, fontWeight: "700", marginRight: 6 },
