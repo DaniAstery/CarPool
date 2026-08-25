@@ -496,6 +496,37 @@ export default function CreateCorridorScreen({ navigation }) {
     };
   }, [isOnline, operatingMode]);
 
+
+      useEffect(() => {
+        if (!currentHub || !currentHub.name) return;
+
+        const socket = io(API_URL);
+
+        socket.on("connect", () => {
+          socket.emit("join_hub", { hub_name: currentHub.name });
+        });
+
+        // ⚡ Instantly updates corridors and driver queue counts
+        socket.on("queue_update", (updatedCorridors) => {
+          if (Array.isArray(updatedCorridors)) {
+            setPredefinedCorridors(updatedCorridors);
+          }
+        });
+
+        return () => {
+          socket.disconnect();
+        };
+      }, [currentHub]);
+
+
+
+
+
+
+
+
+
+
   useEffect(() => {
     async function fetchAllHubs() {
       try {
@@ -927,68 +958,106 @@ export default function CreateCorridorScreen({ navigation }) {
             })}
           </ScrollView>
 
-          {operatingMode === "CORRIDOR" && (
-            <View style={styles.corridorSection}>
-              <Text style={[styles.sectionHeadingLabel, !isCorridorActive && styles.disabledTextLabel]}>
-                Available Corridor Routes
+      {operatingMode === "CORRIDOR" && (
+  <View style={styles.corridorSection}>
+    <Text style={[styles.sectionHeadingLabel, !isCorridorActive && styles.disabledTextLabel]}>
+      Available Corridor Routes
+    </Text>
+
+    {loadingCorridors ? (
+      <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 15 }} />
+    ) : predefinedCorridors.length === 0 ? (
+      <Text style={styles.emptyText}>No live corridors available for this hub.</Text>
+    ) : (
+      predefinedCorridors.map((route, idx) => {
+        const isRouteSelected = selectedRoute?.route_id === route.route_id;
+
+        // 1. Dynamic Route Naming (e.g. Ayat ➔ CMC ➔ Megenagna)
+        const pickupName = route.pickup_hub_name || currentHub?.name || "Hub";
+        const passThroughName = route.pass_through_hub_name || route.pass_through_name;
+        const dropOffName = route.drop_off_hub_name || route.destination_name || "Destination";
+
+        const routeDisplayName = route.route_name || (
+          passThroughName
+            ? `${pickupName} ➔ ${passThroughName} ➔ ${dropOffName}`
+            : `${pickupName} ➔ ${dropOffName}`
+        );
+
+        // 2. Queue Stats & Dynamic Wait Time Calculation
+        const queueCount = Number(route.driver_queue_count ?? 0);
+        const avgWaitMins = Number(route.average_wait_mins ?? 0);
+        const dynamicWaitTime =
+          queueCount === 0
+            ? "Instant"
+            : avgWaitMins > 0
+            ? `~${avgWaitMins} mins`
+            : `~${Math.round(queueCount * 2.5)} mins`;
+
+        return (
+          <TouchableOpacity
+            key={`route-${route.route_id || idx}`}
+            style={[
+              styles.corridorCard,
+              isRouteSelected && styles.corridorCardSelected,
+              !isCorridorActive && styles.corridorCardDisabled,
+            ]}
+            onPress={() => isCorridorActive && setSelectedRoute(route)}
+            disabled={!isCorridorActive}
+          >
+            <View style={styles.corridorCardHeader}>
+              <Ionicons
+                name="git-commit-outline"
+                size={18}
+                color={isRouteSelected ? "#059669" : "#374151"}
+              />
+              <Text style={styles.corridorRouteName} numberOfLines={1}>
+                {routeDisplayName}
               </Text>
-
-              {loadingCorridors ? (
-                <ActivityIndicator size="small" color="#059669" style={{ marginVertical: 15 }} />
-              ) : predefinedCorridors.length === 0 ? (
-                <Text style={styles.emptyText}>No live corridors available for this hub.</Text>
-              ) : (
-                predefinedCorridors.map((route, idx) => {
-                  const isRouteSelected = selectedRoute?.route_id === route.route_id;
-
-                  return (
-                    <TouchableOpacity
-                      key={`route-${route.route_id || idx}`}
-                      style={[
-                        styles.corridorCard,
-                        isRouteSelected && styles.corridorCardSelected,
-                        !isCorridorActive && styles.corridorCardDisabled,
-                      ]}
-                      onPress={() => isCorridorActive && setSelectedRoute(route)}
-                      disabled={!isCorridorActive}
-                    >
-                      <View style={styles.corridorCardHeader}>
-                        <Ionicons
-                          name="git-commit-outline"
-                          size={18}
-                          color={isRouteSelected ? "#059669" : "#374151"}
-                        />
-                        <Text style={styles.corridorRouteName}>
-                          {route.route_name || route.corridor_name || `Corridor #${route.route_id}`}
-                        </Text>
-                      </View>
-                      {route.description ? (
-                        <Text style={styles.corridorDescription}>{route.description}</Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-
-              <TouchableOpacity
-                style={[
-                  styles.launchButton,
-                  (!isCorridorActive || !selectedRoute || isPublishing) && styles.launchButtonDisabled,
-                ]}
-                onPress={handleGoOnlineCorridor}
-                disabled={!isCorridorActive || !selectedRoute || isPublishing}
-              >
-                {isPublishing ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Ionicons name="rocket-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                    <Text style={styles.launchButtonText}>Launch Corridor Pool</Text>
-                  </>
-                )}
-              </TouchableOpacity>
             </View>
-          )}
+
+            {route.description ? (
+              <Text style={styles.corridorDescription}>{route.description}</Text>
+            ) : null}
+
+            {/* Dynamic Real-time Queue Badge */}
+            <View style={styles.queueStatsFooter}>
+              <View style={styles.queueInfoBadge}>
+                <Ionicons name="people-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
+                <Text style={styles.queueInfoText}>
+                  Queue: <Text style={styles.boldText}>{queueCount} active</Text>
+                </Text>
+              </View>
+              <View style={styles.queueInfoBadge}>
+                <Ionicons name="time-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
+                <Text style={styles.queueInfoText}>
+                  Wait: <Text style={styles.boldText}>{dynamicWaitTime}</Text>
+                </Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        );
+      })
+    )}
+
+    <TouchableOpacity
+      style={[
+        styles.launchButton,
+        (!isCorridorActive || !selectedRoute || isPublishing) && styles.launchButtonDisabled,
+      ]}
+      onPress={handleGoOnlineCorridor}
+      disabled={!isCorridorActive || !selectedRoute || isPublishing}
+    >
+      {isPublishing ? (
+        <ActivityIndicator color="#FFFFFF" />
+      ) : (
+        <>
+          <Ionicons name="rocket-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+          <Text style={styles.launchButtonText}>Launch Corridor Pool</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  </View>
+)}
         </ScrollView>
       </View>
 
@@ -1235,4 +1304,30 @@ const styles = StyleSheet.create({
   modalDeclineText: { color: "#4B5563", fontSize: 15, fontWeight: "700" },
   modalAcceptButton: { flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: "#059669", alignItems: "center" },
   modalAcceptText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+
+queueStatsFooter: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  marginTop: 10,
+  paddingTop: 8,
+  borderTopWidth: 1,
+  borderTopColor: "#F3F4F6",
+},
+queueInfoBadge: {
+  flexDirection: "row",
+  alignItems: "center",
+  backgroundColor: "#ECFDF5",
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  borderRadius: 6,
+},
+queueInfoText: {
+  fontSize: 12,
+  color: "#047857",
+},
+boldText: {
+  fontWeight: "700",
+},
+
 });
