@@ -20,8 +20,10 @@ import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-ico
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer"; // 👈 1. Import sound player here
 
-const API_BASE_URL = "http://100.108.52.79:5000/api";
-const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const { height } = Dimensions.get("window");
 
 // Distance calculation utility (Haversine formula)

@@ -23,7 +23,8 @@ import { io } from "socket.io-client";
 import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://100.108.52.79:5000";
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 
 const cleanMinimalMapStyle = [
   { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
@@ -1491,7 +1492,7 @@ stickyFooterContainer: {
   paddingHorizontal: 4,
   backgroundColor: "#FFFFFF",
   borderTopWidth: 1,
-  borderTopColor: "#F3F4F6", // Subtle separator line
+  borderTopColor: "#F3F4F6", 
 },
 launchButton: {
   flexDirection: "row",
@@ -1511,7 +1512,7 @@ launchButtonText: {
   fontWeight: "700",
 },
 demandBadgeActive: {
-  backgroundColor: "#ECFDF5", // Light green background
+  backgroundColor: "#ECFDF5",
   borderColor: "#A7F3D0",
   borderWidth: 1,
 },

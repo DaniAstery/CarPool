@@ -20,7 +20,7 @@ import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://100.108.52.79:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0235,

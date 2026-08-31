@@ -23,6 +23,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
   // Financial Pricing Logic Engine
   const pricePerSeat = passengers.length >= 4 ? 70 : passengers.length === 3 ? 80 : 120;
   const totalGrossYield = passengers.length * pricePerSeat;
+  const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 
   // 📡 Real-Time Database Roster Polling Pipeline
   useEffect(() => {
@@ -31,7 +32,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
     async function streamHubRoster() {
       try {
         const response = await fetch(
-          `http://100.108.52.79:5000/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`);
+          `${API_URL}/api/rides/active-hub-matches?hub=${currentDriverHub}&driverId=${currentDriverId}`);
         if (!response.ok) return;
 
         const data = await response.json();

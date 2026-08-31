@@ -9,7 +9,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 
-const API_URL = "http://100.108.52.79:5000/api";
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
 
 export default function DriverPendingVerification({ route, navigation }) {
   const { userId } = route.params || {};

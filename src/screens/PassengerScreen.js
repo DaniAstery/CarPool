@@ -25,8 +25,13 @@ import CorridorDrawer from "../screens/Corridor_Drawer";
 import { playSound } from "../utils/soundPlayer";
 import { useLocationPinger } from '../hooks/useLocationPinger';
 
-const API_URL = "http://100.108.52.79:5000/api"; 
-const socket = io("http://100.108.52.79:5000");
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+const socket = io(SOCKET_URL, {
+  transports: ['websocket'],
+  autoConnect: true,
+});
 
 // 🔑 Insert your Google Cloud Maps API key or EXPO_PUBLIC variable here
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -108,38 +113,67 @@ export default function PassengerScreen({ navigation }) {
     }
   }, [selectedPickupHub]);
 
-  /* 🚪 GATEKEEPER STATUS LIFECYCLE */
+ /* 🚪 UPGRADED GATEKEEPER STATUS LIFECYCLE (Robust Session Recovery) */
   useEffect(() => {
     let isMounted = true;
 
     async function checkUserRoutingStatus() {
       try {
+        console.log(`🔍 [GATEKEEPER] Checking active session status for user ${currentUserId}...`);
         const statusRes = await fetch(`${API_URL}/passenger/status/${currentUserId}`);
-        if (!statusRes.ok) throw new Error("Macro status query rejected.");
+        
+        if (!statusRes.ok) {
+          throw new Error(`Macro status query rejected with status: ${statusRes.status}`);
+        }
+        
         const statusData = await statusRes.json();
+        console.log(`📦 [GATEKEEPER] Status payload received:`, statusData);
 
-        if (statusData && statusData.status !== "idle" && statusData.status !== "completed") {
+        if (!isMounted) return;
+
+        // Safely extract core state parameters across different response formats
+        const rawStatus = statusData.status || statusData.pool?.status || "idle";
+        const normalizedStatus = String(rawStatus).toLowerCase().trim();
+        
+        const targetRideOfferId = statusData.matched_ride_offer_id || statusData.pool?.matched_ride_offer_id || null;
+        const targetRouteId = statusData.routeId || statusData.pool?.route_id || statusData.route_id || null;
+        const targetPoolId = statusData.poolId || statusData.pool?.id || null;
+
+        // If the user has an active session, resolve the correct destination screen
+        if (normalizedStatus && !["idle", "completed", "cancelled", "expired"].includes(normalizedStatus)) {
           let targetScreen = null;
 
-          if (statusData.status === "searching") {
+          // Map all pre-match and matching states to MatchingScreen
+          if (["searching", "pending", "active", "joined"].includes(normalizedStatus)) {
             targetScreen = "MatchingScreen";
-          } else if (statusData.status === "matched") {
+          } 
+          // Map matched states to PickupProposal
+          else if (["matched", "assigned", "accepted_proposal"].includes(normalizedStatus) || targetRideOfferId !== null) {
             targetScreen = "PickupProposal";
-          } else if (["accepted", "arrived"].includes(statusData.status)) {
+          } 
+          // Map driver acceptance / arrival states to LiveTracking
+          else if (["accepted", "arrived"].includes(normalizedStatus)) {
             targetScreen = "LiveTracking";
-          } else if (statusData.status === "in_trip") {
+          } 
+          // Map active trip states to TripDeparture
+          else if (["in_trip", "inprogress", "started"].includes(normalizedStatus)) {
             targetScreen = "TripDeparture"; 
           }
 
-          if (isMounted && targetScreen) {
+          if (targetScreen) {
+            console.log(`🚀 [GATEKEEPER] Active session detected (${normalizedStatus}). Restoring view to: ${targetScreen}`);
+            
             navigation.reset({
               index: 0,
               routes: [{ 
                 name: targetScreen, 
                 params: {
-                  routeId: statusData.routeId || null,
-                  rideOfferId: statusData.matched_ride_offer_id,
-                  userId: currentUserId
+                  routeId: targetRouteId,
+                  rideOfferId: targetRideOfferId,
+                  ride_offer_id: targetRideOfferId,
+                  userId: currentUserId,
+                  poolId: targetPoolId,
+                  poolStatus: normalizedStatus
                 } 
               }],
             });
@@ -147,9 +181,10 @@ export default function PassengerScreen({ navigation }) {
           }
         }
       } catch (err) {
-        console.log("❌ Passenger gatekeeper stack engine failure:", err);
+        console.warn("⚠️ [GATEKEEPER] Stack engine recovery warning:", err.message);
       }
 
+      // No active session found; unlock the standard PassengerScreen UI
       if (isMounted) {
         setCheckingGatekeeper(false);
       }
@@ -158,7 +193,6 @@ export default function PassengerScreen({ navigation }) {
     checkUserRoutingStatus();
     return () => { isMounted = false; };
   }, [navigation, currentUserId]);
-
   // route_pool change listener
 
  useEffect(() => {
@@ -439,29 +473,35 @@ export default function PassengerScreen({ navigation }) {
                 booking_type: "shared"
               };
 
-              const res = await fetch(`${API_URL}/routes/join`, {
+             const res = await fetch(`${API_URL}/routes/join`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
               });
 
-              if (res.status === 403) {
-                const errorData = await res.json();
-                Alert.alert("Out of Pool Range", errorData.message || "Range validation failure.");
+              if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                Alert.alert("Join Failed", errorData.message || `Server rejected join request (${res.status})`);
                 return;
               }
-
-              const data = await res.json();
-              const isRecovered = data.alreadyActive === true;
-              const targetScreen = isRecovered ? (data.navigateTo || "MatchingScreen") : "MatchingScreen";
-              playSound(1);
               
+              const data = await res.json();
+              playSound(1);
+
+              // Determine the correct target screen dynamically based on the server response or pool status
+              let targetScreen = "MatchingScreen";
+              if (data.navigateTo) {
+                targetScreen = data.navigateTo;
+              } else if (data.pool?.status === 'matched' || data.matched_ride_offer_id) {
+                targetScreen = "PickupProposal";
+              }
+
               const passThrough = item.pass_through_name ? ` ➔ ${item.pass_through_name}` : "";
               const routeTitle = item.pickup_hub_name && item.name 
                 ? `${item.pickup_hub_name}${passThrough} ➔ ${item.name}` 
                 : `Route #${targetRouteId}`;
 
-            /** navigation.navigate(targetScreen, {
+              navigation.navigate(targetScreen, {
                 routeId: targetRouteId,
                 hubId: pickupHubId,
                 userId: currentUserId,
@@ -474,8 +514,8 @@ export default function PassengerScreen({ navigation }) {
                   time: "Evaluating Corridor Options...",
                   price: `ETB ${routePrice}`, 
                 }
-              }); */  
-
+              });
+      
             } catch (err) {
               console.error("❌ Join Pool Exception caught:", err);
               Alert.alert("Connection Error", "Failed to communicate with dispatch server. Please try again.");

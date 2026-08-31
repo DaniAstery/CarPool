@@ -23,6 +23,7 @@ export default function TripPaymentScreen({ navigation }) {
   const [driverPhone, setDriverPhone] = useState("");
   const [isLoadingDetails, setIsLoadingDetails] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 
   // Fetch payment info dynamically based on the logged-in user ID
   useEffect(() => {
@@ -34,7 +35,7 @@ export default function TripPaymentScreen({ navigation }) {
         return;
       }
       try {
-        const res = await fetch(`http://100.108.52.79:5000/api/rides/payment-details-by-user/${currentUserId}`);
+        const res = await fetch(`${API_URL}/api/rides/payment-details-by-user/${currentUserId}`);
         const data = await res.json();
         if (res.ok && data.success && isMounted) {
           if (data.fixedPrice) setFixedPrice(data.fixedPrice);

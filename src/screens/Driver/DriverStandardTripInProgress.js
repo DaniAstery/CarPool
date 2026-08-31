@@ -16,8 +16,11 @@ import * as Location from "expo-location";
 import io from "socket.io-client";
 
 const { width } = Dimensions.get("window");
-const API_URL = "http://100.108.52.79:5000";
-const SOCKET_URL = "http://100.108.52.79:5000";
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+
+
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [

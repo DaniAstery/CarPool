@@ -16,8 +16,7 @@ import * as Location from "expo-location";
 
 const { width } = Dimensions.get("window");
 
-// Adjust API_URL to match your backend host
-const API_URL = "http://100.108.52.79:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [

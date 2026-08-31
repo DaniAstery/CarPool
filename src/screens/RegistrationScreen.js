@@ -15,7 +15,8 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 import RoleSelectionModal from "./RoleSelectionModal"; // Adjust path if needed
 
-const API_URL = "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+
 const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
 
 export default function RegistrationScreen() {
