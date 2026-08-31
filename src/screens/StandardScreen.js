@@ -14,10 +14,10 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import io from "socket.io-client";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
 
 
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
 
 const { width } = Dimensions.get("window");
 

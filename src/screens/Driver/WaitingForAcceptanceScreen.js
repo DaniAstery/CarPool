@@ -16,7 +16,7 @@ import { playSound } from "../../utils/soundPlayer";
 
 const { width } = Dimensions.get("window");
 // Automatically use your production URL if set, otherwise fallback to local/Tailscale for development
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
 
 const calculateBearing = (startLat, startLng, destLat, destLng) => {
   const startLatRad = (startLat * Math.PI) / 180;

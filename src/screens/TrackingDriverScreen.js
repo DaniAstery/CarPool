@@ -16,9 +16,9 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import io from "socket.io-client";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
 
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const { width } = Dimensions.get("window");

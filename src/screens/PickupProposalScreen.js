@@ -19,7 +19,7 @@ import { useAuth } from '../AuthContext';
 import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = "http://100.108.52.79:5000";
+const API_URL = "http://98.89.38.224:5000";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0220,
