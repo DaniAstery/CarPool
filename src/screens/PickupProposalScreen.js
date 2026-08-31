@@ -447,7 +447,7 @@ export default function PickupProposalScreen({ navigation }) {
 
       if (response.ok) {
         if (navigation.canGoBack()) navigation.goBack();
-        else navigation.replace("Home");
+        else navigation.replace("Passenger");
       }
     } catch (err) {
       console.log("❌ Error declining proposal:", err);

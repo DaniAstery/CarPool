@@ -113,87 +113,6 @@ export default function PassengerScreen({ navigation }) {
     }
   }, [selectedPickupHub]);
 
- /* 🚪 UPGRADED GATEKEEPER STATUS LIFECYCLE (Robust Session Recovery) */
-  useEffect(() => {
-    let isMounted = true;
-
-    async function checkUserRoutingStatus() {
-      try {
-        console.log(`🔍 [GATEKEEPER] Checking active session status for user ${currentUserId}...`);
-        const statusRes = await fetch(`${API_URL}/passenger/status/${currentUserId}`);
-        
-        if (!statusRes.ok) {
-          throw new Error(`Macro status query rejected with status: ${statusRes.status}`);
-        }
-        
-        const statusData = await statusRes.json();
-        console.log(`📦 [GATEKEEPER] Status payload received:`, statusData);
-
-        if (!isMounted) return;
-
-        // Safely extract core state parameters across different response formats
-        const rawStatus = statusData.status || statusData.pool?.status || "idle";
-        const normalizedStatus = String(rawStatus).toLowerCase().trim();
-        
-        const targetRideOfferId = statusData.matched_ride_offer_id || statusData.pool?.matched_ride_offer_id || null;
-        const targetRouteId = statusData.routeId || statusData.pool?.route_id || statusData.route_id || null;
-        const targetPoolId = statusData.poolId || statusData.pool?.id || null;
-
-        // If the user has an active session, resolve the correct destination screen
-        if (normalizedStatus && !["idle", "completed", "cancelled", "expired"].includes(normalizedStatus)) {
-          let targetScreen = null;
-
-          // Map all pre-match and matching states to MatchingScreen
-          if (["searching", "pending", "active", "joined"].includes(normalizedStatus)) {
-            targetScreen = "MatchingScreen";
-          } 
-          // Map matched states to PickupProposal
-          else if (["matched", "assigned", "accepted_proposal"].includes(normalizedStatus) || targetRideOfferId !== null) {
-            targetScreen = "PickupProposal";
-          } 
-          // Map driver acceptance / arrival states to LiveTracking
-          else if (["accepted", "arrived"].includes(normalizedStatus)) {
-            targetScreen = "LiveTracking";
-          } 
-          // Map active trip states to TripDeparture
-          else if (["in_trip", "inprogress", "started"].includes(normalizedStatus)) {
-            targetScreen = "TripDeparture"; 
-          }
-
-          if (targetScreen) {
-            console.log(`🚀 [GATEKEEPER] Active session detected (${normalizedStatus}). Restoring view to: ${targetScreen}`);
-            
-            navigation.reset({
-              index: 0,
-              routes: [{ 
-                name: targetScreen, 
-                params: {
-                  routeId: targetRouteId,
-                  rideOfferId: targetRideOfferId,
-                  ride_offer_id: targetRideOfferId,
-                  userId: currentUserId,
-                  poolId: targetPoolId,
-                  poolStatus: normalizedStatus
-                } 
-              }],
-            });
-            return; 
-          }
-        }
-      } catch (err) {
-        console.warn("⚠️ [GATEKEEPER] Stack engine recovery warning:", err.message);
-      }
-
-      // No active session found; unlock the standard PassengerScreen UI
-      if (isMounted) {
-        setCheckingGatekeeper(false);
-      }
-    }
-
-    checkUserRoutingStatus();
-    return () => { isMounted = false; };
-  }, [navigation, currentUserId]);
-  // route_pool change listener
 
  useEffect(() => {
   if (!socket) return;
@@ -596,14 +515,7 @@ export default function PassengerScreen({ navigation }) {
     );
   };
 
-  if (checkingGatekeeper) {
-    return (
-      <View style={styles.gatekeeperContainer}>
-        <ActivityIndicator size="large" color="#059669" />
-        <Text style={styles.gatekeeperText}>Analyzing Active Pool Session...</Text>
-      </View>
-    );
-  }
+ 
 
   const isOutOfRange = distanceToHub > 1000;
   const formattedDistance = distanceToHub !== null 

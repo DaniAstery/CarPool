@@ -33,21 +33,137 @@ import DriverEnRouteScreen from "./src/screens/Driver/DriverEnRouteScreen";
 import TrackingDriverScreen from "./src/screens/TrackingDriverScreen";
 import DriverStandardTripInProgress from "./src/screens/Driver/DriverStandardTripInProgress";
 
-
-
 const Stack = createNativeStackNavigator();
+const API_URL = "http://100.108.52.79:5000";
 
 // 📍 GLOBAL NAVIGATION REF
 export const navigationRef = createNavigationContainerRef();
 
 function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
   const { user, isLoading } = useAuth();
+  const [initialNavState, setInitialNavState] = useState(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
-  // 1. Prevent screen flash while reading storage or checking permissions
-  if (isLoading) {
+  // 🚪 CENTRALIZED SESSION RECOVERY GATEKEEPER (Debugged Version)
+  useEffect(() => {
+    let isMounted = true;
+
+    async function restoreActivePassengerSession() {
+      console.log("🔍 [DEBUG APP] restoreActivePassengerSession triggered. User object:", user);
+
+      if (!user || user.role === "driver" || !user.id) {
+        console.log("⚠️ [DEBUG APP] Bypassing session check because user is missing, driver, or lacks an ID.");
+        if (isMounted) {
+          setInitialNavState({
+            index: 0,
+            routes: [{ name: user?.role === "driver" ? "CreateCorridor" : "Passenger", params: { userId: user?.id } }]
+          });
+          setIsRestoringSession(false);
+        }
+        return;
+      }
+
+      try {
+        const fetchUrl = `${API_URL}/passenger/status/${user.id}`;
+        console.log(`🔍 [DEBUG APP] Fetching status from: ${fetchUrl}`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+        const statusRes = await fetch(fetchUrl, {
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        
+        console.log(`📡 [DEBUG APP] Status HTTP Response Code: ${statusRes.status}`);
+
+        if (!statusRes.ok) {
+          throw new Error(`Status check failed with code ${statusRes.status}`);
+        }
+
+        const statusData = await statusRes.json();
+        console.log(`📦 [DEBUG APP] Raw status payload received from server:`, JSON.stringify(statusData, null, 2));
+
+        if (!isMounted) return;
+
+        const rawStatus = statusData.status || "idle";
+        const normalizedStatus = String(rawStatus).toLowerCase().trim();
+        
+        const targetRideOfferId = statusData.matched_ride_offer_id || null;
+        const targetRouteId = statusData.routeId || null;
+        const targetPoolId = statusData.poolId || null;
+
+        console.log(`🧭 [DEBUG APP] Parsed -> normalizedStatus: "${normalizedStatus}" | targetRideOfferId: ${targetRideOfferId}`);
+
+        const isStaleStatus = ["idle", "completed", "cancelled", "expired"].includes(normalizedStatus);
+        console.log(`🧐 [DEBUG APP] Is status considered stale/inactive? ${isStaleStatus}`);
+
+        if (!isStaleStatus && normalizedStatus) {
+          let targetScreen = "Passenger";
+
+          if (["searching", "pending", "active", "joined"].includes(normalizedStatus)) {
+            targetScreen = "MatchingScreen";
+          } else if (["matched", "assigned", "accepted_proposal"].includes(normalizedStatus)) {
+            targetScreen = "PickupProposal";
+          } else if (["accepted", "arrived"].includes(normalizedStatus)) {
+            targetScreen = "LiveTracking";
+          } else if (["in_trip", "inprogress", "started"].includes(normalizedStatus) || targetRideOfferId) {
+            targetScreen = "TripDeparture";
+          }
+
+          console.log(`🚀 [DEBUG APP] Final routing decision -> Target Screen: ${targetScreen}`);
+
+          setInitialNavState({
+            index: 0,
+            routes: [{
+              name: targetScreen,
+              params: {
+                routeId: targetRouteId,
+                rideOfferId: targetRideOfferId,
+                ride_offer_id: targetRideOfferId,
+                userId: user.id,
+                poolId: targetPoolId,
+                poolStatus: normalizedStatus
+              }
+            }]
+          });
+        } else {
+          console.log(`🛑 [DEBUG APP] Status is stale or idle ("${normalizedStatus}"). Falling back to Passenger screen.`);
+          setInitialNavState({
+            index: 0,
+            routes: [{ name: "Passenger", params: { userId: user.id } }]
+          });
+        }
+      } catch (err) {
+        console.warn("⚠️ [DEBUG APP] Session recovery caught error/timeout:", err.message);
+        if (isMounted) {
+          setInitialNavState({
+            index: 0,
+            routes: [{ name: "Passenger", params: { userId: user?.id } }]
+          });
+        }
+      } finally {
+        if (isMounted) {
+          setIsRestoringSession(false);
+        }
+      }
+    }
+
+    if (!isLoading) {
+      restoreActivePassengerSession();
+    }
+
+    return () => { isMounted = false; };
+  }, [user, isLoading]);
+
+  // 1. Prevent screen flash while reading storage or restoring session
+  if (isLoading || isRestoringSession) {
     return (
       <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color="#10B981" />
+        <Text style={{ color: "#94A3B8", marginTop: 12, fontSize: 13, fontWeight: "600" }}>
+          Restoring corridor session...
+        </Text>
       </View>
     );
   }
@@ -74,7 +190,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
   }
 
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer ref={navigationRef} initialState={initialNavState}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
           // 🔐 AUTHENTICATION WORKSPACE
@@ -112,7 +228,6 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
             <Stack.Screen name="Home" component={HomeScreen} />
             <Stack.Screen name="Standard" component={StandardScreen} />
             <Stack.Screen name="TrackingDriver" component={TrackingDriverScreen} />
-
           </>
         )}
       </Stack.Navigator>
