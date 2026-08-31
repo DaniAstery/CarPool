@@ -19,7 +19,7 @@ import { useAuth } from '../AuthContext';
 import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+const API_URL = "http://100.108.52.79:5000";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0220,
@@ -29,6 +29,7 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.015,
 };
 
+// Fetch real street-level walking path from OSRM public walking router with urban grid fallback
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
   if (!userLoc || !hubLoc || !hubLoc.latitude || !userLoc.latitude) {
     return { distance: null, duration: null, coordinates: [] };
@@ -82,7 +83,10 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
   return { distance: distanceStr, duration: durationStr, coordinates: gridCoordinates };
 };
 
-const MemoizedMap = memo(({ currentLocation, meetupLocation, driverLocation, walkingRouteCoordinates, mapRef }) => {
+// ------------------------------------------------------------------
+// MEMOIZED MAP VIEW (Circular Glowing Compass Arrow & Clean Pickup Hub Pin)
+// ------------------------------------------------------------------
+const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordinates, mapRef }) => {
   return (
     <MapView
       ref={mapRef}
@@ -94,11 +98,12 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, driverLocation, wal
       showsCompass={false}
       customMapStyle={cleanMinimalMapStyle}
     >
+      {/* 🧭 Circular Glowing Compass Arrow Passenger Marker */}
       {currentLocation && currentLocation.latitude && (
         <Marker 
           coordinate={currentLocation} 
           title="Your Current Location" 
-          description="Passenger"
+          description="Passenger (Compass Heading Active)"
           anchor={{ x: 0.5, y: 0.5 }}
           flat={true}
           tracksViewChanges={false}
@@ -111,23 +116,7 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, driverLocation, wal
         </Marker>
       )}
 
-      {driverLocation && driverLocation.latitude && (
-        <Marker 
-          coordinate={driverLocation} 
-          title="Assigned Driver" 
-          description="En route to pickup hub"
-          anchor={{ x: 0.5, y: 0.5 }}
-          flat={true}
-          tracksViewChanges={false}
-        >
-          <View style={styles.driverOuterHalo}>
-            <View style={styles.driverPinContainer}>
-              <FontAwesome5 name="car-side" size={12} color="#FFFFFF" />
-            </View>
-          </View>
-        </Marker>
-      )}
-
+      {/* 📍 Clean Pickup Hub Marker */}
       {meetupLocation && meetupLocation.latitude && (
         <Marker 
           coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
@@ -135,19 +124,19 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, driverLocation, wal
           anchor={{ x: 0.5, y: 1 }}
           tracksViewChanges={false}
         >
-          <View style={styles.pickupPinContainer}>
-            <View style={styles.pickupPinDot} />
+          <View style={styles.pickupMarkerContainer}>
             <View style={styles.pickupPinBubble}>
-              <MaterialCommunityIcons name="map-marker-radius" size={13} color="#059669" style={{ marginRight: 4 }} />
+              <MaterialCommunityIcons name="map-marker-radius" size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
               <Text style={styles.pickupBubbleText} numberOfLines={1}>
                 {meetupLocation.name || "Pickup Hub"}
               </Text>
             </View>
-            <View style={styles.pickupPinTail} />
+            <View style={styles.pickupPinTip} />
           </View>
         </Marker>
       )}
 
+      {/* 🛣️ Real Street-Level Walking Route Polyline (Current Device to Pickup Hub) */}
       {walkingRouteCoordinates && walkingRouteCoordinates.length > 0 && (
         <Polyline
           coordinates={walkingRouteCoordinates}
@@ -161,24 +150,20 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, driverLocation, wal
   );
 });
 
-export default function PickupProposalScreen({ navigation, route }) {
+export default function PickupProposalScreen({ navigation }) {
   const { user } = useAuth();
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
-
-  const routeParams = route?.params || {};
-  const initialRideOfferId = routeParams.rideOfferId || routeParams.id || routeParams.ride_offer_id || null;
 
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [userAccepted, setUserAccepted] = useState(false);
   const [myDbStatus, setMyDbStatus] = useState("searching");
   const [coRiders, setCoRiders] = useState([]);
+  const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
-  const [rideOfferStatus, setRideOfferStatus] = useState("pending");
-
+  
   const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
-  const [driverLocation, setDriverLocation] = useState(null);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
-
+  
   const [walkingDistance, setWalkingDistance] = useState(null);
   const [walkingDuration, setWalkingDuration] = useState(null);
   const [walkingCoordinates, setWalkingCoordinates] = useState([]);
@@ -201,9 +186,10 @@ export default function PickupProposalScreen({ navigation, route }) {
   }, []);
 
   const navigateToTracking = useCallback((rideOfferId) => {
-    navigation.replace("TrackingDriver", { rideOfferId });
+    navigation.replace("LiveTracking", { rideOfferId });
   }, [navigation]);
 
+  // Real-time GPS location watch + compass heading watch
   useEffect(() => {
     let locationSubscription = null;
     let headingSubscription = null;
@@ -214,7 +200,11 @@ export default function PickupProposalScreen({ navigation, route }) {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
           locationSubscription = await Location.watchPositionAsync(
-            { accuracy: Location.Accuracy.Balanced, timeInterval: 2000, distanceInterval: 1 },
+            {
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: 2000,
+              distanceInterval: 1,
+            },
             (loc) => {
               if (loc && loc.coords && isMounted) {
                 setCurrentLocation((prev) => ({
@@ -229,7 +219,10 @@ export default function PickupProposalScreen({ navigation, route }) {
           headingSubscription = await Location.watchHeadingAsync((headingObj) => {
             if (headingObj && isMounted) {
               const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magneticHeading;
-              setCurrentLocation((prev) => ({ ...prev, heading: compassHeading || 0 }));
+              setCurrentLocation((prev) => ({
+                ...prev,
+                heading: compassHeading || 0,
+              }));
             }
           });
         }
@@ -263,12 +256,7 @@ export default function PickupProposalScreen({ navigation, route }) {
     }
   }, []);
 
-  useEffect(() => {
-    if (initialRideOfferId) {
-      fetchMapCoordinatesData(initialRideOfferId);
-    }
-  }, [initialRideOfferId, fetchMapCoordinatesData]);
-
+  // Fetch walking route whenever user coordinates or meetup hub changes
   useEffect(() => {
     let isMounted = true;
     async function loadWalkingRoute() {
@@ -285,13 +273,14 @@ export default function PickupProposalScreen({ navigation, route }) {
     return () => { isMounted = false; };
   }, [currentLocation?.latitude, currentLocation?.longitude, meetupHub?.latitude, meetupHub?.longitude]);
 
+  // Explicitly fit map bounds to keep BOTH the compass arrow and pickup hub pin framed
   useEffect(() => {
     if (mapRef.current && currentLocation?.latitude && meetupHub?.latitude) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
+      
       const coordsToFit = [
         { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
         { latitude: meetupHub.latitude, longitude: meetupHub.longitude },
-        ...(driverLocation?.latitude ? [{ latitude: driverLocation.latitude, longitude: driverLocation.longitude }] : []),
         ...walkingCoordinates
       ];
 
@@ -300,7 +289,13 @@ export default function PickupProposalScreen({ navigation, route }) {
         animated: true,
       });
     }
-  }, [currentLocation?.latitude, currentLocation?.longitude, meetupHub?.latitude, meetupHub?.longitude, driverLocation?.latitude, walkingCoordinates, isDrawerExpanded]);
+  }, [currentLocation?.latitude, currentLocation?.longitude, meetupHub?.latitude, meetupHub?.longitude, walkingCoordinates, isDrawerExpanded]);
+
+  useEffect(() => {
+    if (timeLeft <= 0) return;
+    const timer = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft]);
 
   useEffect(() => {
     let isSubscribed = true;
@@ -311,7 +306,7 @@ export default function PickupProposalScreen({ navigation, route }) {
 
       try {
         const controller = new AbortController();
-        const abortTimeout = setTimeout(() => controller.abort(), 3500);
+        const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
         const res = await fetch(`${API_URL}/api/rides/proposal-manifest/${currentUserId}`, {
           signal: controller.signal,
@@ -319,7 +314,8 @@ export default function PickupProposalScreen({ navigation, route }) {
         clearTimeout(abortTimeout);
 
         if (res.status === 404 || !res.ok) {
-          console.log("⚠️ Proposal manifest temporarily unavailable, retaining view for retry...");
+          if (navigation.canGoBack()) navigation.goBack();
+          else navigation.replace("Home");
           return;
         }
 
@@ -327,26 +323,16 @@ export default function PickupProposalScreen({ navigation, route }) {
           const data = await res.json();
           const passengers = data.passengers || [];
 
-          const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id || initialRideOfferId;
+          const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
           if (activeRideOfferId) {
             fetchMapCoordinatesData(activeRideOfferId);
           } else if (data.hub && data.hub.latitude) {
             setMeetupHub(data.hub);
           }
 
-          if (data.driver_location && data.driver_location.latitude) {
-            setDriverLocation({
-              latitude: parseFloat(data.driver_location.latitude),
-              longitude: parseFloat(data.driver_location.longitude)
-            });
-          }
-
-          const currentOfferStatus = (data.ride_offer_status || data.status || "pending").toLowerCase().trim();
-          setRideOfferStatus(currentOfferStatus);
-
           const normalizedAcceptedIds = (data.accepted_passengers || []).map(id => parseInt(id, 10));
           const isUserAcceptedInOffer = normalizedAcceptedIds.includes(currentUserId);
-
+          
           const myRow = passengers.find(p => parseInt(p.user_id, 10) === currentUserId);
           const myRoutePoolStatus = myRow ? (myRow.status || "searching").toLowerCase().trim() : "searching";
           const rawMyStatus = (userAccepted || isUserAcceptedInOffer || myRoutePoolStatus === "accepted") ? "accepted" : myRoutePoolStatus;
@@ -393,17 +379,20 @@ export default function PickupProposalScreen({ navigation, route }) {
           setCoRiders(parsedCoRiders);
 
           const currentDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
-
+          
           if (currentDriverStatus === "accepted" && prevDriverStateRef.current !== "accepted") {
             playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
           }
           prevDriverStateRef.current = currentDriverStatus;
 
           setDriverState(currentDriverStatus);
+
+          if (currentDriverStatus === "accepted" && activeRideOfferId) {
+            navigateToTracking(activeRideOfferId);
+            return; 
+          }
         }
-      } catch (err) {
-        console.log("⚠️ Proposal status polling network skip:", err.message);
-      } 
+      } catch (err) {} 
       finally {
         if (isSubscribed) {
           setInitialCheckDone(true);
@@ -417,68 +406,32 @@ export default function PickupProposalScreen({ navigation, route }) {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, [currentUserId, navigation, userAccepted, fetchMapCoordinatesData, initialRideOfferId]);
+  }, [currentUserId, navigateToTracking, navigation, userAccepted, fetchMapCoordinatesData]);
 
   const handleAcceptProposal = async () => {
-    const rawId = user?.id || user?.user_id || user?.uid || user?.sub || user?.user?.id || user?.user?.user_id;
-    const validUserId = parseInt(rawId, 10);
-
-    if (!validUserId || isNaN(validUserId)) {
-      console.error("❌ [ERROR] Aborting accept proposal: Invalid or missing user ID in auth context.");
-      return;
-    }
-
     setUserAccepted(true);
     setMyDbStatus("accepted");
     playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
 
     try {
-      const baseUrl = API_URL.endsWith('/api') ? API_URL.slice(0, -4) : API_URL;
-      const endpoint = `${baseUrl}/api/rides/accept-proposal`;
-
-      const response = await fetch(endpoint, {
+      const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: validUserId, userId: validUserId }),
+        body: JSON.stringify({ user_id: currentUserId }),
       });
 
-      if (!response.ok) {
+      if (response.ok) {
+        const data = await response.json();
+        if (data.ride_offer_id && driverState === "accepted") {
+          navigateToTracking(data.ride_offer_id);
+        }
+      } else {
         setUserAccepted(false);
-        setMyDbStatus("matched");
+        setMyDbStatus("searching");
       }
     } catch (err) {
       setUserAccepted(false);
-      setMyDbStatus("matched");
-    }
-  };
-
-  const handleSignalArrival = async () => {
-    const validUserId = currentUserId || parseInt(user?.id || user?.user_id || user?.uid || user?.sub, 10);
-    if (!validUserId || isNaN(validUserId)) return;
-
-    playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
-
-    try {
-      const baseUrl = API_URL.endsWith('/api') ? API_URL.slice(0, -4) : API_URL;
-      const endpoint = `${baseUrl}/api/rides/signal-arrival`;
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: validUserId }),
-      });
-
-      const responseText = await response.text();
-      let data = {};
-      try { data = JSON.parse(responseText); } catch (e) {}
-
-      if (response.ok) {
-        setMyDbStatus("arrived");
-        const activeOfferId = data.ride_offer_id || initialRideOfferId;
-        navigateToTracking(activeOfferId);
-      }
-    } catch (err) {
-      console.log("❌ Network error signaling arrival:", err);
+      setMyDbStatus("searching");
     }
   };
 
@@ -486,27 +439,24 @@ export default function PickupProposalScreen({ navigation, route }) {
     playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
 
     try {
-      const validUserId = currentUserId || parseInt(user?.id || user?.user_id, 10);
       const response = await fetch(`${API_URL}/api/routes/decline-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: validUserId }),
+        body: JSON.stringify({ user_id: currentUserId }),
       });
 
       if (response.ok) {
         if (navigation.canGoBack()) navigation.goBack();
-        else navigation.replace("Passenger");
+        else navigation.replace("Home");
       }
     } catch (err) {
       console.log("❌ Error declining proposal:", err);
     }
   };
 
-  const isDriverAcceptedOrActive = driverState === "accepted" || rideOfferStatus === "accepted";
-  const isArrivalButtonActive = userAccepted && isDriverAcceptedOrActive;
-
   return (
     <SafeAreaView style={styles.container}>
+      {/* 1. TOP BANNER STATUS BAR */}
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
           <View style={styles.statusCenterCoreDot}>
@@ -523,12 +473,12 @@ export default function PickupProposalScreen({ navigation, route }) {
         </View>
       </View>
 
+      {/* 2. MAP CONTAINER */}
       <View style={styles.mapContainer}>
-        {initialCheckDone || initialRideOfferId ? (
+        {initialCheckDone ? (
           <MemoizedMap 
             currentLocation={currentLocation} 
             meetupLocation={meetupHub} 
-            driverLocation={driverLocation}
             walkingRouteCoordinates={walkingCoordinates}
             mapRef={mapRef} 
           />
@@ -539,7 +489,10 @@ export default function PickupProposalScreen({ navigation, route }) {
         )}
       </View>
 
+      {/* 3. COLLAPSIBLE SLIDING PANEL DRAWER */}
       <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
+        
+        {/* Toggle Expansion Handle */}
         <Pressable 
           style={styles.dragHandleContainer}
           onPress={() => setIsDrawerExpanded(!isDrawerExpanded)}
@@ -560,7 +513,11 @@ export default function PickupProposalScreen({ navigation, route }) {
                 </View>
               )}
             </View>
-            <View style={{ alignItems: 'flex-end', justifyContent: 'center' }}>
+            <View style={{ alignItems: 'flex-end' }}>
+              <View style={styles.timerBadge}>
+                <Ionicons name="time-outline" size={14} color="#059669" />
+                <Text style={styles.timerText}>{timeLeft}s</Text>
+              </View>
               <View style={styles.expandToggleBadge}>
                 <Text style={styles.expandToggleText}>{isDrawerExpanded ? "Collapse" : "Details"}</Text>
                 <Ionicons name={isDrawerExpanded ? "chevron-down" : "chevron-up"} size={12} color="#6B7280" />
@@ -569,6 +526,7 @@ export default function PickupProposalScreen({ navigation, route }) {
           </View>
         </Pressable>
 
+        {/* Scrollable Roster Body */}
         <ScrollView 
           showsVerticalScrollIndicator={false}
           style={styles.drawerScrollBody}
@@ -576,7 +534,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         >
           <View style={styles.rosterContainer}>
             <Text style={styles.sectionHeader}>Matching Corridor Pool</Text>
-
+            
             <View style={styles.riderRow}>
               <View style={[styles.avatar, { backgroundColor: "#059669" }]}>
                 <Text style={styles.avatarText}>YOU</Text>
@@ -622,52 +580,40 @@ export default function PickupProposalScreen({ navigation, route }) {
           </View>
         </ScrollView>
 
+        {/* Sticky Action Buttons inside Drawer (Hidden if collapsed) */}
         {isDrawerExpanded && (
-         <View style={styles.drawerFooterSticky}>
-          <View style={styles.actionButtonsRow}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.declineButton]}
-              activeOpacity={0.85}
-              onPress={handleDeclineProposal}
-            >
-              <View style={styles.buttonInternalGroup}>
-                <Ionicons name="close-circle" size={18} color="#EF4444" style={{ marginRight: 6 }} />
-                <Text style={styles.declineButtonText}>Decline</Text>
-              </View>
-            </TouchableOpacity>
-
-            {!userAccepted ? (
+          <View style={styles.drawerFooterSticky}>
+            <View style={styles.actionButtonsRow}>
               <TouchableOpacity
-                style={[styles.actionButton, styles.acceptButton]}
+                style={[styles.actionButton, styles.declineButton]}
+                activeOpacity={0.85}
+                onPress={handleDeclineProposal}
+              >
+                <View style={styles.buttonInternalGroup}>
+                  <Ionicons name="close-circle" size={18} color="#EF4444" style={{ marginRight: 6 }} />
+                  <Text style={styles.declineButtonText}>Decline</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionButton, styles.acceptButton, userAccepted && styles.actionButtonDisabled]}
+                disabled={userAccepted}
                 activeOpacity={0.85}
                 onPress={handleAcceptProposal}
               >
                 <View style={styles.buttonInternalGroup}>
-                  <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
-                  <Text style={styles.acceptButtonText}>Accept Hub</Text>
-                </View>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.actionButton, 
-                  styles.acceptButton, 
-                  !isArrivalButtonActive && { backgroundColor: "#9CA3AF", opacity: 0.7 }
-                ]}
-                activeOpacity={0.85}
-                disabled={!isArrivalButtonActive}
-                onPress={handleSignalArrival}
-              >
-                <View style={styles.buttonInternalGroup}>
-                  <Ionicons name="location" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  {userAccepted ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+                  ) : (
+                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  )}
                   <Text style={styles.acceptButtonText}>
-                    {isArrivalButtonActive ? "I've Arrived at Hub" : "Waiting for Driver..."}
+                    {userAccepted ? "Waiting for driver..." : "Accept Hub"}
                   </Text>
                 </View>
               </TouchableOpacity>
-            )}
+            </View>
           </View>
-        </View>
         )}
       </View>
     </SafeAreaView>
@@ -685,23 +631,30 @@ const cleanMinimalMapStyle = [
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#FFFFFF" },
+  
+  // Status Bar Banner
   statusBarBanner: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, zIndex: 20 },
   statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
   statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: "#A7F3D0" },
   statusTextContainer: { flex: 1 },
   statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
   statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
+  
+  // Map Elements
   mapContainer: { flex: 1 },
   mapPlaceholder: { flex: 1, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center" },
+  
+  // Circular Glowing Compass Arrow Passenger Marker
   userArrowOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(14, 165, 233, 0.25)", justifyContent: "center", alignItems: "center" },
   userArrowContainer: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#0EA5E9", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
-  driverOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(16, 185, 129, 0.25)", justifyContent: "center", alignItems: "center" },
-  driverPinContainer: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#10B981", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#FFFFFF", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 5 },
-  pickupPinContainer: { alignItems: "center" },
-  pickupPinDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF", position: "absolute", bottom: -4, zIndex: 3, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.3, shadowRadius: 2, elevation: 4 },
-  pickupPinBubble: { backgroundColor: "#FFFFFF", flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 3 },
-  pickupBubbleText: { color: "#111827", fontSize: 11, fontWeight: "700", maxWidth: 140 },
-  pickupPinTail: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 6, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#E5E7EB", marginBottom: -1 },
+  
+  // Clean Pickup Hub Marker Group
+  pickupMarkerContainer: { alignItems: "center" },
+  pickupPinBubble: { backgroundColor: "#111827", flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3 },
+  pickupBubbleText: { color: "#FFFFFF", fontSize: 11, fontWeight: "700", maxWidth: 140 },
+  pickupPinTip: { width: 0, height: 0, backgroundColor: "transparent", borderStyle: "solid", borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#111827", marginTop: -1 },
+
+  // Collapsible Sliding Panel
   slidingPanelDrawer: { 
     position: "absolute", 
     bottom: 0, 
@@ -718,17 +671,25 @@ const styles = StyleSheet.create({
   },
   drawerCollapsed: { height: 130 },
   drawerExpanded: { maxHeight: height * 0.65 },
+  
   dragHandleContainer: { paddingBottom: 10, width: "100%" },
   dragHandle: { width: 40, height: 4, backgroundColor: "#D1D5DB", borderRadius: 2, alignSelf: "center", marginBottom: 10 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   previewLeftCluster: { flex: 1 },
   title: { fontSize: 18, fontWeight: "700", color: "#111111" },
   subtitle: { fontSize: 13, color: "#6B7280", marginTop: 2 },
   boldText: { fontWeight: "700", color: "#111111" },
+  
   walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 4, borderWidth: 1, borderColor: "#A7F3D0" },
   walkingInfoText: { fontSize: 11, fontWeight: "600", color: "#059669", marginLeft: 4 },
+
+  timerBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 6 },
+  timerText: { fontSize: 12, fontWeight: "700", color: "#059669", marginLeft: 4 },
+  
   expandToggleBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end" },
   expandToggleText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginRight: 4 },
+  
+  // Drawer Body
   drawerScrollBody: { flexGrow: 0 },
   rosterContainer: { marginVertical: 6, backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", padding: 12 },
   sectionHeader: { fontSize: 11, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 },
@@ -740,8 +701,11 @@ const styles = StyleSheet.create({
   statusAccepted: { backgroundColor: "#ECFDF5", color: "#059669" },
   statusMatched: { backgroundColor: "#EFF6FF", color: "#1D4ED8" },
   statusPending: { backgroundColor: "#FEF3C7", color: "#D97706" },
+  
   driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginVertical: 8 },
   driverText: { marginLeft: 10, fontSize: 13, color: "#4B5563" },
+  
+  // Footer & Action Buttons
   drawerFooterSticky: { 
     paddingVertical: 10, 
     paddingBottom: Platform.OS === 'android' ? 24 : 12,
@@ -751,6 +715,7 @@ const styles = StyleSheet.create({
   },
   actionButtonsRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
   actionButton: { paddingVertical: 14, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  actionButtonDisabled: { backgroundColor: "#9CA3AF" },
   declineButton: { flex: 1, backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5" },
   declineButtonText: { color: "#EF4444", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
   acceptButton: { flex: 2, backgroundColor: "#059669" },
