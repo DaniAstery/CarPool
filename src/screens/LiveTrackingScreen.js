@@ -16,6 +16,7 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-icons";
+import { io } from "socket.io-client";
 import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
 
@@ -269,10 +270,26 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => backHandler.remove();
   }, []);
 
-  const navigateToDeparture = useCallback(() => {
-    navigation.replace("TripDeparture", { rideOfferId, userId: currentUserId });
+ // Inside LiveTrackingScreen.js
+const hasNavigatedRef = useRef(false);
+
+const navigateToDeparture = useCallback(() => {
+  if (hasNavigatedRef.current) return; // 👈 Prevent duplicate navigation triggers
+  hasNavigatedRef.current = true;
+
+  try {
     playSound("4");
-  }, [navigation, rideOfferId, currentUserId]);
+    const rootNavigator = navigation.getParent() || navigation;
+    
+    if (rootNavigator.canGoBack()) {
+      rootNavigator.navigate("TripDeparture", { rideOfferId, userId: currentUserId });
+    } else {
+      rootNavigator.replace("TripDeparture", { rideOfferId, userId: currentUserId });
+    }
+  } catch (err) {
+    console.log("⚠️ Navigation dispatch error:", err);
+  }
+}, [navigation, rideOfferId, currentUserId]);
 
   // Real-time GPS location watch + device compass heading watch for smooth arrow rotation
   useEffect(() => {
@@ -398,16 +415,20 @@ export default function LiveTrackingScreen({ route, navigation }) {
     return () => { isMounted = false; };
   }, [pickupLocation, destinationLocation]);
 
-  // Poll presence status (Driver state, driver live coordinates & co-riders) + Track precise transitions to ARRIVED + Sound 5
+  // 5. HYBRID ARCHITECTURE: Fallback Polling + Instant Socket.io Real-Time Listener
   useEffect(() => {
     let isSubscribed = true;
     let timerId;
+    let socket = null;
+
+    const resolvedUserId = parseInt(user?.id || user?.user_id || user?.userId || currentUserId, 10);
+    const targetRideOfferId = parseInt(rideOfferId, 10);
 
     async function fetchHubPresenceStatus() {
-      if (!isSubscribed || !currentUserId || !rideOfferId) return;
+      if (!isSubscribed || isNaN(resolvedUserId) || isNaN(targetRideOfferId)) return;
 
       try {
-        const res = await fetch(`${API_URL}/api/rides/presence-status/${rideOfferId}/${currentUserId}`);
+        const res = await fetch(`${API_URL}/rides/presence-status/${targetRideOfferId}/${resolvedUserId}`);
         if (!res.ok) return;
 
         const data = await res.json();
@@ -428,24 +449,23 @@ export default function LiveTrackingScreen({ route, navigation }) {
           }
 
           const newDriverStatus = (data.driver_status || "accepted").toLowerCase().trim();
+          const passengers = data.passengers || [];
+          const myRow = passengers.find(
+            (p) => parseInt(p.user_id || p.userId || p.id, 10) === resolvedUserId
+          );
+
+          const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
+
+          if (newDriverStatus === "in_trip" || rawMyStatus === "in_trip") {
+            navigateToDeparture();
+            return;
+          }
 
           if (newDriverStatus === "arrived" && prevDriverStateRef.current !== "arrived") {
             playSound("5");
           }
           prevDriverStateRef.current = newDriverStatus;
           setDriverState(newDriverStatus);
-
-          const passengers = data.passengers || [];
-          const myRow = passengers.find(
-            (p) => parseInt(p.user_id || p.userId || p.id, 10) === currentUserId
-          );
-
-          const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
-          
-          if (rawMyStatus === "in_trip" || newDriverStatus === "in_trip") {
-            navigateToDeparture();
-            return;
-          }
 
           if (rawMyStatus === "arrived" && !arrivedSoundPlayedRef.current) {
             arrivedSoundPlayedRef.current = true;
@@ -459,7 +479,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
 
           const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
           const parsedCoRiders = passengers
-            .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== currentUserId)
+            .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== resolvedUserId)
             .map((p, idx) => {
               const pId = parseInt(p.user_id || p.userId || p.id, 10);
               const pStatus = (p.status || "accepted").toLowerCase().trim();
@@ -489,31 +509,68 @@ export default function LiveTrackingScreen({ route, navigation }) {
       } catch (err) {
       } finally {
         if (isSubscribed) {
-          timerId = setTimeout(fetchHubPresenceStatus, 3500);
+          timerId = setTimeout(fetchHubPresenceStatus, 10000); // 10s fallback loop
         }
       }
     }
 
+    // Initial load
     fetchHubPresenceStatus();
+
+    // Setup Instant Socket.io Listener matching backend emission
+    const socketBaseUrl = API_URL.replace('/api', '');
+    socket = io(socketBaseUrl);
+
+    socket.on("connect", () => {
+      console.log("⚡ Connected to real-time notification socket");
+    });
+
+    socket.on("route_pool_updated", (payload) => {
+      console.log("⚡ Instant DB Event Broadcast Received via Socket:", payload);
+
+      const matchesRide = parseInt(payload.ride_offer_id || payload.matched_ride_offer_id, 10) === targetRideOfferId;
+      const matchesUser = parseInt(payload.user_id, 10) === resolvedUserId;
+      const statusVal = (payload.status || payload.passenger_status || payload.driver_status || "").toLowerCase().trim();
+
+      if (matchesRide && (statusVal === "in_trip" || (matchesUser && statusVal === "in_trip") || payload.driver_status === "in_trip")) {
+        console.log("🚀 INSTANT TRIGGER: Navigating to TripDeparture!");
+        navigateToDeparture();
+        return;
+      }
+
+      // Instantly refresh state on any other status change
+      fetchHubPresenceStatus();
+    });
+
     return () => {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
+      if (socket) {
+        socket.disconnect();
+      }
     };
-  }, [currentUserId, rideOfferId, navigateToDeparture]);
+  }, [user, rideOfferId, navigateToDeparture]);
 
   const handleSignalArrival = async () => {
+    const resolvedUserId = parseInt(user?.id || user?.user_id || user?.userId, 10);
+    
+    if (!resolvedUserId || isNaN(resolvedUserId)) {
+      Alert.alert("Authentication Error", "User session not fully loaded. Please wait a moment and try again.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const response = await fetch(`${API_URL}/api/rides/signal-arrival`, {
+      const response = await fetch(`${API_URL}/rides/signal-arrival`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: currentUserId, ride_offer_id: rideOfferId }),
+        body: JSON.stringify({ user_id: resolvedUserId }),
       });
 
       const data = await response.json();
 
-      if (!response.ok) {
-        Alert.alert("Arrival Error", data.error || "Could not update arrival status.");
+      if (!response.ok || !data.success) {
+        Alert.alert("Arrival Error", data.error || data.message || "Could not update arrival status.");
         return;
       }
 
@@ -524,7 +581,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
       if (data.passengers && Array.isArray(data.passengers)) {
         const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
         const instantCoRiders = data.passengers
-          .filter((p) => parseInt(p.userId || p.user_id, 10) !== currentUserId)
+          .filter((p) => parseInt(p.userId || p.user_id, 10) !== resolvedUserId)
           .map((p, idx) => ({
             id: parseInt(p.userId || p.user_id, 10),
             name: p.full_name || `Rider ${p.userId || p.user_id}`,
@@ -534,6 +591,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
         setCoRiders(instantCoRiders);
       }
     } catch (err) {
+      console.log("❌ Network Error on arrival:", err);
       Alert.alert("Network Error", "Failed to reach server. Please try again.");
     } finally {
       setIsSubmitting(false);
@@ -735,50 +793,57 @@ const styles = StyleSheet.create({
   glowingDestinationOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
   glowingDestinationBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#3B82F6", borderWidth: 2, borderColor: "#FFFFFF" },
 
-  slidingPanelDrawer: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 8, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 15 },
-  drawerExpanded: { height: height * 0.55 },
+  slidingPanelDrawer: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 16, paddingTop: 8, shadowColor: "#000", shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.15, shadowRadius: 10, elevation: 15, zIndex: 30 },
+  drawerExpanded: { height: height * 0.52 },
   drawerCollapsed: { height: 125 },
-  dragHandleContainer: { width: "100%", paddingVertical: 6, alignItems: "center" },
-  dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", marginBottom: 8 },
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%", paddingBottom: 4 },
-  previewLeftCluster: { flex: 1, marginRight: 8 },
-  title: { fontSize: 15, fontWeight: "700", color: "#1E293B" },
+
+  dragHandleContainer: { paddingBottom: 8 },
+  dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#CBD5E1", alignSelf: "center", marginBottom: 8 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  previewLeftCluster: { flex: 1, marginRight: 10 },
+  title: { fontSize: 15, fontWeight: "700", color: "#0F172A" },
   subtitle: { fontSize: 12, color: "#64748B", marginTop: 2 },
   boldText: { fontWeight: "700", color: "#0F172A" },
 
-  walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 4, borderWidth: 1, borderColor: "#A7F3D0" },
-  walkingInfoText: { fontSize: 11, fontWeight: "600", color: "#059669", marginLeft: 4 },
+  walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 6 },
+  walkingInfoText: { fontSize: 11, color: "#059669", fontWeight: "600", marginLeft: 4 },
 
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  badgeAccepted: { backgroundColor: "#E0F2FE" },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  badgeAccepted: { backgroundColor: "#FEF3C7" },
   badgeArrived: { backgroundColor: "#ECFDF5" },
-  badgeText: { fontSize: 10, fontWeight: "700", color: "#0369A1" },
-  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 4, alignSelf: "flex-end" },
-  expandToggleText: { fontSize: 11, color: "#64748B", marginRight: 2 },
-  drawerScrollBody: { marginTop: 8 },
+  badgeText: { fontSize: 10, fontWeight: "700", color: "#0F172A" },
+
+  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  expandToggleText: { fontSize: 11, color: "#6B7280", marginRight: 2, fontWeight: "500" },
+
+  drawerScrollBody: { marginTop: 4 },
+
   routeCard: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },
   routeItem: { flexDirection: "row", alignItems: "center" },
   routeDivider: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 8, marginLeft: 26 },
-  routeLabel: { fontSize: 10, fontWeight: "700", color: "#64748B", letterSpacing: 0.5 },
+  routeLabel: { fontSize: 10, fontWeight: "700", color: "#94A3B8" },
   routeValue: { fontSize: 13, fontWeight: "600", color: "#1E293B", marginTop: 1 },
-  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F1F5F9", borderRadius: 12, padding: 12, marginBottom: 12 },
-  driverCardArrived: { backgroundColor: "#ECFDF5", borderWidth: 1, borderColor: "#059669" },
-  driverLabel: { fontSize: 13, fontWeight: "700", color: "#1E293B" },
+
+  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F1F5F9", borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: "#E2E8F0" },
+  driverCardArrived: { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0" },
+  driverLabel: { fontSize: 13, fontWeight: "700", color: "#0F172A" },
   driverSub: { fontSize: 11, color: "#64748B", marginTop: 2 },
   driverArrivedText: { color: "#059669" },
-  driverArrivedBadge: { backgroundColor: "#059669", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  driverArrivedBadgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" },
-  rosterContainer: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 12 },
+  driverArrivedBadge: { backgroundColor: "#059669", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  driverArrivedBadgeText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
+
+  rosterContainer: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 16 },
   sectionHeader: { fontSize: 12, fontWeight: "700", color: "#475569", marginBottom: 8 },
-  riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 0.5, borderBottomColor: "#E2E8F0" },
+  riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
   avatar: { width: 28, height: 28, borderRadius: 14, justifyContent: "center", alignItems: "center", marginRight: 10 },
-  avatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" },
-  riderName: { flex: 1, fontSize: 12, fontWeight: "600", color: "#1E293B" },
-  statusTag: { fontSize: 10, fontWeight: "700", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  tagAccepted: { backgroundColor: "#E0F2FE", color: "#0369A1" },
-  tagArrived: { backgroundColor: "#ECFDF5", color: "#059669" },
-  tagPending: { backgroundColor: "#FEF3C7", color: "#D97706" },
-  actionButton: { backgroundColor: "#059669", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, alignItems: "center", justifyContent: "center", marginTop: 6, marginBottom: 10 },
-  actionButtonDisabled: { backgroundColor: "#9CA3AF" },
-  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" }
+  avatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
+  riderName: { flex: 1, fontSize: 13, fontWeight: "600", color: "#1E293B" },
+  statusTag: { fontSize: 10, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  tagAccepted: { backgroundColor: "#FEF3C7", color: "#B45309" },
+  tagArrived: { backgroundColor: "#ECFDF5", color: "#047857" },
+  tagPending: { backgroundColor: "#F1F5F9", color: "#64748B" },
+
+  actionButton: { backgroundColor: "#059669", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center", marginBottom: Platform.OS === 'ios' ? 20 : 10 },
+  actionButtonDisabled: { backgroundColor: "#94A3B8" },
+  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
 });

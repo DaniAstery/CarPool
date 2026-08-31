@@ -18,12 +18,10 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
-import {playSound} from "../utils/soundPlayer";
+import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
-
+const API_URL = "http://100.108.52.79:5000";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0235,
@@ -149,7 +147,10 @@ export default function TripDepartureScreen({ route, navigation }) {
     driverName: "Assigned Driver",
     vehicleInfo: "Corridor Shuttle",
     driverRating: "5.0",
-    fixedPrice: 100,
+    totalPrice: 100, // Total ride offer price from ride_offers table
+    pricePerSeat: 100, // Individual seat price from backend routing table
+    passengerCount: 1, // Total passenger count strictly excluding driver
+    passengers: [], // Full passenger list from passenger-track endpoint
     coRiders: [],
     endHubName: "CMC",
     etaMinutes: "--",
@@ -160,6 +161,12 @@ export default function TripDepartureScreen({ route, navigation }) {
   const [pulseAnim] = useState(new Animated.Value(0));
 
   const isTripFinished = tripStatus === "completed";
+
+  // Total passenger count strictly excluding the driver
+  const totalPassengers = Math.max(1, rideDetails.passengerCount);
+  
+  // Authoritative per-seat split fare fetched directly from routes table configuration via backend endpoint
+  const splitFarePrice = rideDetails.pricePerSeat;
 
   // Disable Android Back Button during active trip departure
   useEffect(() => {
@@ -197,7 +204,6 @@ export default function TripDepartureScreen({ route, navigation }) {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === "granted" && isMounted) {
-          // 1. Get initial GPS position
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           if (loc && isMounted) {
             setCurrentLocation({
@@ -208,7 +214,6 @@ export default function TripDepartureScreen({ route, navigation }) {
             });
           }
 
-          // 2. Watch live GPS coordinates
           locationSubscription = await Location.watchPositionAsync(
             { accuracy: Location.Accuracy.High, distanceInterval: 4, timeInterval: 2500 },
             (newLoc) => {
@@ -223,7 +228,6 @@ export default function TripDepartureScreen({ route, navigation }) {
             }
           );
 
-          // 3. Watch physical device compass orientation for smooth arrow rotation
           headingSubscription = await Location.watchHeadingAsync((headingObj) => {
             if (isMounted && headingObj) {
               const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magHeading;
@@ -245,7 +249,7 @@ export default function TripDepartureScreen({ route, navigation }) {
     };
   }, []);
 
-  // Fetch destination coordinates from map_coordinates endpoint
+  // Fetch destination coordinates & ride offer details from map_coordinates endpoint
   useEffect(() => {
     let isMounted = true;
     async function fetchMapCoordinatesEndpoint() {
@@ -278,7 +282,8 @@ export default function TripDepartureScreen({ route, navigation }) {
             ...prev,
             endHubName: coords.end_hub_name || prev.endHubName,
             corridor: coords.corridor_name || prev.corridor,
-            fixedPrice: coords.price_per_seat || prev.fixedPrice,
+            totalPrice: coords.total_price || coords.price_per_seat || prev.totalPrice,
+            pricePerSeat: coords.price_per_seat || prev.pricePerSeat,
           }));
         }
       } catch (err) {
@@ -326,11 +331,18 @@ export default function TripDepartureScreen({ route, navigation }) {
               const rawPassengers = Array.isArray(trackData.passengers) ? trackData.passengers : [];
               
               const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-              const formattedCoRiders = rawPassengers.map((p, idx) => ({
+
+              // Formatted list of all passengers returned by authoritative passenger-track endpoint
+              const formattedPassengers = rawPassengers.map((p, idx) => ({
                 id: p.user_id || idx,
                 name: p.full_name || p.name || `Rider ${p.user_id || idx}`,
+                status: p.status || "accepted",
                 color: colorPalette[idx % colorPalette.length],
+                isCurrentUser: Number(p.user_id) === Number(userId),
               }));
+
+              const formattedCoRiders = formattedPassengers.filter(p => !p.isCurrentUser);
+              const computedPassengerCount = Math.max(1, rawPassengers.length);
 
               setRideDetails(prev => ({
                 ...prev,
@@ -338,7 +350,10 @@ export default function TripDepartureScreen({ route, navigation }) {
                 driverName: trackData.driverName || prev.driverName,
                 vehicleInfo: trackData.vehicleInfo || prev.vehicleInfo,
                 driverRating: trackData.driverRating || prev.driverRating,
-                fixedPrice: trackData.finalPrice || statusData.finalPrice || prev.fixedPrice,
+                totalPrice: trackData.finalPrice || trackData.totalPrice || statusData.totalPrice || prev.totalPrice,
+                pricePerSeat: trackData.pricePerSeat || prev.pricePerSeat,
+                passengerCount: trackData.passengersCount || computedPassengerCount,
+                passengers: formattedPassengers,
                 coRiders: formattedCoRiders,
                 etaMinutes: trackData.etaMinutes ?? "--",
                 distanceRemainingKm: trackData.distanceRemainingKm ?? "--",
@@ -362,12 +377,14 @@ export default function TripDepartureScreen({ route, navigation }) {
     };
   }, [userId, rideOfferId]);
 
-  // Payment Checkout Handler
+  // Payment Checkout Handler (Passing Split Fare & Total Context)
   const handlePaymentCheckout = async () => {
     try {
       navigation.replace("TripPayment", {
         userId: userId,
-        fixedPrice: rideDetails.fixedPrice,
+        fixedPrice: splitFarePrice,
+        totalPrice: rideDetails.totalPrice,
+        passengerCount: totalPassengers,
         corridor: rideDetails.corridor,
       });
       playSound(5);
@@ -461,7 +478,7 @@ export default function TripDepartureScreen({ route, navigation }) {
           style={styles.drawerScrollBody}
           contentContainerStyle={{ paddingBottom: 10 }}
         >
-          {/* Transit Summary Metrics */}
+          {/* Transit Summary Metrics with Authoritative Routes Split Fare Breakdown */}
           <View style={styles.transitSummaryHeader}>
             <View style={styles.metricColumn}>
               <Text style={styles.metricLabel}>EST. TIME</Text>
@@ -471,15 +488,13 @@ export default function TripDepartureScreen({ route, navigation }) {
             </View>
             <View style={styles.verticalSplitter} />
             <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>DISTANCE</Text>
-              <Text style={styles.metricValueHighlight}>
-                {isTripFinished ? "0 km" : `${rideDetails.distanceRemainingKm} km`}
-              </Text>
+              <Text style={styles.metricLabel}>SPLIT FARE ({totalPassengers} PAX)</Text>
+              <Text style={styles.metricValueHighlight}>ETB {splitFarePrice}</Text>
             </View>
             <View style={styles.verticalSplitter} />
             <View style={styles.metricColumn}>
-              <Text style={styles.metricLabel}>FIXED COST</Text>
-              <Text style={styles.metricValueHighlight}>ETB {rideDetails.fixedPrice}</Text>
+              <Text style={styles.metricLabel}>TOTAL FARE</Text>
+              <Text style={styles.metricValueHighlight}>ETB {rideDetails.totalPrice}</Text>
             </View>
           </View>
 
@@ -517,32 +532,36 @@ export default function TripDepartureScreen({ route, navigation }) {
             </View>
           </View>
 
-          {/* Co-Riders Manifest Section */}
-          {rideDetails.coRiders.length > 0 && (
-            <View style={styles.manifestContainerCard}>
-              <View style={styles.manifestRow}>
-                <View style={styles.leftLabelCluster}>
-                  <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
-                  <Text style={styles.manifestRouteLabel}>Co-Riders on Board</Text>
-                </View>
-                <Text style={styles.manifestValueText}>{rideDetails.coRiders.length} Passengers</Text>
+          {/* Passengers Manifest Section */}
+          <View style={styles.manifestContainerCard}>
+            <View style={styles.manifestRow}>
+              <View style={styles.leftLabelCluster}>
+                <Ionicons name="people-sharp" size={16} color="#9CA3AF" />
+                <Text style={styles.manifestRouteLabel}>Passengers on Board Manifest</Text>
               </View>
+              <Text style={styles.manifestValueText}>{totalPassengers} Passengers</Text>
+            </View>
+            {rideDetails.passengers.length > 0 ? (
               <View style={styles.coRidersListContainer}>
-                {rideDetails.coRiders.map((rider) => (
+                {rideDetails.passengers.map((rider) => (
                   <View key={rider.id} style={styles.coRiderRowItem}>
                     <View style={[styles.miniAvatar, { backgroundColor: rider.color }]}>
                       <Text style={styles.miniAvatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
                     </View>
-                    <Text style={styles.coRiderNameText}>{rider.name}</Text>
+                    <Text style={styles.coRiderNameText}>
+                      {rider.name} {rider.isCurrentUser && <Text style={styles.youBadgeText}>(You)</Text>}
+                    </Text>
                     <Text style={styles.coRiderStatusTag}>ON BOARD</Text>
                   </View>
                 ))}
               </View>
-            </View>
-          )}
+            ) : (
+              <Text style={styles.fallbackManifestText}>Loading manifest data...</Text>
+            )}
+          </View>
         </ScrollView>
 
-        {/* Footer Action Button / Checkout Footer */}
+        {/* Footer Action Button / Checkout Footer with Split Price */}
         {isDrawerExpanded && (
           <View style={styles.drawerFooterSticky}>
             {isTripFinished ? (
@@ -553,7 +572,9 @@ export default function TripDepartureScreen({ route, navigation }) {
               >
                 <View style={styles.buttonInternalGroup}>
                   <Ionicons name="wallet" size={18} color="#FFFFFF" />
-                  <Text style={styles.actionButtonText}>PAY ETB {rideDetails.fixedPrice}.00 NOW</Text>
+                  <Text style={styles.actionButtonText}>
+                    PAY SPLIT FARE ETB {splitFarePrice}.00 ({totalPassengers} PAX)
+                  </Text>
                 </View>
               </TouchableOpacity>
             ) : (
@@ -639,10 +660,10 @@ const styles = StyleSheet.create({
   },
 
   transitSummaryHeader: { flexDirection: "row", backgroundColor: "#F8F9FA", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", paddingVertical: 12, marginBottom: 12, marginTop: 4 },
-  metricColumn: { flex: 1, alignItems: "center", justifyContent: "center" },
+  metricColumn: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
   verticalSplitter: { width: 1, backgroundColor: "#E5E7EB" },
-  metricLabel: { fontSize: 9, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5 },
-  metricValueHighlight: { fontSize: 15, fontWeight: "800", color: "#111111", marginTop: 2 },
+  metricLabel: { fontSize: 8, fontWeight: "700", color: "#9CA3AF", letterSpacing: 0.5, textAlign: "center" },
+  metricValueHighlight: { fontSize: 14, fontWeight: "800", color: "#111111", marginTop: 2, textAlign: "center" },
 
   routeCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: "#EAEAEA" },
   routeItem: { flexDirection: "row", alignItems: "center" },
@@ -658,19 +679,21 @@ const styles = StyleSheet.create({
 
   manifestContainerCard: { backgroundColor: "#F8F9FA", borderRadius: 12, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: "#EAEAEA" },
   manifestRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
-  leftLabelCluster: { flexDirection: "row", alignItems: "center" },
+  leftLabelCluster: { flexDirection: "row", alignItems:"center" },
   manifestRouteLabel: { fontSize: 13, color: "#4B5563", marginLeft: 8, fontWeight: "600" },
   manifestValueText: { fontSize: 13, fontWeight: "600", color: "#111111" },
-  coRidersListContainer: { marginTop: 8, paddingLeft: 24 },
+  coRidersListContainer: { marginTop: 8, paddingLeft: 8 },
   coRiderRowItem: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
   miniAvatar: { width: 22, height: 22, borderRadius: 11, justifyContent: "center", alignItems: "center" },
   miniAvatarText: { color: "#FFFFFF", fontSize: 9, fontWeight: "700" },
-  coRiderNameText: { flex: 1, marginLeft: 8, fontSize: 12, color: "#374151", fontWeight: "500" },
+  coRiderNameText: { flex: 1, marginLeft: 8, fontSize: 12, color: "#374151", fontWeight: "600" },
+  youBadgeText: { color: "#059669", fontWeight: "700" },
   coRiderStatusTag: { fontSize: 9, fontWeight: "700", color: "#059669", backgroundColor: "#ECFDF5", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  fallbackManifestText: { fontSize: 12, color: "#9CA3AF", fontStyle: "italic", marginTop: 4, paddingLeft: 8 },
 
   actionButton: { borderRadius: 12, paddingVertical: 15, alignItems: "center", justifyContent: "center" },
   paymentButtonBg: { backgroundColor: "#059669" },
   disabledButtonBg: { backgroundColor: "#E5E7EB", borderWidth: 1, borderColor: "#D1D5DB" },
   buttonInternalGroup: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  actionButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", marginLeft: 8, letterSpacing: 0.5 },
+  actionButtonText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800", marginLeft: 8, letterSpacing: 0.5 },
 });
