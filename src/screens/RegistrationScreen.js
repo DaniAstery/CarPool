@@ -15,7 +15,7 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 import RoleSelectionModal from "./RoleSelectionModal";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+const API_URL_SignTG = process.env.EXPO_PUBLIC_API_URL_SignTG || "http://100.108.52.79:5000/api";
 const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
 
 export default function RegistrationScreen() {
@@ -55,8 +55,8 @@ export default function RegistrationScreen() {
 
     try {
       const endpoint = authModeRef.current === "register" 
-        ? `${API_URL}/auth/check-status/${currentSessionId}`
-        : `${API_URL}/auth/check-signin/${currentSessionId}`;
+        ? `${API_URL_SignTG}/auth/check-status/${currentSessionId}`
+        : `${API_URL_SignTG}/auth/check-signin/${currentSessionId}`;
 
       console.log(`[Auth Polling] Checking endpoint URL: ${endpoint}`);
       const res = await fetch(endpoint);
@@ -140,7 +140,7 @@ export default function RegistrationScreen() {
       let sessionId = "";
 
       if (authMode === "register") {
-        const targetUrl = `${API_URL}/auth/register-init`;
+        const targetUrl = `${API_URL_SignTG}/auth/register-init`;
         console.log(`[Network Debug] POSTing to: ${targetUrl}`);
         
         const res = await fetch(targetUrl, {
@@ -163,7 +163,7 @@ export default function RegistrationScreen() {
         sessionId = data.userId;
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        const targetUrl = `${API_URL}/auth/signin-init`;
+        const targetUrl = `${API_URL_SignTG}/auth/signin-init`;
         console.log(`[Network Debug] POSTing to: ${targetUrl}`);
 
         const res = await fetch(targetUrl, {
