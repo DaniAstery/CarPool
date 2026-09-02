@@ -24,7 +24,7 @@ import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 
 const cleanMinimalMapStyle = [
   { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
@@ -1024,7 +1024,7 @@ export default function CreateCorridorScreen({ navigation }) {
                     const routeDisplayName = route.name || route.route_name || `${route.start_name || currentHub?.name} ➔ ${route.destination_name || route.end_name}`;
                     const totalCapacity = route.capacity || route.total_seats || 4;
                     const availableSeats = route.available_seats !== undefined ? route.available_seats : totalCapacity;
-                    const basePrice = route.price_per_seat || route.fare || 150;
+                    const basePrice = route.recommended_base_price || route.fare || 150;
                     const queueCount = route.driver_queue_count || 0;
                     const waitingPassengers = route.waiting_passengers || passengerRequests.length || 0;
                     const dynamicWaitTime = route.estimated_wait || (waitingPassengers > 0 ? "~3 mins" : "~5 mins");

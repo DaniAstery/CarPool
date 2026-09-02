@@ -13,10 +13,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
-import RoleSelectionModal from "./RoleSelectionModal"; // Adjust path if needed
+import RoleSelectionModal from "./RoleSelectionModal";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
-
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
 const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
 
 export default function RegistrationScreen() {
@@ -28,48 +27,63 @@ export default function RegistrationScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [waitingForTelegram, setWaitingForTelegram] = useState(false);
 
-  // 🔀 Multi-role selection modal states
+  // Multi-role selection modal states
   const [isRoleSelectionVisible, setIsRoleSelectionVisible] = useState(false);
   const [availableAccounts, setAvailableAccounts] = useState([]);
 
   const sessionIdRef = useRef(null);
   const authModeRef = useRef(authMode);
+  const waitingRef = useRef(waitingForTelegram);
 
   useEffect(() => {
     authModeRef.current = authMode;
   }, [authMode]);
 
-  // Core function to check auth status against backend
+  useEffect(() => {
+    waitingRef.current = waitingForTelegram;
+  }, [waitingForTelegram]);
+
+  // Core function to check auth status against backend with embedded HTML debugging
   const checkAuthStatus = async () => {
     const currentSessionId = sessionIdRef.current;
-    if (!waitingForTelegram || !currentSessionId) return;
+    console.log(`[Frontend Debug] checkAuthStatus triggered. waitingForTelegram: ${waitingRef.current}, currentSessionId: ${currentSessionId}`);
+
+    if (!waitingRef.current || !currentSessionId) {
+      console.log(`[Frontend Debug] Aborting poll: Missing state or sessionId.`);
+      return;
+    }
 
     try {
       const endpoint = authModeRef.current === "register" 
         ? `${API_URL}/auth/check-status/${currentSessionId}`
         : `${API_URL}/auth/check-signin/${currentSessionId}`;
 
-      console.log(`[Auth Polling] Checking endpoint: ${endpoint}`);
+      console.log(`[Auth Polling] Checking endpoint URL: ${endpoint}`);
       const res = await fetch(endpoint);
       const responseText = await res.text();
-      console.log(`[Auth Polling] Response (${res.status}):`, responseText);
+      
+      console.log(`[Auth Polling] Status: ${res.status}`);
+      console.log(`[Auth Polling] Raw Response:`, responseText);
+
+      // Guard against HTML page returns before JSON.parse crashes
+      if (responseText.trim().startsWith("<")) {
+        console.error("[Auth Error] Server returned HTML instead of JSON! Check if your backend route or API_URL is correct.");
+        return;
+      }
 
       if (res.ok) {
         const data = JSON.parse(responseText);
         
         if (data.success || data.phone_verified) {
-          
-          // 🔀 CHECK FOR MULTI-ROLE ACCOUNTS
           if (data.requiresRoleSelection && data.accounts) {
             setWaitingForTelegram(false);
-            console.log("[Auth Success] Multiple roles detected for this phone number. Prompting user selection.");
+            console.log("[Auth Success] Multiple roles detected. Prompting user selection.");
             
             setAvailableAccounts(data.accounts);
             setIsRoleSelectionVisible(true);
-            return; // Stop here and wait for user to pick a role
+            return; 
           }
 
-          // ⚡ SINGLE ACCOUNT FLOW (Standard)
           setWaitingForTelegram(false);
 
           const userRole = data.role || role;
@@ -88,7 +102,7 @@ export default function RegistrationScreen() {
     }
   };
 
-  // 1. Regular interval polling while waiting
+  // Regular interval polling while waiting
   useEffect(() => {
     let interval;
     if (waitingForTelegram) {
@@ -98,9 +112,9 @@ export default function RegistrationScreen() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [waitingForTelegram, role, loginSession]);
+  }, [waitingForTelegram]);
 
-  // 2. AppState listener: Check immediately when returning from Telegram app
+  // AppState listener: Check immediately when returning from Telegram app
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
@@ -126,30 +140,55 @@ export default function RegistrationScreen() {
       let sessionId = "";
 
       if (authMode === "register") {
-        const res = await fetch(`${API_URL}/auth/register-init`, {
+        const targetUrl = `${API_URL}/auth/register-init`;
+        console.log(`[Network Debug] POSTing to: ${targetUrl}`);
+        
+        const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ full_name: fullName.trim(), role: role }),
         });
-        const data = await res.json();
+        
+        const responseText = await res.text();
+        console.log(`[Register Init] Status: ${res.status}`);
+        console.log(`[Register Init] Raw Body:`, responseText);
+
+        if (responseText.trim().startsWith("<")) {
+          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}. Verify your backend routes or API_URL.`);
+        }
+
+        const data = JSON.parse(responseText);
         if (!res.ok) throw new Error(data.error || "Registration initialization failed.");
 
         sessionId = data.userId;
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        const res = await fetch(`${API_URL}/auth/signin-init`, {
+        const targetUrl = `${API_URL}/auth/signin-init`;
+        console.log(`[Network Debug] POSTing to: ${targetUrl}`);
+
+        const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
-        const data = await res.json();
+
+        const responseText = await res.text();
+        console.log(`[Signin Init] Status: ${res.status}`);
+        console.log(`[Signin Init] Raw Body:`, responseText);
+
+        if (responseText.trim().startsWith("<")) {
+          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}. Verify your backend routes or API_URL.`);
+        }
+
+        const data = JSON.parse(responseText);
         if (!res.ok) throw new Error(data.error || "Sign-in initialization failed.");
 
         sessionId = data.sessionId;
         deepLink = `${TELEGRAM_BOT_URL}?start=login_${sessionId}`;
+        console.log(`[Frontend Debug] Successfully received sign-in sessionId: ${sessionId}`);
       }
 
       sessionIdRef.current = sessionId;
-      console.log(`[Auth Action] Opening Telegram deep link with session: ${sessionId}`);
+      console.log(`[Frontend Debug] Stored sessionId in ref: ${sessionIdRef.current}`);
 
       const supported = await Linking.canOpenURL(deepLink);
       if (supported) {
@@ -159,6 +198,7 @@ export default function RegistrationScreen() {
         Alert.alert("Error", "Could not open Telegram. Ensure Telegram is installed.");
       }
     } catch (err) {
+      console.error("[Auth Action Error]:", err.message);
       Alert.alert("Authentication Error", err.message);
     } finally {
       setIsSubmitting(false);
@@ -170,7 +210,6 @@ export default function RegistrationScreen() {
     sessionIdRef.current = null;
   };
 
-  // 🎯 STEP 3: Handle the user's workspace choice from the modal
   const handleSelectRole = async (selectedAccount) => {
     setIsRoleSelectionVisible(false);
     console.log(`[Role Selected] Logging in as ${selectedAccount.role} (ID: ${selectedAccount.id})`);
@@ -280,7 +319,7 @@ export default function RegistrationScreen() {
         )}
       </View>
 
-      {/* 🔀 NATIVE MULTI-ROLE SELECTION MODAL */}
+      {/* NATIVE MULTI-ROLE SELECTION MODAL */}
       <RoleSelectionModal
         visible={isRoleSelectionVisible}
         accounts={availableAccounts}
