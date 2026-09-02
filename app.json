@@ -13,9 +13,16 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Allow Corridor to access your location to find nearby rides and create corridors."
+      },
+      "config": {
+        "googleMapsApiKey": "YOUR_IOS_GOOGLE_MAPS_API_KEY"
+      }
     },
     "android": {
+      "icon": "./assets/icon.png",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -23,9 +30,16 @@
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
-      "package": "com.corridorride.app"
+      "package": "com.corridorride.app",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -33,6 +47,7 @@
     "plugins": [
       "expo-audio",
       "expo-asset",
+      "expo-location",
       [
         "expo-build-properties",
         {
