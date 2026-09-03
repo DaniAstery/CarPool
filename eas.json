@@ -13,9 +13,11 @@
       "android": {
         "buildType": "apk"
       },
-      "env": {
-        "EXPO_PUBLIC_API_URL": "http://98.89.38.224:5000/api"
-      }
+       "env": {
+          "EXPO_PUBLIC_API_URL": "http://98.89.38.224:5000",
+          "EXPO_PUBLIC_SOCKET_URL": "http://98.89.38.224:5000",
+          "EXPO_PUBLIC_API_URL_SignTG": "http://98.89.38.224:5000/api"
+        }
     },
     "production": {
       "autoIncrement": true
