@@ -219,7 +219,7 @@ export default function NavigateToPickup({ navigation, route }) {
     async function fetchMapCoordinates() {
       try {
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
-        const res = await fetch(`${API_URL}/rides/map_coordinates?${queryParam}`);
+        const res = await fetch(`${API_URL}/api/rides/map_coordinates?${queryParam}`);
         
         const contentType = res.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
@@ -244,7 +244,7 @@ export default function NavigateToPickup({ navigation, route }) {
   useEffect(() => {
     async function syncRideManifest() {
       try {
-        const url = `${API_URL}/rides/driver-cluster-offer/${currentDriverId}`;
+        const url = `${API_URL}/api/rides/driver-cluster-offer/${currentDriverId}`;
         const res = await fetch(url);
 
         if (!res.ok) return;
@@ -335,7 +335,7 @@ export default function NavigateToPickup({ navigation, route }) {
   const handleArrived = async () => {
     setIsActionLoading(true);
     try {
-      const res = await fetch(`${API_URL}/rides/arrive`, {
+      const res = await fetch(`${API_URL}/api/rides/arrive`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -365,7 +365,7 @@ export default function NavigateToPickup({ navigation, route }) {
       // 🎵 Play your start trip sound the moment the button is pressed
       playSound("6"); 
 
-      const res = await fetch(`${API_URL}/rides/start-trip`, {
+      const res = await fetch(`${API_URL}/api/rides/start-trip`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

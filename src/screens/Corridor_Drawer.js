@@ -18,7 +18,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL_PASSENGER = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
 
 
 export default function CorridorDrawer({ visible, onClose, userId, role, onNavigate }) {
@@ -42,7 +42,7 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
   // Fetch live profile details on open
   useEffect(() => {
     if (visible && userId) {
-      fetch(`${API_URL}/users/profile/${userId}`)
+      fetch(`${API_URL_PASSENGER}/users/profile/${userId}`)
         .then((res) => res.json())
         .then((data) => {
           if (!data.error) {
@@ -65,7 +65,7 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
     setActiveSubView("history");
     setLoadingHistory(true);
     try {
-      const res = await fetch(`${API_URL}/trips/history/${userId}/${role}`);
+      const res = await fetch(`${API_URL_PASSENGER}/trips/history/${userId}/${role}`);
       const data = await res.json();
       if (Array.isArray(data)) setTripHistory(data);
     } catch (err) {
@@ -103,7 +103,7 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
 
     setIsSubmittingDeposit(true);
     try {
-      const res = await fetch(`${API_URL}/wallet/submit-deposit`, {
+      const res = await fetch(`${API_URL_PASSENGER}/wallet/submit-deposit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

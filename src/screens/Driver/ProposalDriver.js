@@ -137,7 +137,7 @@ export default function ProposalDriver({ navigation, route }) {
     async function fetchMapCoordinates() {
       try {
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
-        const res = await fetch(`${API_URL}/rides/map_coordinates?${queryParam}`);
+        const res = await fetch(`${API_URL}/api/rides/map_coordinates?${queryParam}`);
         
         const contentType = res.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
@@ -215,7 +215,7 @@ export default function ProposalDriver({ navigation, route }) {
       const offerId = mapHubData?.ride_offer_id || activeRideOfferIdRef.current;
       if (!offerId) return null;
 
-      const res = await fetch(`${API_URL}/rides/driver-expired`, {
+      const res = await fetch(`${API_URL}/api/rides/driver-expired`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -274,7 +274,7 @@ export default function ProposalDriver({ navigation, route }) {
 
     async function syncDatabaseManifestState() {
       try {
-        const url = `${API_URL}/rides/driver-proposal/${currentDriverId}`;
+        const url = `${API_URL}/api/rides/driver-proposal/${currentDriverId}`;
         const res = await fetch(url);
         
         // If proposal returns 404 or not found, ride offer has been removed/deleted
@@ -391,7 +391,7 @@ export default function ProposalDriver({ navigation, route }) {
 
     setDriverAccepted(true);
     try {
-      const res = await fetch(`${API_URL}/rides/driver-accept`, {
+      const res = await fetch(`${API_URL}/api/rides/driver-accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -431,7 +431,7 @@ export default function ProposalDriver({ navigation, route }) {
         style: "destructive",
         onPress: async () => {
           try {
-            await fetch(`${API_URL}/rides/driver-decline`, {
+            await fetch(`${API_URL}/api/rides/driver-decline`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({

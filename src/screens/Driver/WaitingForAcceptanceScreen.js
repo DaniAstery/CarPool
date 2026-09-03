@@ -167,7 +167,7 @@ export default function ProposalDriver({ navigation, route }) {
 
     async function syncDatabaseManifestState() {
       try {
-        const proposalUrl = `${API_URL}/rides/driver-proposal/${currentDriverId}`;
+        const proposalUrl = `${API_URL}/api/rides/driver-proposal/${currentDriverId}`;
         const res = await fetch(proposalUrl);
         if (res.ok) {
           const data = await res.json();
@@ -239,7 +239,7 @@ export default function ProposalDriver({ navigation, route }) {
         }
 
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
-        const coordsUrl = `${API_URL}/rides/map_coordinates?${queryParam}`;
+        const coordsUrl = `${API_URL}/api/rides/map_coordinates?${queryParam}`;
         const coordsRes = await fetch(coordsUrl);
         if (coordsRes.ok) {
           const coordsData = await coordsRes.json();
@@ -262,7 +262,7 @@ export default function ProposalDriver({ navigation, route }) {
     setDriverAccepted(true); 
     
     try {
-      const res = await fetch(`${API_URL}/rides/driver-accept`, {
+      const res = await fetch(`${API_URL}/api/rides/driver-accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -297,7 +297,7 @@ export default function ProposalDriver({ navigation, route }) {
         style: "destructive",
         onPress: async () => {
           try {
-            await fetch(`${API_URL}/rides/driver-decline`, {
+            await fetch(`${API_URL}/api/rides/driver-decline`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ driver_id: currentDriverId, ride_offer_id: activeRideOfferIdRef.current || 1 }),

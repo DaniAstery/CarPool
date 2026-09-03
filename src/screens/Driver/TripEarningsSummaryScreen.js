@@ -44,7 +44,7 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
         ? `ride_offer_id=${rideOfferId}` 
         : `driver_id=${driverId}`;
         
-      const response = await fetch(`${API_URL}/rides/TripSummary?${queryParam}`);
+      const response = await fetch(`${API_URL}/api/rides/TripSummary?${queryParam}`);
       const data = await response.json();
 
       if (response.ok && data.success) {

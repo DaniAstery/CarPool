@@ -28,7 +28,7 @@ export default function TripPaymentScreen({ route, navigation }) {
   const [driverPhone, setDriverPhone] = useState("");
   const [isLoadingDetails, setIsLoadingDetails] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
+  const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
 
   // Fetch payment info and calculate correct split cost dynamically if not fully provided via route params
   useEffect(() => {

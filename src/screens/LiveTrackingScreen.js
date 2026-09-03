@@ -22,6 +22,7 @@ import { playSound } from "../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL_PASSENGER= process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
 
 const DEFAULT_LOCATION = {
   latitude: 9.0235,
@@ -428,7 +429,7 @@ const navigateToDeparture = useCallback(() => {
       if (!isSubscribed || isNaN(resolvedUserId) || isNaN(targetRideOfferId)) return;
 
       try {
-        const res = await fetch(`${API_URL}/rides/presence-status/${targetRideOfferId}/${resolvedUserId}`);
+        const res = await fetch(`${API_URL_PASSENGER}/rides/presence-status/${targetRideOfferId}/${resolvedUserId}`);
         if (!res.ok) return;
 
         const data = await res.json();
@@ -561,7 +562,7 @@ const navigateToDeparture = useCallback(() => {
 
     setIsSubmitting(true);
     try {
-      const response = await fetch(`${API_URL}/rides/signal-arrival`, {
+      const response = await fetch(`${API_URL_PASSENGER}/rides/signal-arrival`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: resolvedUserId }),

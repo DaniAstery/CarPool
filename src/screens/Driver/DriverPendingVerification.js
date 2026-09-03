@@ -23,7 +23,7 @@ export default function DriverPendingVerification({ route, navigation }) {
     if (userId) {
       interval = setInterval(async () => {
         try {
-          const res = await fetch(`${API_URL}/auth/check-status/${userId}`);
+          const res = await fetch(`${API_URL}/api/auth/check-status/${userId}`);
           if (res.ok) {
             const data = await res.json();
             
@@ -44,7 +44,7 @@ export default function DriverPendingVerification({ route, navigation }) {
   const handleManualCheck = async () => {
     setIsChecking(true);
     try {
-      const res = await fetch(`${API_URL}/auth/check-status/${userId}`);
+      const res = await fetch(`${API_URL}/api/auth/check-status/${userId}`);
       if (res.ok) {
         const data = await res.json();
         if (data.phone_verified) {

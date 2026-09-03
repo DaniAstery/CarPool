@@ -13,7 +13,7 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-ico
 import { useAuth } from "../AuthContext";
 import CorridorDrawer from "../Corridor_Drawer";
 
-const API_URL = "http://98.89.38.224:5000/api";
+
 
 export default function UserProfileScreen({ navigation }) {
   const { user, logoutSession, updateUserData } = useAuth();
@@ -411,7 +411,7 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-ico
 import { useAuth } from "../AuthContext";
 import CorridorDrawer from "../Corridor_Drawer";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
 
 
 export default function UserProfileScreen({ navigation }) {
