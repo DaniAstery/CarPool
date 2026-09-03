@@ -40,7 +40,7 @@ export default function TripPaymentScreen({ route, navigation }) {
         return;
       }
       try {
-        const res = await fetch(`${API_URL}/api/rides/payment-details-by-user/${currentUserId}`);
+        const res = await fetch(`${API_URL}/rides/payment-details-by-user/${currentUserId}`);
         const data = await res.json();
         if (res.ok && data.success && isMounted) {
           if (!paramFixedPrice) {

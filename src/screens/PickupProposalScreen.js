@@ -242,7 +242,7 @@ export default function PickupProposalScreen({ navigation }) {
   const fetchMapCoordinatesData = useCallback(async (rideOfferId) => {
     if (!rideOfferId) return;
     try {
-      const res = await fetch(`${API_URL}/api/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
+      const res = await fetch(`${API_URL}/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
       const data = await res.json();
       if (data.success && data.coordinates) {
         const coords = data.coordinates;
@@ -309,7 +309,7 @@ export default function PickupProposalScreen({ navigation }) {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 2500);
 
-        const res = await fetch(`${API_URL}/api/rides/proposal-manifest/${currentUserId}`, {
+        const res = await fetch(`${API_URL}/rides/proposal-manifest/${currentUserId}`, {
           signal: controller.signal,
         });
         clearTimeout(abortTimeout);
@@ -415,7 +415,7 @@ export default function PickupProposalScreen({ navigation }) {
     playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
 
     try {
-      const response = await fetch(`${API_URL}/api/rides/accept-proposal`, {
+      const response = await fetch(`${API_URL}/rides/accept-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: currentUserId }),
@@ -440,7 +440,7 @@ export default function PickupProposalScreen({ navigation }) {
     playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
 
     try {
-      const response = await fetch(`${API_URL}/api/routes/decline-proposal`, {
+      const response = await fetch(`${API_URL}/routes/decline-proposal`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: currentUserId }),

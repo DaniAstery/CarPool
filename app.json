@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Corridor",
-    "slug": "Pool",
+    "slug": "daniast",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,7 +19,8 @@
       },
       "config": {
         "googleMapsApiKey": "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao"
-      }
+      },
+      "bundleIdentifier": "com.corridorride.app"
     },
     "android": {
       "icon": "./assets/icon.png",
@@ -57,9 +58,10 @@
         }
       ]
     ],
+    "owner": "daniasterys-team",
     "extra": {
       "eas": {
-        "projectId": "494e789d-da06-4d3b-9a67-f59c37c2b8c1"
+        "projectId": "dcce3fb8-aaa8-4000-bf85-ef3eb83f4204"
       }
     }
   }

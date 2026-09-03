@@ -255,7 +255,7 @@ export default function TripDepartureScreen({ route, navigation }) {
     async function fetchMapCoordinatesEndpoint() {
       if (!rideOfferId) return;
       try {
-        const res = await fetch(`${API_URL}/api/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
+        const res = await fetch(`${API_URL}/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
         const data = await res.json();
         if (data.success && data.coordinates && isMounted) {
           const coords = data.coordinates;
@@ -316,7 +316,7 @@ export default function TripDepartureScreen({ route, navigation }) {
 
     async function streamLiveTripMetrics() {
       try {
-        const statusRes = await fetch(`${API_URL}/api/passenger-livetracking/status/${userId}`);
+        const statusRes = await fetch(`${API_URL}/passenger-livetracking/status/${userId}`);
         if (!statusRes.ok) throw new Error("Status polling error.");
         const statusData = await statusRes.json();
 
@@ -325,7 +325,7 @@ export default function TripDepartureScreen({ route, navigation }) {
           const activeOfferId = statusData.matched_ride_offer_id || rideOfferId;
 
           if (activeOfferId) {
-            const trackRes = await fetch(`${API_URL}/api/rides/passenger-track/${activeOfferId}/user/${userId}`);
+            const trackRes = await fetch(`${API_URL}/rides/passenger-track/${activeOfferId}/user/${userId}`);
             if (trackRes.ok) {
               const trackData = await trackRes.json();
               const rawPassengers = Array.isArray(trackData.passengers) ? trackData.passengers : [];
