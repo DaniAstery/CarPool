@@ -26,65 +26,82 @@ export default function CorridorDrawer({
   role: propRole,
   onNavigate,
 }) {
-  // 🔐 Pull user directly from AuthContext (ignoring prop userId)
-  const { user, logoutSession } = useAuth();
+  // 🔐 Pull user & updateUser directly from AuthContext
+  const { user, updateUser, logoutSession } = useAuth();
 
   const activeUserId = user?.id || user?.userId;
   const activeRole = propRole || user?.role || "rider";
   const isDriver = activeRole === "driver";
 
   const [profileData, setProfileData] = useState(null);
-  const [activeSubView, setActiveSubView] = useState(null); // 'history', 'rewards', 'wallet', 'help', null
+  const [activeSubView, setActiveSubView] = useState(null);
   const [tripHistory, setTripHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
 
   // Wallet deposit states
   const [depositAmount, setDepositAmount] = useState("");
-  const [selectedGateway, setSelectedGateway] = useState("telebirr"); // 'telebirr' or 'cbe'
-  const [depositStep, setDepositStep] = useState("input"); // 'input' or 'instructions'
+  const [selectedGateway, setSelectedGateway] = useState("telebirr");
+  const [depositStep, setDepositStep] = useState("input");
   const [generatedOrder, setGeneratedOrder] = useState(null);
   const [transactionRefCode, setTransactionRefCode] = useState("");
   const [isSubmittingDeposit, setIsSubmittingDeposit] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
 
-  // Fetch live profile details strictly using AuthContext user ID
+ // Fetch live profile details on drawer open & sync with AuthContext
   useEffect(() => {
-    console.log(`[Drawer Debug] Opening Drawer - AuthContext User ID:`, activeUserId, "Session User Object:", user);
-
     if (visible && activeUserId) {
       setAvatarError(false);
 
       fetch(`${API_URL_PASSENGER}/users/profile/${activeUserId}`)
         .then((res) => res.json())
         .then((data) => {
-          console.log("[Drawer Debug] Received profile payload from backend:", data);
-
+          console.log("[Drawer Debug] API returned profile payload:", data);
           const profile = Array.isArray(data) ? data[0] : data;
 
           if (profile && !profile.error) {
             setProfileData(profile);
             setWalletBalance(parseFloat(profile.wallet_balance || profile.balance || 0));
+
+            // Sync fetched full_name into AuthContext session
+            if (updateUser && profile.full_name) {
+              updateUser({
+                full_name: profile.full_name,
+                profile_photo_url: profile.profile_photo_url,
+                wallet_balance: profile.wallet_balance,
+              });
+            }
+          } else {
+            console.log("[Drawer Debug] Profile API returned error object:", profile?.error);
           }
         })
         .catch((err) => console.log("[Drawer Profile Fetch Error]:", err));
-    } else {
-      setActiveSubView(null);
-      setDepositAmount("");
-      setDepositStep("input");
-      setGeneratedOrder(null);
-      setTransactionRefCode("");
     }
   }, [visible, activeUserId]);
+  // Profile data extraction prioritizes backend database results first
+  const rawName =
+    profileData?.full_name ||
+    profileData?.name ||
+    user?.full_name ||
+    user?.name;
 
-  // Fetch trip history when requested
-  // Fetch trip history when requested
+  const displayName =
+    rawName && rawName.trim().length > 0
+      ? rawName.trim()
+      : profileData?.phone_number
+      ? `User (${profileData.phone_number})`
+      : isDriver
+      ? "Corridor Driver"
+      : "Corridor Passenger";
+
+
+  // Fetch trip history for both drivers and riders
   const handleOpenHistory = async () => {
     if (!activeUserId) return;
 
     setActiveSubView("history");
     setLoadingHistory(true);
-    setTripHistory([]); // Clear previous trips while loading new data
+    setTripHistory([]);
 
     try {
       const res = await fetch(
@@ -178,26 +195,19 @@ export default function CorridorDrawer({
     }
   };
 
-  // Profile data extraction with fallbacks
-  const displayName =
-    profileData?.full_name ||
-    profileData?.name ||
-    user?.full_name ||
-    user?.name ||
-    (profileData?.phone_number ? `User (${profileData.phone_number})` : "Corridor Member");
-
   const photoUrl =
     profileData?.profile_photo_url ||
     profileData?.profile_picture ||
     user?.profile_photo_url;
 
-  const userInitials = displayName
-    .split(" ")
-    .filter(Boolean)
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2) || "C";
+  const userInitials =
+    displayName
+      .split(" ")
+      .filter(Boolean)
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2) || (isDriver ? "CD" : "CP");
 
   const passengerOptions = [
     { title: "1. Past Ride History", subtitle: "Last 5 completed trips", action: handleOpenHistory },
@@ -225,7 +235,7 @@ export default function CorridorDrawer({
               
               {/* 👤 USER PROFILE HEADER */}
               <View style={[styles.profileHeader, isDriver ? styles.darkBorder : styles.lightBorder]}>
-                {photoUrl && !avatarError ? (
+                {photoUrl && !avatarError && !photoUrl.includes("placehold.co") ? (
                   <Image
                     source={{ uri: photoUrl }}
                     style={styles.avatar}
@@ -233,7 +243,7 @@ export default function CorridorDrawer({
                     onError={() => setAvatarError(true)}
                   />
                 ) : (
-                  <View style={styles.avatarFallback}>
+                  <View style={[styles.avatarFallback, isDriver && { backgroundColor: "#0F172A" }]}>
                     <Text style={styles.avatarInitials}>{userInitials}</Text>
                   </View>
                 )}
@@ -303,86 +313,87 @@ export default function CorridorDrawer({
                     <Text style={styles.backText}>Back to Menu</Text>
                   </TouchableOpacity>
 
-                 {/* 📜 TRIP HISTORY VIEW */}
-                      {activeSubView === "history" && (
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
-                            {isDriver ? "Recent Driver Trips" : "Recent Ride History"}
-                          </Text>
+                  {/* 📜 TRIP HISTORY VIEW */}
+                  {activeSubView === "history" && (
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
+                        {isDriver ? "Recent Driver Runs" : "Recent Ride History"}
+                      </Text>
 
-                          {loadingHistory ? (
-                            <ActivityIndicator size="small" color="#059669" style={{ marginTop: 24 }} />
-                          ) : tripHistory.length === 0 ? (
-                            <Text style={styles.emptyText}>No completed trips found yet.</Text>
-                          ) : (
-                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
-                              {tripHistory.map((trip, i) => (
-                                <View
-                                  key={`trip-${trip.id || i}`}
-                                  style={[styles.tripCard, isDriver ? styles.darkCard : styles.lightCard]}
-                                >
-                                  {/* 📍 ROUTE HUBS (Pickup ➔ Dropoff) */}
-                                  <View style={styles.tripRouteRow}>
-                                    <Ionicons name="location-sharp" size={14} color="#059669" />
-                                    <Text style={[styles.tripHubText, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
-                                      {trip.pickup_name || "Pickup Hub"}
-                                    </Text>
-                                    <Ionicons name="arrow-forward" size={12} color="#94A3B8" style={{ marginHorizontal: 4 }} />
-                                    <Text style={[styles.tripHubText, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
-                                      {trip.dropoff_name || "Dropoff Hub"}
+                      {loadingHistory ? (
+                        <ActivityIndicator size="small" color="#059669" style={{ marginTop: 24 }} />
+                      ) : tripHistory.length === 0 ? (
+                        <Text style={styles.emptyText}>No completed trips found yet.</Text>
+                      ) : (
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+                          {tripHistory.map((trip, i) => (
+                            <View
+                              key={`trip-${trip.id || i}`}
+                              style={[styles.tripCard, isDriver ? styles.darkCard : styles.lightCard]}
+                            >
+                              {/* 📍 ROUTE HUBS (Pickup ➔ Dropoff) */}
+                              <View style={styles.tripRouteRow}>
+                                <Ionicons name="location-sharp" size={14} color="#059669" />
+                                <Text style={[styles.tripHubText, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
+                                  {trip.pickup_name || "Pickup Hub"}
+                                </Text>
+                                <Ionicons name="arrow-forward" size={12} color="#94A3B8" style={{ marginHorizontal: 4 }} />
+                                <Text style={[styles.tripHubText, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
+                                  {trip.dropoff_name || "Dropoff Hub"}
+                                </Text>
+                              </View>
+
+                              {/* 👤 DRIVER OR PASSENGER DETAILS */}
+                              <View style={styles.tripMetaRow}>
+                                {isDriver ? (
+                                  <View style={styles.driverMetaBadge}>
+                                    <Ionicons name="people-outline" size={13} color="#64748B" />
+                                    <Text style={styles.tripMetaText}>
+                                      {trip.passenger_count || 1} Passengers Pool
                                     </Text>
                                   </View>
-
-                                  {/* 👤 DRIVER OR PASSENGER DETAILS */}
-                                  <View style={styles.tripMetaRow}>
-                                    {isDriver ? (
-                                      <View style={styles.driverMetaBadge}>
-                                        <Ionicons name="people-outline" size={13} color="#64748B" />
-                                        <Text style={styles.tripMetaText}>
-                                          {trip.passenger_count || 1} Passengers Pool
-                                        </Text>
-                                      </View>
-                                    ) : (
-                                      <View style={styles.driverMetaBadge}>
-                                        <Image
-                                          source={{
-                                            uri: trip.driver_photo && !trip.driver_photo.includes("placehold.co")
-                                              ? trip.driver_photo
-                                              : "https://placehold.co/100",
-                                          }}
-                                          style={styles.tripDriverAvatar}
-                                        />
-                                        <Text style={styles.tripMetaText} numberOfLines={1}>
-                                          Driver: {trip.driver_name || "Assigned Driver"}
-                                        </Text>
-                                      </View>
-                                    )}
-
-                                    <Text style={styles.tripStatusTag}>• Completed</Text>
+                                ) : (
+                                  <View style={styles.driverMetaBadge}>
+                                    <Image
+                                      source={{
+                                        uri:
+                                          trip.driver_photo && !trip.driver_photo.includes("placehold.co")
+                                            ? trip.driver_photo
+                                            : "https://placehold.co/100",
+                                      }}
+                                      style={styles.tripDriverAvatar}
+                                    />
+                                    <Text style={styles.tripMetaText} numberOfLines={1}>
+                                      Driver: {trip.driver_name || "Assigned Driver"}
+                                    </Text>
                                   </View>
+                                )}
 
-            {/* 💰 PRICE AND DATE ROW */}
-            <View style={styles.tripFooterRow}>
-              <Text style={styles.tripDateText}>
-                {trip.created_at
-                  ? new Date(trip.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "Recent"}
-              </Text>
-              <Text style={styles.tripPriceText}>
-                ETB {parseFloat(trip.price || 0).toFixed(2)}
-              </Text>
-            </View>
-          </View>
-        ))}
-      </ScrollView>
-    )}
-  </View>
-)}
+                                <Text style={styles.tripStatusTag}>• Completed</Text>
+                              </View>
+
+                              {/* 💰 PRICE AND DATE ROW */}
+                              <View style={styles.tripFooterRow}>
+                                <Text style={styles.tripDateText}>
+                                  {trip.created_at
+                                    ? new Date(trip.created_at).toLocaleDateString("en-US", {
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                      })
+                                    : "Recent"}
+                                </Text>
+                                <Text style={styles.tripPriceText}>
+                                  ETB {parseFloat(trip.price || 0).toFixed(2)}
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
+                        </ScrollView>
+                      )}
+                    </View>
+                  )}
 
                   {/* 💳 WALLET & DEPOSIT VIEW */}
                   {activeSubView === "wallet" && (
@@ -679,14 +690,6 @@ const styles = StyleSheet.create({
   backText: { fontSize: 12, fontWeight: "700", color: "#059669", marginLeft: 6 },
   subViewTitle: { fontSize: 14, fontWeight: "800", marginBottom: 12 },
 
-  tripCard: { padding: 10, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
-  darkCard: { backgroundColor: "#0F172A", borderColor: "#334155" },
-  lightCard: { backgroundColor: "#F8FAFC", borderColor: "#E2E8F0" },
-  tripCorridor: { fontSize: 12, fontWeight: "700" },
-  tripRowDetails: { flexDirection: "row", justifyContent: "space-between", marginTop: 4 },
-  tripPrice: { fontSize: 12, fontWeight: "800", color: "#059669" },
-  tripDate: { fontSize: 10, color: "#94A3B8" },
-
   walletBalanceCard: { padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
   walletBalanceLabel: { fontSize: 12, fontWeight: "600", color: "#64748B", marginLeft: 6 },
   walletBalanceAmount: { fontSize: 22, fontWeight: "800", marginTop: 6 },
@@ -736,7 +739,7 @@ const styles = StyleSheet.create({
   depositButton: { backgroundColor: "#059669", justifyContent: "center", paddingHorizontal: 14, borderRadius: 8 },
   depositButtonFull: {
     backgroundColor: "#059669",
-    justifyContent: "center",
+    justifycontent: "center",
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: "center",
@@ -774,6 +777,8 @@ const styles = StyleSheet.create({
   darkTextSub: { color: "#94A3B8" },
   lightText: { color: "#111111" },
   lightTextSub: { color: "#64748B" },
+
+  // Trip History Card Styles
   tripCard: {
     padding: 12,
     borderRadius: 12,
@@ -840,5 +845,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "800",
     color: "#059669",
-  }
+  },
 });
