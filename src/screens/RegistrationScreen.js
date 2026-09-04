@@ -9,9 +9,12 @@ import {
   ActivityIndicator,
   Linking,
   AppState,
+  Modal,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useAuth } from "../AuthContext";
 import RoleSelectionModal from "./RoleSelectionModal";
 
@@ -31,6 +34,12 @@ export default function RegistrationScreen() {
   const [isRoleSelectionVisible, setIsRoleSelectionVisible] = useState(false);
   const [availableAccounts, setAvailableAccounts] = useState([]);
 
+  // Profile Photo Setup Modal states
+  const [isPhotoModalVisible, setIsPhotoModalVisible] = useState(false);
+  const [pendingUser, setPendingUser] = useState(null); // { id, role }
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
   const sessionIdRef = useRef(null);
   const authModeRef = useRef(authMode);
   const waitingRef = useRef(waitingForTelegram);
@@ -43,31 +52,44 @@ export default function RegistrationScreen() {
     waitingRef.current = waitingForTelegram;
   }, [waitingForTelegram]);
 
-  // Core function to check auth status against backend with embedded HTML debugging
+  // Helper: Route to Photo Upload if missing, otherwise proceed to login
+  const handlePostAuthRouting = (userObj) => {
+    // Prompt photo upload if registering or if profile_photo_url is missing
+    const hasPhoto = userObj.profile_photo_url && !userObj.profile_photo_url.includes("placehold.co");
+    
+    if (authModeRef.current === "register" || !hasPhoto) {
+      setPendingUser(userObj);
+      setIsPhotoModalVisible(true);
+    } else {
+      finalizeLogin(userObj);
+    }
+  };
+
+  const finalizeLogin = async (userObj) => {
+    console.log(`[Auth Success] Logging in user ID: ${userObj.id}, Role: ${userObj.role}`);
+    await loginSession({
+      id: userObj.id,
+      role: userObj.role,
+      phone_verified: true,
+      profile_photo_url: userObj.profile_photo_url || null,
+    });
+  };
+
+  // Check auth status against backend
   const checkAuthStatus = async () => {
     const currentSessionId = sessionIdRef.current;
-    console.log(`[Frontend Debug] checkAuthStatus triggered. waitingForTelegram: ${waitingRef.current}, currentSessionId: ${currentSessionId}`);
-
-    if (!waitingRef.current || !currentSessionId) {
-      console.log(`[Frontend Debug] Aborting poll: Missing state or sessionId.`);
-      return;
-    }
+    if (!waitingRef.current || !currentSessionId) return;
 
     try {
       const endpoint = authModeRef.current === "register" 
         ? `${API_URL_SignTG}/auth/check-status/${currentSessionId}`
         : `${API_URL_SignTG}/auth/check-signin/${currentSessionId}`;
 
-      console.log(`[Auth Polling] Checking endpoint URL: ${endpoint}`);
       const res = await fetch(endpoint);
       const responseText = await res.text();
-      
-      console.log(`[Auth Polling] Status: ${res.status}`);
-      console.log(`[Auth Polling] Raw Response:`, responseText);
 
-      // Guard against HTML page returns before JSON.parse crashes
       if (responseText.trim().startsWith("<")) {
-        console.error("[Auth Error] Server returned HTML instead of JSON! Check if your backend route or API_URL is correct.");
+        console.error("[Auth Error] Server returned HTML instead of JSON.");
         return;
       }
 
@@ -75,25 +97,21 @@ export default function RegistrationScreen() {
         const data = JSON.parse(responseText);
         
         if (data.success || data.phone_verified) {
+          setWaitingForTelegram(false);
+
           if (data.requiresRoleSelection && data.accounts) {
-            setWaitingForTelegram(false);
-            console.log("[Auth Success] Multiple roles detected. Prompting user selection.");
-            
             setAvailableAccounts(data.accounts);
             setIsRoleSelectionVisible(true);
             return; 
           }
 
-          setWaitingForTelegram(false);
-
           const userRole = data.role || role;
           const userId = data.userId || data.id || currentSessionId;
 
-          console.log(`[Auth Success] Logging in user ID: ${userId}, Role: ${userRole}`);
-          await loginSession({
+          handlePostAuthRouting({
             id: userId,
             role: userRole,
-            phone_verified: true,
+            profile_photo_url: data.profile_photo_url,
           });
         }
       }
@@ -106,7 +124,6 @@ export default function RegistrationScreen() {
   useEffect(() => {
     let interval;
     if (waitingForTelegram) {
-      console.log("[Auth Polling] Interval active...");
       interval = setInterval(checkAuthStatus, 3000);
     }
     return () => {
@@ -118,7 +135,6 @@ export default function RegistrationScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
-        console.log("[App State] Returned to app. Checking auth status...");
         checkAuthStatus();
       }
     });
@@ -141,8 +157,6 @@ export default function RegistrationScreen() {
 
       if (authMode === "register") {
         const targetUrl = `${API_URL_SignTG}/auth/register-init`;
-        console.log(`[Network Debug] POSTing to: ${targetUrl}`);
-        
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -150,11 +164,8 @@ export default function RegistrationScreen() {
         });
         
         const responseText = await res.text();
-        console.log(`[Register Init] Status: ${res.status}`);
-        console.log(`[Register Init] Raw Body:`, responseText);
-
         if (responseText.trim().startsWith("<")) {
-          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}. Verify your backend routes or API_URL.`);
+          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}.`);
         }
 
         const data = JSON.parse(responseText);
@@ -164,19 +175,14 @@ export default function RegistrationScreen() {
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
         const targetUrl = `${API_URL_SignTG}/auth/signin-init`;
-        console.log(`[Network Debug] POSTing to: ${targetUrl}`);
-
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
         });
 
         const responseText = await res.text();
-        console.log(`[Signin Init] Status: ${res.status}`);
-        console.log(`[Signin Init] Raw Body:`, responseText);
-
         if (responseText.trim().startsWith("<")) {
-          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}. Verify your backend routes or API_URL.`);
+          throw new Error(`Server returned HTML instead of JSON at ${targetUrl}.`);
         }
 
         const data = JSON.parse(responseText);
@@ -184,11 +190,9 @@ export default function RegistrationScreen() {
 
         sessionId = data.sessionId;
         deepLink = `${TELEGRAM_BOT_URL}?start=login_${sessionId}`;
-        console.log(`[Frontend Debug] Successfully received sign-in sessionId: ${sessionId}`);
       }
 
       sessionIdRef.current = sessionId;
-      console.log(`[Frontend Debug] Stored sessionId in ref: ${sessionIdRef.current}`);
 
       const supported = await Linking.canOpenURL(deepLink);
       if (supported) {
@@ -198,7 +202,6 @@ export default function RegistrationScreen() {
         Alert.alert("Error", "Could not open Telegram. Ensure Telegram is installed.");
       }
     } catch (err) {
-      console.error("[Auth Action Error]:", err.message);
       Alert.alert("Authentication Error", err.message);
     } finally {
       setIsSubmitting(false);
@@ -210,15 +213,66 @@ export default function RegistrationScreen() {
     sessionIdRef.current = null;
   };
 
-  const handleSelectRole = async (selectedAccount) => {
+  const handleSelectRole = (selectedAccount) => {
     setIsRoleSelectionVisible(false);
-    console.log(`[Role Selected] Logging in as ${selectedAccount.role} (ID: ${selectedAccount.id})`);
-    
-    await loginSession({
+    handlePostAuthRouting({
       id: selectedAccount.id,
       role: selectedAccount.role,
-      phone_verified: true,
+      profile_photo_url: selectedAccount.profile_photo_url,
     });
+  };
+
+  // 📷 PHOTO PICKER & UPLOAD LOGIC
+  const handlePickPhoto = async (useCamera = false) => {
+    const permissionResult = useCamera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permissionResult.granted) {
+      Alert.alert("Permission Required", `Camera/Gallery access is needed to upload your photo.`);
+      return;
+    }
+
+    const pickerResult = useCamera
+      ? await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.7 })
+      : await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.7 });
+
+    if (!pickerResult.canceled && pickerResult.assets[0]) {
+      setSelectedImage(pickerResult.assets[0]);
+    }
+  };
+
+  const handleUploadPhoto = async () => {
+    if (!selectedImage || !pendingUser) return;
+
+    setIsUploadingPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append("photo", {
+        uri: selectedImage.uri,
+        type: "image/jpeg",
+        name: `user_${pendingUser.id}_avatar.jpg`,
+      });
+      formData.append("userId", pendingUser.id);
+
+      const res = await fetch(`${API_URL_SignTG}/users/upload-photo`, {
+        method: "POST",
+        body: formData,
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const data = await res.json();
+      if (res.ok && data.photoUrl) {
+        setIsPhotoModalVisible(false);
+        finalizeLogin({ ...pendingUser, profile_photo_url: data.photoUrl });
+      } else {
+        throw new Error(data.error || "Failed to upload profile photo.");
+      }
+    } catch (err) {
+      Alert.alert("Upload Failed", err.message || "Could not upload image. Please try again.");
+    } finally {
+      setIsUploadingPhoto(false);
+    }
   };
 
   return (
@@ -319,12 +373,76 @@ export default function RegistrationScreen() {
         )}
       </View>
 
-      {/* NATIVE MULTI-ROLE SELECTION MODAL */}
+      {/* MULTI-ROLE SELECTION MODAL */}
       <RoleSelectionModal
         visible={isRoleSelectionVisible}
         accounts={availableAccounts}
         onSelectRole={handleSelectRole}
       />
+
+      {/* 🖼️ PROFILE PHOTO CAPTURE MODAL */}
+      <Modal visible={isPhotoModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.photoModalOverlay}>
+          <View style={styles.photoModalCard}>
+            <Text style={styles.photoModalTitle}>Profile Identification</Text>
+            <Text style={styles.photoModalSub}>
+              {pendingUser?.role === "driver"
+                ? "Drivers are required to have a clear face photo for passenger safety at pickup hubs."
+                : "Add a profile photo so your driver can identify you easily at pickup points."}
+            </Text>
+
+            {/* PREVIEW CONTAINER */}
+            <View style={styles.avatarPreviewBox}>
+              {selectedImage ? (
+                <Image source={{ uri: selectedImage.uri }} style={styles.avatarPreviewImage} />
+              ) : (
+                <Ionicons name="person" size={54} color="#94A3B8" />
+              )}
+            </View>
+
+            {/* PICKER BUTTONS */}
+            <View style={styles.photoPickerRow}>
+              <TouchableOpacity style={styles.pickerBtn} onPress={() => handlePickPhoto(true)}>
+                <Ionicons name="camera" size={18} color="#059669" />
+                <Text style={styles.pickerBtnText}>Take Photo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.pickerBtn} onPress={() => handlePickPhoto(false)}>
+                <Ionicons name="images" size={18} color="#059669" />
+                <Text style={styles.pickerBtnText}>Choose Gallery</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* ACTION BUTTONS */}
+            {selectedImage ? (
+              <TouchableOpacity
+                style={styles.uploadConfirmBtn}
+                onPress={handleUploadPhoto}
+                disabled={isUploadingPhoto}
+              >
+                {isUploadingPhoto ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.uploadConfirmText}>Save & Continue</Text>
+                )}
+              </TouchableOpacity>
+            ) : (
+              pendingUser?.role === "rider" && (
+                <TouchableOpacity
+                  style={styles.skipBtn}
+                  onPress={() => {
+                    setIsPhotoModalVisible(false);
+                    finalizeLogin(pendingUser);
+                  }}
+                >
+                  <Text style={styles.skipBtnText}>Skip for Now</Text>
+                </TouchableOpacity>
+              )
+            )}
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -362,4 +480,19 @@ const styles = StyleSheet.create({
 
   cancelButton: { marginTop: 16, paddingVertical: 8, paddingHorizontal: 16, backgroundColor: "#F3F4F6", borderRadius: 8 },
   cancelButtonText: { fontSize: 12, fontWeight: "700", color: "#4B5563" },
+
+  // PHOTO MODAL STYLES
+  photoModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", paddingHorizontal: 20 },
+  photoModalCard: { width: "100%", backgroundColor: "#FFFFFF", borderRadius: 20, padding: 22, alignItems: "center" },
+  photoModalTitle: { fontSize: 18, fontWeight: "800", color: "#111827", marginBottom: 6 },
+  photoModalSub: { fontSize: 12, color: "#64748B", textAlign: "center", marginBottom: 16, lineHeight: 18 },
+  avatarPreviewBox: { width: 110, height: 110, borderRadius: 55, backgroundColor: "#F1F5F9", justifyContent: "center", alignItems: "center", borderWidth: 2, borderColor: "#CBD5E1", overflow: "hidden", marginBottom: 16 },
+  avatarPreviewImage: { width: "100%", height: "100%" },
+  photoPickerRow: { flexDirection: "row", marginBottom: 16 },
+  pickerBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "rgba(5, 150, 105, 0.08)", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: "rgba(5, 150, 105, 0.2)", marginHorizontal: 4 },
+  pickerBtnText: { fontSize: 12, fontWeight: "700", color: "#059669", marginLeft: 6 },
+  uploadConfirmBtn: { backgroundColor: "#059669", width: "100%", paddingVertical: 14, borderRadius: 12, alignItems: "center" },
+  uploadConfirmText: { color: "#FFFFFF", fontWeight: "800", fontSize: 14 },
+  skipBtn: { marginTop: 12, paddingVertical: 8 },
+  skipBtnText: { fontSize: 12, fontWeight: "700", color: "#94A3B8" },
 });

@@ -12,24 +12,33 @@ import {
   Image,
   TextInput,
   Alert,
-  Clipboard,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
 
 const { width, height } = Dimensions.get("window");
-const API_URL_PASSENGER = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
+const API_URL_PASSENGER =
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
 
+export default function CorridorDrawer({
+  visible,
+  onClose,
+  role: propRole,
+  onNavigate,
+}) {
+  // 🔐 Pull user directly from AuthContext (ignoring prop userId)
+  const { user, logoutSession } = useAuth();
 
-export default function CorridorDrawer({ visible, onClose, userId, role, onNavigate }) {
-  const { logoutSession } = useAuth();
-  const isDriver = role === "driver";
+  const activeUserId = user?.id || user?.userId;
+  const activeRole = propRole || user?.role || "rider";
+  const isDriver = activeRole === "driver";
 
   const [profileData, setProfileData] = useState(null);
   const [activeSubView, setActiveSubView] = useState(null); // 'history', 'rewards', 'wallet', 'help', null
   const [tripHistory, setTripHistory] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  
+  const [avatarError, setAvatarError] = useState(false);
+
   // Wallet deposit states
   const [depositAmount, setDepositAmount] = useState("");
   const [selectedGateway, setSelectedGateway] = useState("telebirr"); // 'telebirr' or 'cbe'
@@ -39,18 +48,26 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
   const [isSubmittingDeposit, setIsSubmittingDeposit] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
 
-  // Fetch live profile details on open
+  // Fetch live profile details strictly using AuthContext user ID
   useEffect(() => {
-    if (visible && userId) {
-      fetch(`${API_URL_PASSENGER}/users/profile/${userId}`)
+    console.log(`[Drawer Debug] Opening Drawer - AuthContext User ID:`, activeUserId, "Session User Object:", user);
+
+    if (visible && activeUserId) {
+      setAvatarError(false);
+
+      fetch(`${API_URL_PASSENGER}/users/profile/${activeUserId}`)
         .then((res) => res.json())
         .then((data) => {
-          if (!data.error) {
-            setProfileData(data);
-            setWalletBalance(data.wallet_balance || data.balance || 0);
+          console.log("[Drawer Debug] Received profile payload from backend:", data);
+
+          const profile = Array.isArray(data) ? data[0] : data;
+
+          if (profile && !profile.error) {
+            setProfileData(profile);
+            setWalletBalance(parseFloat(profile.wallet_balance || profile.balance || 0));
           }
         })
-        .catch((err) => console.log("Profile fetch error:", err));
+        .catch((err) => console.log("[Drawer Profile Fetch Error]:", err));
     } else {
       setActiveSubView(null);
       setDepositAmount("");
@@ -58,14 +75,16 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
       setGeneratedOrder(null);
       setTransactionRefCode("");
     }
-  }, [visible, userId]);
+  }, [visible, activeUserId]);
 
   // Fetch trip history when requested
   const handleOpenHistory = async () => {
     setActiveSubView("history");
     setLoadingHistory(true);
     try {
-      const res = await fetch(`${API_URL_PASSENGER}/trips/history/${userId}/${role}`);
+      const res = await fetch(
+        `${API_URL_PASSENGER}/trips/history/${activeUserId}/${activeRole}`
+      );
       const data = await res.json();
       if (Array.isArray(data)) setTripHistory(data);
     } catch (err) {
@@ -88,8 +107,11 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
       orderId: orderRef,
       amount: amountNum,
       gateway: selectedGateway,
-      accountNumber: selectedGateway === "telebirr" ? "0911000000 (Corridor Hub)" : "1000284920192 (CBE)",
-      accountName: "Corridor Transport Dispatch"
+      accountNumber:
+        selectedGateway === "telebirr"
+          ? "0911000000 (Corridor Hub)"
+          : "1000284920192 (CBE)",
+      accountName: "Corridor Transport Dispatch",
     });
     setDepositStep("instructions");
   };
@@ -97,7 +119,10 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
   // Step 2: Submit Transaction Reference ID for verification
   const handleSubmitDepositVerification = async () => {
     if (!transactionRefCode.trim()) {
-      Alert.alert("Reference Required", "Please enter your Telebirr or CBE transaction reference code / SMS ID.");
+      Alert.alert(
+        "Reference Required",
+        "Please enter your Telebirr or CBE transaction reference code / SMS ID."
+      );
       return;
     }
 
@@ -107,7 +132,7 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: userId,
+          user_id: activeUserId,
           amount: generatedOrder.amount,
           gateway: generatedOrder.gateway,
           order_id: generatedOrder.orderId,
@@ -121,34 +146,46 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
           "Deposit Submitted",
           `Order ${generatedOrder.orderId} submitted successfully! Balance will update once verified.`
         );
-        setActiveSubView(null);
-        setDepositStep("input");
-        setDepositAmount("");
-        setTransactionRefCode("");
       } else {
-        // Fallback simulation for testing
         Alert.alert(
           "Deposit Submitted",
           `Order ${generatedOrder.orderId} submitted successfully. Verification pending.`
         );
-        setActiveSubView(null);
-        setDepositStep("input");
-        setDepositAmount("");
-        setTransactionRefCode("");
       }
     } catch (err) {
       Alert.alert(
         "Deposit Submitted",
         `Order ${generatedOrder.orderId} recorded. Balance will reflect shortly.`
       );
+    } finally {
       setActiveSubView(null);
       setDepositStep("input");
       setDepositAmount("");
       setTransactionRefCode("");
-    } finally {
       setIsSubmittingDeposit(false);
     }
   };
+
+  // Profile data extraction with fallbacks
+  const displayName =
+    profileData?.full_name ||
+    profileData?.name ||
+    user?.full_name ||
+    user?.name ||
+    (profileData?.phone_number ? `User (${profileData.phone_number})` : "Corridor Member");
+
+  const photoUrl =
+    profileData?.profile_photo_url ||
+    profileData?.profile_picture ||
+    user?.profile_photo_url;
+
+  const userInitials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2) || "C";
 
   const passengerOptions = [
     { title: "1. Past Ride History", subtitle: "Last 5 completed trips", action: handleOpenHistory },
@@ -170,24 +207,37 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
   return (
     <Modal visible={visible} transparent={true} animationType="fade" onRequestClose={onClose}>
       <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.modalOverlay}>                                                                    
-          <TouchableWithoutFeedback>                                                                                    
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback>
             <View style={[styles.drawerContainer, isDriver ? styles.darkDrawer : styles.lightDrawer]}>
               
               {/* 👤 USER PROFILE HEADER */}
               <View style={[styles.profileHeader, isDriver ? styles.darkBorder : styles.lightBorder]}>
-                <Image
-                  source={{ uri: profileData?.profile_picture || "https://placehold.co/150" }}
-                  style={styles.avatar}
-                />
+                {photoUrl && !avatarError ? (
+                  <Image
+                    source={{ uri: photoUrl }}
+                    style={styles.avatar}
+                    resizeMode="cover"
+                    onError={() => setAvatarError(true)}
+                  />
+                ) : (
+                  <View style={styles.avatarFallback}>
+                    <Text style={styles.avatarInitials}>{userInitials}</Text>
+                  </View>
+                )}
+
                 <View style={styles.profileInfo}>
                   <Text style={[styles.profileName, isDriver ? styles.darkText : styles.lightText]}>
-                    {profileData?.full_name || "Corridor User"}
+                    {displayName}
                   </Text>
                   <Text style={styles.profileSub}>
-                    ID: #{userId} • <Text style={{ textTransform: "capitalize", color: "#059669", fontWeight: "700" }}>{role}</Text>
+                    ID: #{activeUserId || "N/A"} •{" "}
+                    <Text style={{ textTransform: "capitalize", color: "#059669", fontWeight: "700" }}>
+                      {activeRole}
+                    </Text>
                   </Text>
                 </View>
+
                 <TouchableOpacity onPress={onClose} style={styles.closeButton}>
                   <Ionicons name="close" size={20} color={isDriver ? "#FFFFFF" : "#111111"} />
                 </TouchableOpacity>
@@ -196,8 +246,10 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
               {/* 🗂️ DYNAMIC CONTENT AREA */}
               {activeSubView === null ? (
                 <View style={styles.optionsList}>
-                  <Text style={[styles.sectionTitle, isDriver ? styles.darkTextSub : styles.lightTextSub]}>MENU NAVIGATION</Text>
-                  
+                  <Text style={[styles.sectionTitle, isDriver ? styles.darkTextSub : styles.lightTextSub]}>
+                    MENU NAVIGATION
+                  </Text>
+
                   {options.map((item, index) => (
                     <TouchableOpacity
                       key={`drawer-option-${index}`}
@@ -215,8 +267,8 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                   ))}
 
                   {/* 🚪 LOGOUT BUTTON */}
-                  <TouchableOpacity 
-                    style={styles.logoutRow} 
+                  <TouchableOpacity
+                    style={styles.logoutRow}
                     onPress={() => {
                       onClose();
                       logoutSession();
@@ -228,7 +280,13 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                 </View>
               ) : (
                 <View style={styles.subViewContainer}>
-                  <TouchableOpacity style={styles.backRow} onPress={() => { setActiveSubView(null); setDepositStep("input"); }}>
+                  <TouchableOpacity
+                    style={styles.backRow}
+                    onPress={() => {
+                      setActiveSubView(null);
+                      setDepositStep("input");
+                    }}
+                  >
                     <Ionicons name="arrow-back" size={16} color="#059669" />
                     <Text style={styles.backText}>Back to Menu</Text>
                   </TouchableOpacity>
@@ -236,7 +294,9 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                   {/* 📜 TRIP HISTORY VIEW */}
                   {activeSubView === "history" && (
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>Recent Completed Trips</Text>
+                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
+                        Recent Completed Trips
+                      </Text>
                       {loadingHistory ? (
                         <ActivityIndicator size="small" color="#059669" style={{ marginTop: 20 }} />
                       ) : tripHistory.length === 0 ? (
@@ -244,13 +304,18 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                       ) : (
                         <ScrollView showsVerticalScrollIndicator={false}>
                           {tripHistory.map((trip, i) => (
-                            <View key={`trip-${i}`} style={[styles.tripCard, isDriver ? styles.darkCard : styles.lightCard]}>
+                            <View
+                              key={`trip-${i}`}
+                              style={[styles.tripCard, isDriver ? styles.darkCard : styles.lightCard]}
+                            >
                               <Text style={[styles.tripCorridor, isDriver ? styles.darkText : styles.lightText]}>
                                 {trip.corridor || "Corridor Route"}
                               </Text>
                               <View style={styles.tripRowDetails}>
                                 <Text style={styles.tripPrice}>ETB {trip.price || "150"}</Text>
-                                <Text style={styles.tripDate}>{new Date(trip.created_at).toLocaleDateString()}</Text>
+                                <Text style={styles.tripDate}>
+                                  {new Date(trip.created_at).toLocaleDateString()}
+                                </Text>
                               </View>
                             </View>
                           ))}
@@ -262,8 +327,10 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                   {/* 💳 WALLET & DEPOSIT VIEW */}
                   {activeSubView === "wallet" && (
                     <ScrollView showsVerticalScrollIndicator={false}>
-                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>Corridor Wallet Deposit</Text>
-                      
+                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
+                        Corridor Wallet Deposit
+                      </Text>
+
                       <View style={[styles.walletBalanceCard, isDriver ? styles.darkCard : styles.lightCard]}>
                         <View style={{ flexDirection: "row", alignItems: "center" }}>
                           <MaterialCommunityIcons name="wallet-outline" size={24} color="#059669" />
@@ -276,25 +343,57 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
 
                       {depositStep === "input" ? (
                         <>
-                          <Text style={[styles.sectionTitle, { marginTop: 8 }, isDriver ? styles.darkTextSub : styles.lightTextSub]}>
+                          <Text
+                            style={[
+                              styles.sectionTitle,
+                              { marginTop: 8 },
+                              isDriver ? styles.darkTextSub : styles.lightTextSub,
+                            ]}
+                          >
                             SELECT PAYMENT METHOD
                           </Text>
                           <View style={styles.gatewayRow}>
                             <TouchableOpacity
-                              style={[styles.gatewayBtn, selectedGateway === "telebirr" && styles.gatewayBtnActive]}
+                              style={[
+                                styles.gatewayBtn,
+                                selectedGateway === "telebirr" && styles.gatewayBtnActive,
+                              ]}
                               onPress={() => setSelectedGateway("telebirr")}
                             >
-                              <Text style={[styles.gatewayText, selectedGateway === "telebirr" && styles.gatewayTextActive]}>Telebirr</Text>
+                              <Text
+                                style={[
+                                  styles.gatewayText,
+                                  selectedGateway === "telebirr" && styles.gatewayTextActive,
+                                ]}
+                              >
+                                Telebirr
+                              </Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={[styles.gatewayBtn, selectedGateway === "cbe" && styles.gatewayBtnActive]}
+                              style={[
+                                styles.gatewayBtn,
+                                selectedGateway === "cbe" && styles.gatewayBtnActive,
+                              ]}
                               onPress={() => setSelectedGateway("cbe")}
                             >
-                              <Text style={[styles.gatewayText, selectedGateway === "cbe" && styles.gatewayTextActive]}>CBE Birr</Text>
+                              <Text
+                                style={[
+                                  styles.gatewayText,
+                                  selectedGateway === "cbe" && styles.gatewayTextActive,
+                                ]}
+                              >
+                                CBE Birr
+                              </Text>
                             </TouchableOpacity>
                           </View>
 
-                          <Text style={[styles.sectionTitle, { marginTop: 8 }, isDriver ? styles.darkTextSub : styles.lightTextSub]}>
+                          <Text
+                            style={[
+                              styles.sectionTitle,
+                              { marginTop: 8 },
+                              isDriver ? styles.darkTextSub : styles.lightTextSub,
+                            ]}
+                          >
                             ENTER AMOUNT (ETB)
                           </Text>
 
@@ -312,7 +411,10 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
 
                           <View style={styles.depositInputContainer}>
                             <TextInput
-                              style={[styles.depositInput, isDriver ? styles.darkInputText : styles.lightInputText]}
+                              style={[
+                                styles.depositInput,
+                                isDriver ? styles.darkInputText : styles.lightInputText,
+                              ]}
                               placeholder="Custom amount (ETB)"
                               placeholderTextColor="#94A3B8"
                               keyboardType="numeric"
@@ -332,22 +434,39 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                           <View style={styles.orderBadgeBox}>
                             <Text style={styles.orderBadgeTitle}>Payment Order Reference</Text>
                             <Text style={styles.orderBadgeCode}>{generatedOrder?.orderId}</Text>
-                            <Text style={styles.orderBadgeAmount}>Amount: ETB {generatedOrder?.amount.toFixed(2)}</Text>
+                            <Text style={styles.orderBadgeAmount}>
+                              Amount: ETB {generatedOrder?.amount.toFixed(2)}
+                            </Text>
                           </View>
 
                           <View style={[styles.infoBox, { marginTop: 10 }]}>
                             <Text style={styles.infoBoxTitle}>📱 Transfer Instructions:</Text>
                             <Text style={styles.infoBoxText}>
-                              1. Open your {generatedOrder?.gateway === "telebirr" ? "Telebirr" : "CBE Birr"} app or dial USSD.{'\n'}
-                              2. Transfer <Text style={{fontWeight: "700"}}>ETB {generatedOrder?.amount.toFixed(2)}</Text> to:{"\n"}
-                              <Text style={{fontWeight: "700", color: "#059669"}}>{generatedOrder?.accountNumber}</Text>{'\n'}
-                              3. Put order reference <Text style={{fontWeight: "700"}}>{generatedOrder?.orderId}</Text> in the remark/reason field.{'\n'}
+                              1. Open your{" "}
+                              {generatedOrder?.gateway === "telebirr" ? "Telebirr" : "CBE Birr"} app or
+                              dial USSD.{"\n"}
+                              2. Transfer{" "}
+                              <Text style={{ fontWeight: "700" }}>
+                                ETB {generatedOrder?.amount.toFixed(2)}
+                              </Text>{" "}
+                              to:{"\n"}
+                              <Text style={{ fontWeight: "700", color: "#059669" }}>
+                                {generatedOrder?.accountNumber}
+                              </Text>
+                              {"\n"}
+                              3. Put order reference{" "}
+                              <Text style={{ fontWeight: "700" }}>{generatedOrder?.orderId}</Text> in the
+                              remark/reason field.{"\n"}
                               4. Paste your SMS Transaction ID below.
                             </Text>
                           </View>
 
                           <TextInput
-                            style={[styles.depositInput, { marginTop: 12, marginBottom: 8 }, isDriver ? styles.darkInputText : styles.lightInputText]}
+                            style={[
+                              styles.depositInput,
+                              { marginTop: 12, marginBottom: 8 },
+                              isDriver ? styles.darkInputText : styles.lightInputText,
+                            ]}
                             placeholder="Enter Transaction Ref / SMS ID (e.g., TXN928374)"
                             placeholderTextColor="#94A3B8"
                             value={transactionRefCode}
@@ -355,28 +474,36 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                           />
 
                           <TouchableOpacity
-                            style={[styles.depositButtonFull, isSubmittingDeposit && styles.buttonDisabled]}
+                            style={[
+                              styles.depositButtonFull,
+                              isSubmittingDeposit && styles.buttonDisabled,
+                            ]}
                             disabled={isSubmittingDeposit}
                             onPress={handleSubmitDepositVerification}
                           >
                             {isSubmittingDeposit ? (
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
-                              <Text style={styles.depositButtonText}>I Have Paid • Submit Verification</Text>
+                              <Text style={styles.depositButtonText}>
+                                I Have Paid • Submit Verification
+                              </Text>
                             )}
                           </TouchableOpacity>
 
-                          <TouchableOpacity 
+                          <TouchableOpacity
                             style={{ alignItems: "center", marginTop: 8 }}
                             onPress={() => setDepositStep("input")}
                           >
-                            <Text style={{ fontSize: 11, color: "#64748B" }}>Cancel & Edit Amount</Text>
+                            <Text style={{ fontSize: 11, color: "#64748B" }}>
+                              Cancel & Edit Amount
+                            </Text>
                           </TouchableOpacity>
                         </View>
                       )}
 
                       <Text style={styles.walletFooterNote}>
-                        🔒 No business license required. Deposits are verified manually or via automated order tracking.
+                        🔒 No business license required. Deposits are verified manually or via automated
+                        order tracking.
                       </Text>
                     </ScrollView>
                   )}
@@ -384,11 +511,15 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                   {/* 🎁 REWARDS & PROMO INFO */}
                   {activeSubView === "rewards" && (
                     <View>
-                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>Rewards & Promos</Text>
+                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
+                        Rewards & Promos
+                      </Text>
                       <View style={styles.infoBox}>
                         <Text style={styles.infoBoxTitle}>💡 How discounts work:</Text>
                         <Text style={styles.infoBoxText}>
-                          When your pooling core partner joins, your base rate discount is locked in automatically. You can also enter valid promo codes directly on the payment screen during checkout!
+                          When your pooling core partner joins, your base rate discount is locked in
+                          automatically. You can also enter valid promo codes directly on the payment screen
+                          during checkout!
                         </Text>
                       </View>
                     </View>
@@ -397,18 +528,20 @@ export default function CorridorDrawer({ visible, onClose, userId, role, onNavig
                   {/* 🛟 HELP & SUPPORT */}
                   {activeSubView === "help" && (
                     <View>
-                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>Help Center</Text>
+                      <Text style={[styles.subViewTitle, isDriver ? styles.darkText : styles.lightText]}>
+                        Help Center
+                      </Text>
                       <View style={styles.infoBox}>
                         <Text style={styles.infoBoxTitle}>📞 Corridor Support</Text>
                         <Text style={styles.infoBoxText}>
-                          Need immediate assistance with a ride or payout? Contact our Addis Ababa dispatch support team via Telegram @CorridorSupport or call +251 911 000 000.
+                          Need immediate assistance with a ride or payout? Contact our Addis Ababa dispatch
+                          support team via Telegram @CorridorSupport or call +251 911 000 000.
                         </Text>
                       </View>
                     </View>
                   )}
                 </View>
               )}
-
             </View>
           </TouchableWithoutFeedback>
         </View>
@@ -448,13 +581,28 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderBottomWidth: 1,
   },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: "#E2E8F0" },
+  avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: "#E2E8F0" },
+  avatarFallback: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarInitials: { color: "#FFFFFF", fontWeight: "800", fontSize: 16 },
   profileInfo: { flex: 1, marginLeft: 12 },
   profileName: { fontSize: 14, fontWeight: "700" },
   profileSub: { fontSize: 11, color: "#64748B", marginTop: 2 },
   closeButton: { padding: 4 },
 
-  sectionTitle: { fontSize: 10, fontWeight: "800", letterSpacing: 1, marginBottom: 8, color: "#94A3B8" },
+  sectionTitle: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    marginBottom: 8,
+    color: "#94A3B8",
+  },
   optionsList: { paddingBottom: 6 },
   optionRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, borderBottomWidth: 0.5 },
   darkBorder: { borderBottomColor: "#334155" },
@@ -484,26 +632,67 @@ const styles = StyleSheet.create({
   walletBalanceAmount: { fontSize: 22, fontWeight: "800", marginTop: 6 },
 
   gatewayRow: { flexDirection: "row", marginBottom: 10 },
-  gatewayBtn: { flex: 1, paddingVertical: 8, alignItems: "center", borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 8, marginHorizontal: 3, backgroundColor: "#F8FAFC" },
+  gatewayBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 8,
+    marginHorizontal: 3,
+    backgroundColor: "#F8FAFC",
+  },
   gatewayBtnActive: { backgroundColor: "#059669", borderColor: "#059669" },
   gatewayText: { fontSize: 12, fontWeight: "700", color: "#475569" },
   gatewayTextActive: { color: "#FFFFFF" },
 
   quickAmountsRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 10 },
-  quickAmountBtn: { flex: 1, backgroundColor: "rgba(5, 150, 105, 0.1)", paddingVertical: 8, marginHorizontal: 3, borderRadius: 8, alignItems: "center", borderWidth: 1, borderColor: "rgba(5, 150, 105, 0.3)" },
+  quickAmountBtn: {
+    flex: 1,
+    backgroundColor: "rgba(5, 150, 105, 0.1)",
+    paddingVertical: 8,
+    marginHorizontal: 3,
+    borderRadius: 8,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(5, 150, 105, 0.3)",
+  },
   quickAmountText: { fontSize: 12, fontWeight: "700", color: "#059669" },
 
   depositInputContainer: { flexDirection: "row", marginBottom: 10 },
-  depositInput: { flex: 1, borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 13, marginRight: 8, backgroundColor: "#FFFFFF" },
+  depositInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    marginRight: 8,
+    backgroundColor: "#FFFFFF",
+  },
   darkInputText: { color: "#0F172A" },
   lightInputText: { color: "#111111" },
   depositButton: { backgroundColor: "#059669", justifyContent: "center", paddingHorizontal: 14, borderRadius: 8 },
-  depositButtonFull: { backgroundColor: "#059669", justifyContent: "center", paddingVertical: 12, borderRadius: 8, alignItems: "center" },
+  depositButtonFull: {
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
   buttonDisabled: { backgroundColor: "#9CA3AF" },
   depositButtonText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
   walletFooterNote: { fontSize: 11, color: "#64748B", textAlign: "center", marginTop: 8, lineHeight: 16 },
 
-  orderBadgeBox: { backgroundColor: "#EFF6FF", borderWidth: 1, borderColor: "#BFDBFE", borderRadius: 10, padding: 12, alignItems: "center" },
+  orderBadgeBox: {
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    borderRadius: 10,
+    padding: 12,
+    alignItems: "center",
+  },
   orderBadgeTitle: { fontSize: 11, fontWeight: "700", color: "#1E40AF", textTransform: "uppercase" },
   orderBadgeCode: { fontSize: 20, fontWeight: "800", color: "#1D4ED8", marginVertical: 4, letterSpacing: 1 },
   orderBadgeAmount: { fontSize: 12, fontWeight: "600", color: "#3B82F6" },
@@ -511,7 +700,13 @@ const styles = StyleSheet.create({
   instructionContainer: { marginTop: 4 },
 
   emptyText: { fontSize: 12, color: "#94A3B8", textAlign: "center", marginTop: 20 },
-  infoBox: { padding: 12, backgroundColor: "rgba(5, 150, 105, 0.08)", borderRadius: 8, borderWidth: 1, borderColor: "rgba(5, 150, 105, 0.2)" },
+  infoBox: {
+    padding: 12,
+    backgroundColor: "rgba(5, 150, 105, 0.08)",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(5, 150, 105, 0.2)",
+  },
   infoBoxTitle: { fontSize: 12, fontWeight: "700", color: "#059669", marginBottom: 4 },
   infoBoxText: { fontSize: 12, color: "#475569", lineHeight: 18 },
 
