@@ -52,6 +52,34 @@ export default function CorridorDrawer({
   );
   const [driverEarnings, setDriverEarnings] = useState(0);
 
+  // On-demand fetch function triggered explicitly when Wallet option is selected
+  const fetchWalletAndEarnings = async () => {
+    if (!activeUserId) return;
+
+    console.log(`[Drawer Debug] Fetching wallet on-demand from: ${API_URL_PASSENGER}/users/wallet/${activeUserId}`);
+    try {
+      const res = await fetch(`${API_URL_PASSENGER}/users/wallet/${activeUserId}`);
+      const data = await res.json();
+
+      console.log("[Drawer Debug] Dedicated Wallet API response:", data);
+      if (data && !data.error) {
+        const liveBalance = parseFloat(data.wallet_balance || 0);
+        const liveEarnings = parseFloat(data.total_earnings || 0);
+
+        setWalletBalance(isNaN(liveBalance) ? 0 : liveBalance);
+        setDriverEarnings(isNaN(liveEarnings) ? 0 : liveEarnings);
+
+        if (updateUser) {
+          updateUser({
+            wallet_balance: isNaN(liveBalance) ? 0 : liveBalance,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[Drawer Wallet Fetch Error Detailed]:", err.message);
+    }
+  };
+
   useEffect(() => {
     if (visible && activeUserId) {
       setAvatarError(false);
@@ -60,7 +88,7 @@ export default function CorridorDrawer({
         setWalletBalance(parseFloat(user.wallet_balance || 0));
       }
 
-      // 1. Fetch Basic Profile Details
+      // Fetch Basic Profile Details on Drawer Open
       fetch(`${API_URL_PASSENGER}/users/profile/${activeUserId}`)
         .then((res) => res.json())
         .then((data) => {
@@ -77,36 +105,6 @@ export default function CorridorDrawer({
           }
         })
         .catch((err) => console.log("[Drawer Profile Fetch Error]:", err));
-
-      // 2. Fetch Dedicated Role-Aware Wallet Balance & Earnings using API_URL_PASSENGER
-      console.log(`[Drawer Debug] Fetching wallet from: ${API_URL_PASSENGER}/users/wallet/${activeUserId}`);
-      fetch(`${API_URL_PASSENGER}/users/wallet/${activeUserId}`)
-        .then(async (res) => {
-          const text = await res.text();
-          console.log("[Drawer Debug] Raw Wallet Response Text:", text);
-          try {
-            return JSON.parse(text);
-          } catch (e) {
-            throw new Error(`Server returned non-JSON: ${text.substring(0, 100)}`);
-          }
-        })
-        .then((data) => {
-          console.log("[Drawer Debug] Parsed Wallet JSON:", data);
-          if (data && !data.error) {
-            const liveBalance = parseFloat(data.wallet_balance || 0);
-            const liveEarnings = parseFloat(data.total_earnings || 0);
-
-            setWalletBalance(isNaN(liveBalance) ? 0 : liveBalance);
-            setDriverEarnings(isNaN(liveEarnings) ? 0 : liveEarnings);
-
-            if (updateUser) {
-              updateUser({
-                wallet_balance: isNaN(liveBalance) ? 0 : liveBalance,
-              });
-            }
-          }
-        })
-        .catch((err) => console.error("[Drawer Wallet Fetch Error Detailed]:", err.message));
     } else {
       setActiveSubView(null);
       setDepositAmount("");
@@ -248,14 +246,28 @@ export default function CorridorDrawer({
   const passengerOptions = [
     { title: "1. Past Ride History", subtitle: "Last 5 completed trips", action: handleOpenHistory },
     { title: "2. Available Rewards", subtitle: "Promos & discount codes", action: () => setActiveSubView("rewards") },
-    { title: "3. Wallet & Deposit", subtitle: `Balance: ETB ${walletBalance.toFixed(2)}`, action: () => setActiveSubView("wallet") },
+    { 
+      title: "3. Wallet & Deposit", 
+      subtitle: `Balance: ETB ${walletBalance.toFixed(2)}`, 
+      action: () => {
+        setActiveSubView("wallet");
+        fetchWalletAndEarnings();
+      } 
+    },
     { title: "4. Help & Support Center", subtitle: "Contact support team", action: () => setActiveSubView("help") },
   ];
 
   const driverOptions = [
     { title: "1. Active Trip History", subtitle: "Last 5 completed runs", action: handleOpenHistory },
     { title: "2. My Earned Points & Tier", subtitle: `Total Earned: ETB ${driverEarnings.toFixed(2)}`, action: () => setActiveSubView("rewards") },
-    { title: "3. Wallet & Deposits", subtitle: `Balance: ETB ${walletBalance.toFixed(2)}`, action: () => setActiveSubView("wallet") },
+    { 
+      title: "3. Wallet & Deposits", 
+      subtitle: `Balance: ETB ${walletBalance.toFixed(2)}`, 
+      action: () => {
+        setActiveSubView("wallet");
+        fetchWalletAndEarnings();
+      } 
+    },
     { title: "4. Legal & Documents", subtitle: "License & verification", action: () => setActiveSubView("help") },
     { title: "5. Platform Support", subtitle: "Help & FAQ", action: () => setActiveSubView("help") },
   ];
