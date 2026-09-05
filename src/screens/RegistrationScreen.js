@@ -36,7 +36,7 @@ export default function RegistrationScreen() {
 
   // Profile Photo Setup Modal states
   const [isPhotoModalVisible, setIsPhotoModalVisible] = useState(false);
-  const [pendingUser, setPendingUser] = useState(null); // { id, role }
+  const [pendingUser, setPendingUser] = useState(null); // { id, role, full_name, wallet_balance, profile_photo_url }
   const [selectedImage, setSelectedImage] = useState(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
@@ -54,7 +54,6 @@ export default function RegistrationScreen() {
 
   // Helper: Route to Photo Upload if missing, otherwise proceed to login
   const handlePostAuthRouting = (userObj) => {
-    // Prompt photo upload if registering or if profile_photo_url is missing
     const hasPhoto = userObj.profile_photo_url && !userObj.profile_photo_url.includes("placehold.co");
     
     if (authModeRef.current === "register" || !hasPhoto) {
@@ -66,12 +65,14 @@ export default function RegistrationScreen() {
   };
 
   const finalizeLogin = async (userObj) => {
-    console.log(`[Auth Success] Logging in user ID: ${userObj.id}, Role: ${userObj.role}`);
+    console.log(`[Auth Success] Logging in User ID: ${userObj.id}, Name: ${userObj.full_name}, Role: ${userObj.role}`);
     await loginSession({
       id: userObj.id,
+      full_name: userObj.full_name || fullName.trim() || "",
       role: userObj.role,
       phone_verified: true,
       profile_photo_url: userObj.profile_photo_url || null,
+      wallet_balance: userObj.wallet_balance || 0,
     });
   };
 
@@ -107,11 +108,15 @@ export default function RegistrationScreen() {
 
           const userRole = data.role || role;
           const userId = data.userId || data.id || currentSessionId;
+          const userFullName = data.full_name || data.name || fullName.trim() || "";
+          const userWallet = parseFloat(data.wallet_balance || data.balance || 0);
 
           handlePostAuthRouting({
             id: userId,
+            full_name: userFullName,
             role: userRole,
             profile_photo_url: data.profile_photo_url,
+            wallet_balance: userWallet,
           });
         }
       }
@@ -217,8 +222,10 @@ export default function RegistrationScreen() {
     setIsRoleSelectionVisible(false);
     handlePostAuthRouting({
       id: selectedAccount.id,
+      full_name: selectedAccount.full_name || selectedAccount.name || "",
       role: selectedAccount.role,
       profile_photo_url: selectedAccount.profile_photo_url,
+      wallet_balance: parseFloat(selectedAccount.wallet_balance || 0),
     });
   };
 

@@ -19,15 +19,16 @@ import { useAuth } from "../AuthContext";
 const { width, height } = Dimensions.get("window");
 const API_URL_PASSENGER =
   process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+
 export default function CorridorDrawer({
   visible,
   onClose,
   role: propRole,
   onNavigate,
 }) {
-  // 🔐 Pull user & updateUser directly from AuthContext
   const { user, updateUser, logoutSession } = useAuth();
+  console.log("🔍 [CorridorDrawer Debug] Current AuthContext user state:", JSON.stringify(user, null, 2));
 
   const activeUserId = user?.id || user?.userId;
   const activeRole = propRole || user?.role || "rider";
@@ -39,45 +40,82 @@ export default function CorridorDrawer({
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
 
-  // Wallet deposit states
+  // Wallet and Earnings states initialized immediately from AuthContext user cache
   const [depositAmount, setDepositAmount] = useState("");
   const [selectedGateway, setSelectedGateway] = useState("telebirr");
   const [depositStep, setDepositStep] = useState("input");
   const [generatedOrder, setGeneratedOrder] = useState(null);
   const [transactionRefCode, setTransactionRefCode] = useState("");
   const [isSubmittingDeposit, setIsSubmittingDeposit] = useState(false);
-  const [walletBalance, setWalletBalance] = useState(0);
+  const [walletBalance, setWalletBalance] = useState(
+    parseFloat(user?.wallet_balance || 0)
+  );
+  const [driverEarnings, setDriverEarnings] = useState(0);
 
- // Fetch live profile details on drawer open & sync with AuthContext
   useEffect(() => {
     if (visible && activeUserId) {
       setAvatarError(false);
 
+      if (user?.wallet_balance !== undefined) {
+        setWalletBalance(parseFloat(user.wallet_balance || 0));
+      }
+
+      // 1. Fetch Basic Profile Details
       fetch(`${API_URL_PASSENGER}/users/profile/${activeUserId}`)
         .then((res) => res.json())
         .then((data) => {
-          console.log("[Drawer Debug] API returned profile payload:", data);
           const profile = Array.isArray(data) ? data[0] : data;
-
           if (profile && !profile.error) {
             setProfileData(profile);
-            setWalletBalance(parseFloat(profile.wallet_balance || profile.balance || 0));
-
-            // Sync fetched full_name into AuthContext session
-            if (updateUser && profile.full_name) {
+            if (updateUser) {
               updateUser({
                 full_name: profile.full_name,
                 profile_photo_url: profile.profile_photo_url,
-                wallet_balance: profile.wallet_balance,
+                role: profile.role,
               });
             }
-          } else {
-            console.log("[Drawer Debug] Profile API returned error object:", profile?.error);
           }
         })
         .catch((err) => console.log("[Drawer Profile Fetch Error]:", err));
+
+      // 2. Fetch Dedicated Role-Aware Wallet Balance & Earnings using API_URL_PASSENGER
+      console.log(`[Drawer Debug] Fetching wallet from: ${API_URL_PASSENGER}/users/wallet/${activeUserId}`);
+      fetch(`${API_URL_PASSENGER}/users/wallet/${activeUserId}`)
+        .then(async (res) => {
+          const text = await res.text();
+          console.log("[Drawer Debug] Raw Wallet Response Text:", text);
+          try {
+            return JSON.parse(text);
+          } catch (e) {
+            throw new Error(`Server returned non-JSON: ${text.substring(0, 100)}`);
+          }
+        })
+        .then((data) => {
+          console.log("[Drawer Debug] Parsed Wallet JSON:", data);
+          if (data && !data.error) {
+            const liveBalance = parseFloat(data.wallet_balance || 0);
+            const liveEarnings = parseFloat(data.total_earnings || 0);
+
+            setWalletBalance(isNaN(liveBalance) ? 0 : liveBalance);
+            setDriverEarnings(isNaN(liveEarnings) ? 0 : liveEarnings);
+
+            if (updateUser) {
+              updateUser({
+                wallet_balance: isNaN(liveBalance) ? 0 : liveBalance,
+              });
+            }
+          }
+        })
+        .catch((err) => console.error("[Drawer Wallet Fetch Error Detailed]:", err.message));
+    } else {
+      setActiveSubView(null);
+      setDepositAmount("");
+      setDepositStep("input");
+      setGeneratedOrder(null);
+      setTransactionRefCode("");
     }
   }, [visible, activeUserId]);
+
   // Profile data extraction prioritizes backend database results first
   const rawName =
     profileData?.full_name ||
@@ -93,7 +131,6 @@ export default function CorridorDrawer({
       : isDriver
       ? "Corridor Driver"
       : "Corridor Passenger";
-
 
   // Fetch trip history for both drivers and riders
   const handleOpenHistory = async () => {
@@ -112,7 +149,6 @@ export default function CorridorDrawer({
       if (res.ok && Array.isArray(data)) {
         setTripHistory(data);
       } else {
-        console.log("[History Fetch] Non-array or error response:", data);
         setTripHistory([]);
       }
     } catch (err) {
@@ -218,7 +254,7 @@ export default function CorridorDrawer({
 
   const driverOptions = [
     { title: "1. Active Trip History", subtitle: "Last 5 completed runs", action: handleOpenHistory },
-    { title: "2. My Earned Points & Tier", subtitle: "Gold Tier Status", action: () => setActiveSubView("rewards") },
+    { title: "2. My Earned Points & Tier", subtitle: `Total Earned: ETB ${driverEarnings.toFixed(2)}`, action: () => setActiveSubView("rewards") },
     { title: "3. Wallet & Deposits", subtitle: `Balance: ETB ${walletBalance.toFixed(2)}`, action: () => setActiveSubView("wallet") },
     { title: "4. Legal & Documents", subtitle: "License & verification", action: () => setActiveSubView("help") },
     { title: "5. Platform Support", subtitle: "Help & FAQ", action: () => setActiveSubView("help") },
@@ -233,7 +269,7 @@ export default function CorridorDrawer({
           <TouchableWithoutFeedback>
             <View style={[styles.drawerContainer, isDriver ? styles.darkDrawer : styles.lightDrawer]}>
               
-              {/* 👤 USER PROFILE HEADER */}
+              {/* 👤 USER PROFILE HEADER WITH EARNINGS BADGE */}
               <View style={[styles.profileHeader, isDriver ? styles.darkBorder : styles.lightBorder]}>
                 {photoUrl && !avatarError && !photoUrl.includes("placehold.co") ? (
                   <Image
@@ -249,7 +285,7 @@ export default function CorridorDrawer({
                 )}
 
                 <View style={styles.profileInfo}>
-                  <Text style={[styles.profileName, isDriver ? styles.darkText : styles.lightText]}>
+                  <Text style={[styles.profileName, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
                     {displayName}
                   </Text>
                   <Text style={styles.profileSub}>
@@ -258,6 +294,11 @@ export default function CorridorDrawer({
                       {activeRole}
                     </Text>
                   </Text>
+                  {isDriver && (
+                    <Text style={styles.driverEarningsSub}>
+                      Earned: ETB {driverEarnings.toFixed(2)}
+                    </Text>
+                  )}
                 </View>
 
                 <TouchableOpacity onPress={onClose} style={styles.closeButton}>
@@ -331,7 +372,6 @@ export default function CorridorDrawer({
                               key={`trip-${trip.id || i}`}
                               style={[styles.tripCard, isDriver ? styles.darkCard : styles.lightCard]}
                             >
-                              {/* 📍 ROUTE HUBS (Pickup ➔ Dropoff) */}
                               <View style={styles.tripRouteRow}>
                                 <Ionicons name="location-sharp" size={14} color="#059669" />
                                 <Text style={[styles.tripHubText, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
@@ -343,7 +383,6 @@ export default function CorridorDrawer({
                                 </Text>
                               </View>
 
-                              {/* 👤 DRIVER OR PASSENGER DETAILS */}
                               <View style={styles.tripMetaRow}>
                                 {isDriver ? (
                                   <View style={styles.driverMetaBadge}>
@@ -372,7 +411,6 @@ export default function CorridorDrawer({
                                 <Text style={styles.tripStatusTag}>• Completed</Text>
                               </View>
 
-                              {/* 💰 PRICE AND DATE ROW */}
                               <View style={styles.tripFooterRow}>
                                 <Text style={styles.tripDateText}>
                                   {trip.created_at
@@ -410,6 +448,11 @@ export default function CorridorDrawer({
                         <Text style={[styles.walletBalanceAmount, isDriver ? styles.darkText : styles.lightText]}>
                           ETB {walletBalance.toFixed(2)}
                         </Text>
+                        {isDriver && (
+                          <Text style={styles.walletEarningsNote}>
+                            Total Lifetime Earnings: ETB {driverEarnings.toFixed(2)}
+                          </Text>
+                        )}
                       </View>
 
                       {depositStep === "input" ? (
@@ -586,11 +629,11 @@ export default function CorridorDrawer({
                         Rewards & Promos
                       </Text>
                       <View style={styles.infoBox}>
-                        <Text style={styles.infoBoxTitle}>💡 How discounts work:</Text>
+                        <Text style={styles.infoBoxTitle}>💡 How earnings & rewards work:</Text>
                         <Text style={styles.infoBoxText}>
-                          When your pooling core partner joins, your base rate discount is locked in
-                          automatically. You can also enter valid promo codes directly on the payment screen
-                          during checkout!
+                          {isDriver
+                            ? `You have earned a total of ETB ${driverEarnings.toFixed(2)} from your completed rides. Maintain an active wallet balance above ETB 50 to continue accepting new passengers.`
+                            : "When your pooling core partner joins, your base rate discount is locked in automatically. You can also enter valid promo codes directly on the payment screen during checkout!"}
                         </Text>
                       </View>
                     </View>
@@ -665,6 +708,7 @@ const styles = StyleSheet.create({
   profileInfo: { flex: 1, marginLeft: 12 },
   profileName: { fontSize: 14, fontWeight: "700" },
   profileSub: { fontSize: 11, color: "#64748B", marginTop: 2 },
+  driverEarningsSub: { fontSize: 11, fontWeight: "800", color: "#059669", marginTop: 3 },
   closeButton: { padding: 4 },
 
   sectionTitle: {
@@ -693,6 +737,7 @@ const styles = StyleSheet.create({
   walletBalanceCard: { padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
   walletBalanceLabel: { fontSize: 12, fontWeight: "600", color: "#64748B", marginLeft: 6 },
   walletBalanceAmount: { fontSize: 22, fontWeight: "800", marginTop: 6 },
+  walletEarningsNote: { fontSize: 11, color: "#059669", fontWeight: "700", marginTop: 6 },
 
   gatewayRow: { flexDirection: "row", marginBottom: 10 },
   gatewayBtn: {
@@ -739,7 +784,7 @@ const styles = StyleSheet.create({
   depositButton: { backgroundColor: "#059669", justifyContent: "center", paddingHorizontal: 14, borderRadius: 8 },
   depositButtonFull: {
     backgroundColor: "#059669",
-    justifycontent: "center",
+    justifyContent: "center",
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: "center",
@@ -778,7 +823,6 @@ const styles = StyleSheet.create({
   lightText: { color: "#111111" },
   lightTextSub: { color: "#64748B" },
 
-  // Trip History Card Styles
   tripCard: {
     padding: 12,
     borderRadius: 12,
@@ -801,7 +845,7 @@ const styles = StyleSheet.create({
 
   tripMetaRow: {
     flexDirection: "row",
-    justify: "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 4,
     borderTopWidth: 0.5,
@@ -834,7 +878,7 @@ const styles = StyleSheet.create({
 
   tripFooterRow: {
     flexDirection: "row",
-    justify: "space-between",
+    justifyContent: "space-between",
     alignItems: "center",
   },
   tripDateText: {
