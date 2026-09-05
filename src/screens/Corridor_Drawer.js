@@ -19,7 +19,7 @@ import { useAuth } from "../AuthContext";
 const { width, height } = Dimensions.get("window");
 const API_URL_PASSENGER =
   process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000/api";
 export default function CorridorDrawer({
   visible,
   onClose,
@@ -157,7 +157,7 @@ export default function CorridorDrawer({
 
     setIsSubmittingDeposit(true);
     try {
-      const res = await fetch(`${API_URL_PASSENGER}/wallet/submit-deposit`, {
+      const res = await fetch(`${API_URL}/wallet/submit-deposit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
