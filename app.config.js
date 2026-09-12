@@ -3,7 +3,7 @@ require('dotenv').config();
 module.exports = {
   expo: {
     name: "Corridor",
-    slug: "corridor",
+    slug: "daniast",
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/icon.png",
