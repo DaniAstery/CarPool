@@ -57,11 +57,11 @@ export default function RegistrationScreen() {
     waitingRef.current = waitingForTelegram;
   }, [waitingForTelegram]);
 
-  // Helper: Route to Photo Upload if missing, otherwise proceed to login
+  // Helper: Route to Photo Upload if registering and missing photo, otherwise proceed straight to login
   const handlePostAuthRouting = (userObj) => {
     const hasPhoto = userObj.profile_photo_url && !userObj.profile_photo_url.includes("placehold.co");
     
-    if (authModeRef.current === "register" || !hasPhoto) {
+    if (authModeRef.current === "register" && !hasPhoto) {
       setPendingUser(userObj);
       setIsPhotoModalVisible(true);
     } else {
@@ -299,7 +299,7 @@ export default function RegistrationScreen() {
           <View style={styles.headerBox}>
             <View style={styles.logoContainer}>
               <Image 
-                source={require("../../assets/icon.png")}
+                source={require("../../assets/icon.png")} 
                 style={styles.logoImage} 
                 resizeMode="cover"
               />
@@ -464,7 +464,7 @@ export default function RegistrationScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* ACTION BUTTONS */}
+            {/* ACTION BUTTONS WITH SKIP ACCESSIBLE TO ALL ROLES */}
             {selectedImage ? (
               <TouchableOpacity
                 style={styles.uploadConfirmBtn}
@@ -479,18 +479,16 @@ export default function RegistrationScreen() {
                 )}
               </TouchableOpacity>
             ) : (
-              pendingUser?.role === "rider" && (
-                <TouchableOpacity
-                  style={styles.skipBtn}
-                  onPress={() => {
-                    setIsPhotoModalVisible(false);
-                    finalizeLogin(pendingUser);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.skipBtnText}>Skip for Now</Text>
-                </TouchableOpacity>
-              )
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={() => {
+                  setIsPhotoModalVisible(false);
+                  finalizeLogin(pendingUser);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.skipBtnText}>Skip for Now</Text>
+              </TouchableOpacity>
             )}
           </View>
         </View>
