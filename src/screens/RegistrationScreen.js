@@ -24,7 +24,9 @@ import RoleSelectionModal from "./RoleSelectionModal";
 
 const { width } = Dimensions.get("window");
 const API_URL_SignTG = process.env.EXPO_PUBLIC_API_URL_SignTG || "http://100.108.52.79:5000/api";
-const TELEGRAM_BOT_URL = "https://t.me/CorridorAuthBot"; 
+const TELEGRAM_BOT_URL ="https://t.me/CorridorAuthBot";  
+//const TELEGRAM_BOT_URL = "https://t.me/corridor_local_bot";
+
 
 export default function RegistrationScreen() {
   const { loginSession } = useAuth();

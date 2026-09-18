@@ -14,10 +14,10 @@
         "buildType": "apk"
       },
        "env": {
-      "EXPO_PUBLIC_API_URL": "http://54.167.31.126:5000",
-      "EXPO_PUBLIC_API_URL_PASSENGER": "http://54.167.31.126:5000/api",
-      "EXPO_PUBLIC_SOCKET_URL": "http://54.167.31.126:5000",
-      "EXPO_PUBLIC_API_URL_SignTG": "http://54.167.31.126:5000/api"
+      "EXPO_PUBLIC_API_URL": "http://3.80.214.175:5000",
+      "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.80.214.175:5000/api",
+      "EXPO_PUBLIC_SOCKET_URL": "http://3.80.214.175:5000",
+      "EXPO_PUBLIC_API_URL_SignTG": "http://3.80.214.175:5000/api"
     }
     },
     "production": {
