@@ -3,7 +3,8 @@ require('dotenv').config();
 module.exports = {
   expo: {
     name: "Corridor",
-    slug: "daniast",
+    slug: "corridor-mobility-app",
+    owner: "danieas",
     version: "1.0.0",
     orientation: "portrait",
     icon: "./assets/icon.png",
@@ -61,10 +62,6 @@ module.exports = {
       ]
     ],
     owner: "daniasterys-team",
-    extra: {
-      eas: {
-        projectId: "dcce3fb8-aaa8-4000-bf85-ef3eb83f4204"
-      }
-    }
+  
   }
 };
