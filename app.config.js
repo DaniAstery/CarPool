@@ -61,7 +61,12 @@ module.exports = {
         }
       ]
     ],
-    owner: "daniasterys-team",
+     "extra": {
+      "eas": {
+        "projectId": "ce01049e-86c3-4c7d-bacb-84176bb6df6e"
+      }
+    }
+  
   
   }
 };

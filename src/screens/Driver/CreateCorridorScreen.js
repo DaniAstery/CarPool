@@ -1018,10 +1018,21 @@ export default function CreateCorridorScreen({ navigation }) {
                 ) : predefinedCorridors.length === 0 ? (
                   <Text style={styles.emptyText}>No active routes configured for this hub yet.</Text>
                 ) : (
-                  predefinedCorridors.map((route, idx) => {
+                 predefinedCorridors.map((route, idx) => {
                     const rId = route.route_id || route.id;
+                    console.log(`Route [${idx}] ID: ${rId} | pass_through_name:`, route.pass_through_name, "Full Route Object:", route);
                     const isRouteSelected = selectedRoute && (selectedRoute.route_id === rId || selectedRoute.id === rId);
-                    const routeDisplayName = route.name || route.route_name || `${route.start_name || currentHub?.name} ➔ ${route.destination_name || route.end_name}`;
+                    
+                  
+                   // 🧭 Force pass-through layout to take top priority if it exists
+                    const pickupName = route.pickup_hub_name || currentHub?.name || "Start";
+                    const passThroughName = route.pass_through_name; 
+                    const destinationName = route.destination_name || "Destination";
+                    console.log(passThroughName);
+
+                    const routeDisplayName = passThroughName 
+                      ? `${pickupName} ➔ ${passThroughName} ➔ ${destinationName}`
+                      : (route.name || route.route_name || `${pickupName} ➔ ${destinationName}`);
                     const totalCapacity = route.capacity || route.total_seats || 4;
                     const availableSeats = route.available_seats !== undefined ? route.available_seats : totalCapacity;
                     const basePrice = route.recommended_base_price || route.fare || 150;
@@ -1041,7 +1052,6 @@ export default function CreateCorridorScreen({ navigation }) {
                         onPress={() => isCorridorActive && setSelectedRoute(route)}
                         disabled={!isCorridorActive}
                       >
-                        {/* Header: Route Path & Standard Price */}
                         <View style={styles.corridorCardHeader}>
                           <View style={styles.routeTitleContainer}>
                             <Ionicons
@@ -1057,7 +1067,6 @@ export default function CreateCorridorScreen({ navigation }) {
                             <Text style={styles.priceBadgeText}>{basePrice} ETB</Text>
                           </View>
                         </View>
-
                         {/* Description (if provided) */}
                         {route.description ? (
                           <Text style={styles.corridorDescription}>{route.description}</Text>
@@ -1089,7 +1098,7 @@ export default function CreateCorridorScreen({ navigation }) {
                             </Text>
                           </View>
 
-                          {/* UNMET PASSENGER DEMAND FROM route_pool */}
+                          {/* UNMET PASSENGER DEMAND */}
                           <View style={[styles.queueInfoBadge, waitingPassengers > 0 && styles.demandBadgeActive]}>
                             <Ionicons
                               name="people-outline"
@@ -1158,172 +1167,105 @@ export default function CreateCorridorScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F9FAFB" },
-  centered: { justifyContent: "center", alignItems: "center" },
-  loadingText: { marginTop: 10, fontSize: 14, color: "#4B5563" },
-  mapContainer: { flex: 1 },
-
-  // MAP STYLES
-  destinationHalo: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "rgba(5, 150, 105, 0.15)",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(5, 150, 105, 0.4)",
+  container: {
+    flex: 1,
+    backgroundColor: "#F9FAFB",
   },
-  destinationBadge: { 
-    width: 12, 
-    height: 12, 
-    borderRadius: 6, 
-    backgroundColor: "#059669",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-  },
-  targetBadge: {
-    position: "absolute",
-    top: -20,
-    backgroundColor: "#059669",
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  targetBadgeText: { color: "#FFFFFF", fontSize: 8, fontWeight: "700" },
-  carMarkerWrapper: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#059669",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  carMarkerBubble: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#047857",
+  centered: {
     justifyContent: "center",
     alignItems: "center",
   },
-  persistentDistanceBanner: {
-    position: "absolute",
-    top: 100,
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    zIndex: 5,
+  loadingText: {
+    marginTop: 10,
+    color: "#4B5563",
+    fontSize: 14,
   },
-  persistentDistanceText: { fontSize: 13, color: "#374151" },
-  boldText: { fontWeight: "700" },
-  
-  radarToggleFloatingButton: {
-    position: "absolute",
-    top: 150,
-    right: 15,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    zIndex: 5,
+  mapContainer: {
+    flex: 1,
   },
-  radarToggleText: { fontSize: 11, marginLeft: 4, color: "#6B7280", fontWeight: "600" },
-
-  // TOP HEADER
   topFloatingHeader: {
     position: "absolute",
-    top: 40,
-    left: 15,
-    right: 15,
+    top: 50,
+    left: 20,
+    right: 20,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "transparent",
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-    elevation: 0,
-    shadowOpacity: 0,
     zIndex: 10,
   },
-  headerLeftCluster: { flexDirection: "row", alignItems: "center" },
+  headerLeftCluster: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   hamburgerButton: {
     backgroundColor: "#FFFFFF",
     padding: 10,
     borderRadius: 12,
-    elevation: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 4,
+    elevation: 4,
   },
   toggleContainer: {
+    backgroundColor: "#FFFFFF",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 22,
-    elevation: 5,
+    borderRadius: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3.84,
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  toggleLabelText: { fontSize: 12, fontWeight: "700", marginRight: 8 },
-
-  // DRAWER PANEL
+  toggleLabelText: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginRight: 8,
+  },
   slidingPanelDrawer: {
     position: "absolute",
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 0,
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    elevation: 10,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    paddingHorizontal: 16,
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 10,
     zIndex: 9,
   },
-  drawerExpanded: { height: height * 0.55 },
-  drawerCollapsed: { height: 130 },
-  dragHandleContainer: { alignItems: "center", paddingVertical: 8 },
-  dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#E5E7EB", marginBottom: 8 },
-
-  // MODE SEGMENT
+  drawerExpanded: {
+    height: height * 0.55,
+  },
+  drawerCollapsed: {
+    height: 180,
+  },
+  dragHandleContainer: {
+    paddingTop: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  dragHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#E5E7EB",
+    alignSelf: "center",
+    marginBottom: 8,
+  },
   modeSegmentContainer: {
     flexDirection: "row",
     backgroundColor: "#F3F4F6",
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 3,
-    width: "100%",
     marginBottom: 10,
   },
   modeSegment: {
@@ -1331,187 +1273,502 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
   },
-  modeSegmentActive: { backgroundColor: "#FFFFFF", elevation: 1 },
-  modeSegmentDisabled: { opacity: 0.5 },
-  modeText: { fontSize: 12, fontWeight: "600", color: "#6B7280", marginLeft: 6 },
-  modeTextActive: { color: "#059669" },
-
-  // HEADER ROW
-  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%" },
-  previewLeftCluster: { flex: 1, marginRight: 10 },
-  title: { fontSize: 16, fontWeight: "700", color: "#111827" },
-  subtitle: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, backgroundColor: "#F3F4F6" },
-  badgeArrived: { backgroundColor: "#D1FAE5" },
-  badgeOutOfRange: { backgroundColor: "#FEE2E2" },
-  badgeText: { fontSize: 10, fontWeight: "700", color: "#059669" },
-  expandToggleBadge: { flexDirection: "row", alignItems: "center", marginTop: 4 },
-  expandToggleText: { fontSize: 10, color: "#6B7280", marginRight: 2 },
-
-  // DRAWER BODY
-  drawerScrollBody: { flex: 1, marginTop: 10 },
+  modeSegmentActive: {
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  modeSegmentDisabled: {
+    opacity: 0.5,
+  },
+  modeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#6B7280",
+    marginLeft: 6,
+  },
+  modeTextActive: {
+    color: "#059669",
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  previewLeftCluster: {
+    flex: 1,
+    marginRight: 10,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  subtitle: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  badgeArrived: {
+    backgroundColor: "#D1FAE5",
+  },
+  badgeOutOfRange: {
+    backgroundColor: "#FEE2E2",
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  expandToggleBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  expandToggleText: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginRight: 2,
+  },
+  drawerScrollBody: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
   noticeBanner: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#F3F4F6",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 15,
+  },
+  noticeBannerText: {
+    fontSize: 12,
+    color: "#4B5563",
+    marginLeft: 8,
+    flex: 1,
+  },
+  standardInfoContainer: {
+    backgroundColor: "#F9FAFB",
     padding: 14,
     borderRadius: 12,
-    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
   },
-  noticeBannerText: { fontSize: 13, color: "#4B5563", marginLeft: 10, flex: 1, lineHeight: 18 },
-  standardInfoContainer: { paddingVertical: 10 },
-  radarPingBanner: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
-  radarPingTitle: { fontSize: 14, fontWeight: "700", color: "#059669" },
-  standardInfoDesc: { fontSize: 13, color: "#4B5563", lineHeight: 20, marginBottom: 16 },
-  standardMetricsGrid: { flexDirection: "row", gap: 12 },
-  metricBox: { flex: 1, backgroundColor: "#F9FAFB", padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB" },
-  metricLabel: { fontSize: 11, color: "#6B7280", marginBottom: 4 },
-  metricVal: { fontSize: 15, fontWeight: "700", color: "#111827" },
-  sectionHeadingLabel: { fontSize: 13, fontWeight: "700", color: "#374151", marginVertical: 8 },
-  emptyText: { fontSize: 12, color: "#9CA3AF", fontStyle: "italic", marginVertical: 8, textAlign: "center" },
-  inlineLoader: { flexDirection: "row", alignItems: "center", justifyContent: "center", padding: 20 },
-  inlineLoaderText: { marginLeft: 8, fontSize: 13, color: "#6B7280" },
-
-  // HUB CHIPS
-  hubChipsScroll: { flexDirection: "row", marginBottom: 12 },
+  radarPingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  livePulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#059669",
+    marginRight: 6,
+  },
+  radarPingTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  standardInfoDesc: {
+    fontSize: 12,
+    color: "#4B5563",
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  standardMetricsGrid: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  metricBox: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+    padding: 10,
+    borderRadius: 8,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  metricLabel: {
+    fontSize: 10,
+    color: "#6B7280",
+    marginBottom: 2,
+  },
+  metricVal: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  hubChipsScroll: {
+    marginBottom: 14,
+  },
   hubChip: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#F3F4F6",
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 16,
+    borderRadius: 20,
     marginRight: 8,
-  },
-  hubChipSelected: { backgroundColor: "#059669" },
-  hubChipDisabled: { backgroundColor: "#E5E7EB" },
-  hubChipText: { fontSize: 12, fontWeight: "600", color: "#374151", marginLeft: 4 },
-  hubChipTextSelected: { color: "#FFFFFF" },
-  hubChipTextDisabled: { color: "#9CA3AF" },
-
-  // CORRIDOR SECTION
-  corridorSection: { flex: 1, marginTop: 4 },
-  corridorCard: {
-    backgroundColor: "#F9FAFB",
     borderWidth: 1,
     borderColor: "#E5E7EB",
+  },
+  hubChipSelected: {
+    backgroundColor: "#059669",
+    borderColor: "#059669",
+  },
+  hubChipDisabled: {
+    opacity: 0.5,
+  },
+  hubChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#374151",
+    marginLeft: 6,
+  },
+  hubChipTextSelected: {
+    color: "#FFFFFF",
+  },
+  hubChipTextDisabled: {
+    color: "#9CA3AF",
+  },
+  corridorSection: {
+    marginTop: 4,
+  },
+  sectionHeadingLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#374151",
+    marginBottom: 10,
+  },
+  inlineLoader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 20,
+  },
+  inlineLoaderText: {
+    marginLeft: 8,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  emptyText: {
+    fontSize: 12,
+    color: "#6B7280",
+    textAlign: "center",
+    paddingVertical: 20,
+  },
+  corridorCard: {
+    backgroundColor: "#FFFFFF",
     borderRadius: 12,
     padding: 12,
-    marginBottom: 8,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  corridorCardSelected: { borderColor: "#059669", backgroundColor: "#ECFDF5" },
-  corridorCardDisabled: { opacity: 0.5 },
-  corridorCardHeader: { flexDirection: "row", alignItems: "center" },
-  corridorRouteName: { fontSize: 14, fontWeight: "700", color: "#111827", marginLeft: 8 },
-  corridorDescription: { fontSize: 12, color: "#6B7280", marginTop: 4 },
-
+  corridorCardSelected: {
+    borderColor: "#059669",
+    backgroundColor: "#F0FDF4",
+  },
+  corridorCardDisabled: {
+    opacity: 0.6,
+  },
+  corridorCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
   routeTitleContainer: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
     marginRight: 8,
   },
+  corridorRouteName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
+    marginLeft: 6,
+    flex: 1,
+  },
   priceBadge: {
-    backgroundColor: "#10B981",
+    backgroundColor: "#E0F2FE",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   priceBadgeText: {
-    color: "#FFFFFF",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700",
+    color: "#0369A1",
+  },
+  corridorDescription: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginBottom: 6,
   },
   corridorMetaRow: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 6,
+    alignItems: "center",
+    marginBottom: 8,
   },
   metaItem: {
     flexDirection: "row",
     alignItems: "center",
   },
   metaText: {
-    fontSize: 12,
-    color: "#6B7280",
+    fontSize: 11,
+    color: "#4B5563",
+  },
+  boldText: {
+    fontWeight: "700",
+    color: "#111827",
   },
   statusBadgeText: {
     fontSize: 10,
-    fontWeight: "600",
-    color: "#374151",
+    fontWeight: "700",
+    color: "#B45309",
   },
   queueStatsFooter: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 10,
-    paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#F3F4F6",
+    paddingTop: 8,
   },
   queueInfoBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#ECFDF5",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  queueInfoText: {
-    fontSize: 12,
-    color: "#047857",
   },
   demandBadgeActive: {
     backgroundColor: "#ECFDF5",
-    borderColor: "#A7F3D0",
-    borderWidth: 1,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
-
-  // STICKY FOOTER
+  queueInfoText: {
+    fontSize: 11,
+    color: "#4B5563",
+  },
   stickyFooterContainer: {
-    paddingTop: 10,
-    paddingBottom: 15,
-    paddingHorizontal: 16,
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
     backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: "#F3F4F6",
-    zIndex: 10,
+    borderTopColor: "#E5E7EB",
+    zIndex: 11,
   },
   launchButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
     backgroundColor: "#059669",
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
     paddingVertical: 14,
-    borderRadius: 14,
-    elevation: 2,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
   },
   launchButtonDisabled: {
-    backgroundColor: "#D1D5DB",
+    backgroundColor: "#9CA3AF",
   },
   launchButtonText: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
   },
-
-  // MODAL STYLES
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  modalCard: { backgroundColor: "#FFFFFF", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40 },
-  modalHeaderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
-  livePulseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#059669", marginRight: 8 },
-  modalHeaderTitle: { fontSize: 12, fontWeight: "700", color: "#059669" },
-  modalFareText: { fontSize: 28, fontWeight: "800", color: "#111827" },
-  modalCorridorText: { fontSize: 16, fontWeight: "600", color: "#374151", marginVertical: 4 },
-  modalDistanceBadge: { flexDirection: "row", alignItems: "center", marginBottom: 16, backgroundColor: "#EFF6FF", alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  modalDistanceText: { fontSize: 13, color: "#2563EB", fontWeight: "600", marginLeft: 4 },
-  modalButtonRow: { flexDirection: "row", gap: 12 },
-  modalDeclineButton: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: "#F3F4F6", alignItems: "center" },
-  modalDeclineText: { color: "#4B5563", fontSize: 15, fontWeight: "600" },
-  modalAcceptButton: { flex: 2, paddingVertical: 14, borderRadius: 12, backgroundColor: "#059669", alignItems: "center" },
-  modalAcceptText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
+  destinationHalo: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(5, 150, 105, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  targetBadge: {
+    position: "absolute",
+    top: -18,
+    backgroundColor: "#059669",
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  targetBadgeText: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  destinationBadge: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#059669",
+  },
+  carMarkerWrapper: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#059669",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  carMarkerBubble: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#047857",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  persistentDistanceBanner: {
+    position: "absolute",
+    top: 110,
+    alignSelf: "center",
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  persistentDistanceText: {
+    fontSize: 12,
+    color: "#374151",
+  },
+  radarToggleFloatingButton: {
+    position: "absolute",
+    top: 110,
+    right: 20,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  radarToggleText: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginLeft: 4,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 35,
+  },
+  modalHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  modalHeaderTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  modalFareText: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#111827",
+    marginBottom: 4,
+  },
+  modalCorridorText: {
+    fontSize: 14,
+    color: "#4B5563",
+    marginBottom: 12,
+  },
+  modalDistanceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+    marginBottom: 20,
+  },
+  modalDistanceText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#2563EB",
+    marginLeft: 6,
+  },
+  modalButtonRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  modalDeclineButton: {
+    flex: 1,
+    backgroundColor: "#F3F4F6",
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    marginRight: 8,
+  },
+  modalDeclineText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#4B5563",
+  },
+  modalAcceptButton: {
+    flex: 1,
+    backgroundColor: "#059669",
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    marginLeft: 8,
+  },
+  modalAcceptText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
 });
