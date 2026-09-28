@@ -24,7 +24,7 @@ import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 const cleanMinimalMapStyle = [
   { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
@@ -614,8 +614,9 @@ export default function CreateCorridorScreen({ navigation }) {
     setLoadingCorridors(true);
     
     try {
+      // 👇 CHANGED FROM live-corridors to routes/from (matching the passenger app)
       const [corridorRes, requestsRes] = await Promise.all([
-        fetch(`${API_URL}/api/routes/live-corridors/${encodeURIComponent(hub.name)}`),
+        fetch(`${API_URL}/api/routes/from/${encodeURIComponent(hub.name)}`),
         fetch(`${API_URL}/api/corridors/passenger-requests`)
       ]);
 

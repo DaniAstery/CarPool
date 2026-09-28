@@ -22,10 +22,13 @@ import * as ImagePicker from "expo-image-picker";
 import { useAuth } from "../AuthContext";
 import RoleSelectionModal from "./RoleSelectionModal";
 
+
+
 const { width } = Dimensions.get("window");
-const API_URL_SignTG = process.env.EXPO_PUBLIC_API_URL_SignTG || "http://100.108.52.79:5000/api";
-const TELEGRAM_BOT_URL ="https://t.me/CorridorAuthBot";  
-//const TELEGRAM_BOT_URL = "https://t.me/corridor_local_bot";
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
+const TELEGRAM_BOT_URL = process.env.EXPO_PUBLIC_TELEGRAM_BOT_URL;
+
 
 
 export default function RegistrationScreen() {
@@ -90,8 +93,8 @@ export default function RegistrationScreen() {
 
     try {
       const endpoint = authModeRef.current === "register" 
-        ? `${API_URL_SignTG}/auth/check-status/${currentSessionId}`
-        : `${API_URL_SignTG}/auth/check-signin/${currentSessionId}`;
+        ? `${API_URL}/auth/check-status/${currentSessionId}`
+        : `${API_URL}/auth/check-signin/${currentSessionId}`;
 
       const res = await fetch(endpoint);
       const responseText = await res.text();
@@ -168,7 +171,7 @@ export default function RegistrationScreen() {
       let sessionId = "";
 
       if (authMode === "register") {
-        const targetUrl = `${API_URL_SignTG}/auth/register-init`;
+        const targetUrl = `${API_URL}/auth/register-init`;
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -186,7 +189,7 @@ export default function RegistrationScreen() {
         sessionId = data.userId;
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        const targetUrl = `${API_URL_SignTG}/auth/signin-init`;
+        const targetUrl = `${API_URL}/auth/signin-init`;
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -269,7 +272,7 @@ export default function RegistrationScreen() {
       });
       formData.append("userId", pendingUser.id);
 
-      const res = await fetch(`${API_URL_SignTG}/users/upload-photo`, {
+      const res = await fetch(`${API_URL}/users/upload-photo`, {
         method: "POST",
         body: formData,
         headers: { "Content-Type": "multipart/form-data" },
