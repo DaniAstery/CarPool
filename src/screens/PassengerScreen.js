@@ -119,9 +119,7 @@ export default function PassengerScreen({ navigation }) {
 
   const handleRoutePoolUpdate = (updatedData) => {
     console.log("⚡ [Socket] Route pool update received:", updatedData);
-    // updatedData: { route_id: 10, searching_pax: 2, matched_pax: 0, current_pax: 2, status: 'searching', price: 170 }
 
-    // 👇 MUST MATCH YOUR STATE VARIABLE NAME (routes)
     setRoutes((prevRoutes) =>
       prevRoutes.map((route) => {
         const routeId = String(route.route_id || route.id);
@@ -134,7 +132,6 @@ export default function PassengerScreen({ navigation }) {
             searching_pax: updatedData.searching_pax,
             matched_pax: updatedData.matched_pax,
             current_pax: updatedData.current_pax,
-            // Save both so the JSX can read either one safely
             price: updatedData.price,
             dynamic_price: updatedData.price, 
             status: updatedData.status,
@@ -218,7 +215,8 @@ export default function PassengerScreen({ navigation }) {
           setDistanceToHub(Math.round(dist * 1000));
         }
 
-        fetchActiveCorridors(targetHub.name);
+        // 🔑 Pass the full targetHub object to send hub.id
+        fetchActiveCorridors(targetHub);
       }
     } catch (err) {
       console.log("Error querying closest hub matrix:", err);
@@ -238,10 +236,11 @@ export default function PassengerScreen({ navigation }) {
     return R * c; 
   };
 
-  const fetchActiveCorridors = async (hubName, showLoader = true) => {
+  const fetchActiveCorridors = async (hub, showLoader = true) => {
     if (showLoader) setLoadingRoutes(true);
     try {
-      const res = await fetch(`${API_URL}/routes/from/${encodeURIComponent(hubName)}`);
+      const hubId = hub.id || 1; 
+      const res = await fetch(`${API_URL}/routes/from/${hubId}`);
       const data = await res.json();
       const fetchedRoutes = Array.isArray(data) ? data : [];
       setRoutes(fetchedRoutes);
@@ -361,7 +360,7 @@ export default function PassengerScreen({ navigation }) {
 
     Alert.alert(
       "Confirm Corridor Share Ride",
-      `Join shared corridor pool from ${selectedPickupHub?.name || "Hub"} to ${item.name} for ETB ${routePrice}?`,
+      `Join shared corridor pool from ${selectedPickupHub?.name || "Hub"} to ${item.destination_name || item.name} for ETB ${routePrice}?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -407,7 +406,6 @@ export default function PassengerScreen({ navigation }) {
               const data = await res.json();
               playSound(1);
 
-              // Determine the correct target screen dynamically based on the server response or pool status
               let targetScreen = "MatchingScreen";
               if (data.navigateTo) {
                 targetScreen = data.navigateTo;
@@ -415,10 +413,10 @@ export default function PassengerScreen({ navigation }) {
                 targetScreen = "PickupProposal";
               }
 
+              const pickupName = item.pickup_hub_name || selectedPickupHub?.name || "Start";
               const passThrough = item.pass_through_name ? ` ➔ ${item.pass_through_name}` : "";
-              const routeTitle = item.pickup_hub_name && item.name 
-                ? `${item.pickup_hub_name}${passThrough} ➔ ${item.name}` 
-                : `Route #${targetRouteId}`;
+              const destinationName = item.destination_name || item.name || "Destination";
+              const routeTitle = `${pickupName}${passThrough} ➔ ${destinationName}`;
 
               navigation.navigate(targetScreen, {
                 routeId: targetRouteId,
@@ -514,8 +512,6 @@ export default function PassengerScreen({ navigation }) {
       ]
     );
   };
-
- 
 
   const isOutOfRange = distanceToHub > 1000;
   const formattedDistance = distanceToHub !== null 
@@ -888,10 +884,15 @@ export default function PassengerScreen({ navigation }) {
                     >
                       {routes.map((route, index) => {
                         const routeId = route.id || route.route_id;
-                        const passThrough = route.pass_through_name ? ` ➔ ${route.pass_through_name}` : "";
-                        const routeTitle = route.pickup_hub_name && route.name 
-                          ? `${route.pickup_hub_name}${passThrough} ➔ ${route.name}` 
-                          : `Route #${routeId}`;
+                        
+                        // 🧭 Upgraded robust 3-way route title formatting
+                        const pickupName = route.pickup_hub_name || selectedPickupHub?.name || "Start";
+                        const passThroughName = route.pass_through_name; 
+                        const destinationName = route.destination_name || route.name || "Destination";
+
+                        const routeTitle = passThroughName 
+                          ? `${pickupName} ➔ ${passThroughName} ➔ ${destinationName}`
+                          : `${pickupName} ➔ ${destinationName}`;
 
                         const maxSeats = parseInt(route.total_seats, 10) || 4;
 
@@ -909,17 +910,15 @@ export default function PassengerScreen({ navigation }) {
                         const remainingSeconds = getRemainingSeconds(route);
                         const isJoinWindowOpen = isMatchedStatus && remainingSeconds > 0;
 
-                      
-                      const dynamicPrice = route.price !== undefined && route.price !== null
-                        ? route.price
-                        : (route.dynamic_price !== undefined && route.dynamic_price !== null
-                            ? route.dynamic_price
-                            : getDynamicSeatPrice(route, totalActivePax));
+                        const dynamicPrice = route.price !== undefined && route.price !== null
+                          ? route.price
+                          : (route.dynamic_price !== undefined && route.dynamic_price !== null
+                              ? route.dynamic_price
+                              : getDynamicSeatPrice(route, totalActivePax));
 
                         const formattedPrice = Number(dynamicPrice).toFixed(0);
 
-                        // 🎨 RENDER CONSOLE LOG DEBUGGER
-                        console.log(`🎨 [RENDER DEBUG] Route #${routeId} (${route.name}) -> searching: ${searchingPax}, matched: ${matchedPax}, totalActive: ${totalActivePax}`);
+                        console.log(`🎨 [RENDER DEBUG] Route #${routeId} (${routeTitle}) -> activePax: ${totalActivePax}`);
 
                         return (
                           <TouchableOpacity 

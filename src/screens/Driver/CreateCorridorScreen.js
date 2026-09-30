@@ -24,7 +24,10 @@ import { playSound } from "../../utils/soundPlayer";
 
 const { width, height } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
+const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "";
+// Automatically strips trailing '/api' if present so code paths like '/api/hubs' don't duplicate
+const API_URL = RAW_API_URL.endsWith('/api') ? RAW_API_URL.slice(0, -4) : RAW_API_URL;
+console.log("🔌 [DEBUG] API_URL loaded as:", API_URL);
 
 const cleanMinimalMapStyle = [
   { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
@@ -32,8 +35,8 @@ const cleanMinimalMapStyle = [
 ];
 
 const FALLBACK_LOCATION = {
-  latitude: 9.0220,
-  longitude: 38.8450,
+  latitude: 9.0238,
+  longitude: 38.8475,
   latitudeDelta: 0.03,
   longitudeDelta: 0.03,
 };
@@ -304,6 +307,8 @@ export default function CreateCorridorScreen({ navigation }) {
   const currentDriverId = user?.id || user?.user_id || null;
   const activeVehicleId = user?.vehicle_id || user?.vehicleId || 1;
 
+  console.log("🔍 [DEBUG] CreateCorridorScreen mounted. Driver ID:", currentDriverId);
+
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const userRole = user?.role || "driver";
   const userName = user?.name || user?.full_name || "Driver";
@@ -322,7 +327,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [currentHub, setCurrentHub] = useState(null);
   const [nearestHub] = useState(null);
-  const [driverCoords, setDriverCoords] = useState(null);
+  const [driverCoords, setDriverCoords] = useState(FALLBACK_LOCATION);
   const [heading, setHeading] = useState(0);
 
   const [loadingCorridors, setLoadingCorridors] = useState(false);
@@ -336,7 +341,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const mapRef = useRef(null);
   const prevLocRef = useRef(null);
 
-  const [currentRegion, setCurrentRegion] = useState(null);
+  const [currentRegion, setCurrentRegion] = useState(FALLBACK_LOCATION);
   const [loadingLocation, setLoadingLocation] = useState(true);
 
   useEffect(() => {
@@ -346,6 +351,7 @@ export default function CreateCorridorScreen({ navigation }) {
   }, []);
 
   const handleToggleOnline = (value) => {
+    console.log("🔌 [DEBUG] Toggle Online changed to:", value);
     setIsOnline(value);
     if (!value) {
       setSelectedRoute(null);
@@ -354,6 +360,7 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   const handleModeSwitch = (newMode) => {
+    console.log("🔄 [DEBUG] Operating mode switched to:", newMode);
     if (selectedRoute) setSelectedRoute(null);
     if (currentOffer) setCurrentOffer(null);
     setOperatingMode(newMode);
@@ -426,11 +433,15 @@ export default function CreateCorridorScreen({ navigation }) {
 
     async function setupLocationTracking() {
       try {
+        console.log("📍 [DEBUG] Requesting foreground location permissions...");
         let { status } = await Location.requestForegroundPermissionsAsync();
+        console.log("📍 [DEBUG] Location permission status:", status);
         
         if (status !== 'granted') {
           if (isMounted) {
+            console.log("⚠️ [DEBUG] Location permission denied. Using fallback location.");
             setCurrentRegion(FALLBACK_LOCATION);
+            setDriverCoords(FALLBACK_LOCATION);
             setLoadingLocation(false);
           }
           return;
@@ -439,6 +450,8 @@ export default function CreateCorridorScreen({ navigation }) {
         let location = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
+
+        console.log("📍 [DEBUG] Initial GPS position fetched:", location?.coords);
 
         if (isMounted && location) {
           const coords = {
@@ -493,8 +506,10 @@ export default function CreateCorridorScreen({ navigation }) {
         });
 
       } catch (error) {
+        console.log("❌ [DEBUG] Location tracking error:", error);
         if (isMounted) {
           setCurrentRegion(FALLBACK_LOCATION);
+          setDriverCoords(FALLBACK_LOCATION);
         }
       } finally {
         if (isMounted) {
@@ -516,6 +531,7 @@ export default function CreateCorridorScreen({ navigation }) {
     if (!currentHub?.name) return;
 
     const normalizedHub = currentHub.name.toLowerCase().trim();
+    console.log("🔌 [DEBUG] Joining socket hub room:", normalizedHub);
 
     const socket = io(API_URL, {
       transports: ["websocket"],
@@ -568,59 +584,81 @@ export default function CreateCorridorScreen({ navigation }) {
   useEffect(() => {
     async function fetchAllHubs() {
       try {
+        console.log("🔍 [DEBUG] Fetching all hubs from:", `${API_URL}/api/hubs`);
         const res = await fetch(`${API_URL}/api/hubs`);
+        console.log("🔍 [DEBUG] /api/hubs HTTP status:", res.status);
         if (res.ok) {
           const data = await res.json();
+          console.log("🔍 [DEBUG] Hubs data received count:", Array.isArray(data) ? data.length : "Not an array");
           const sanitizedHubs = Array.isArray(data) ? data.map(h => ({
             ...h,
             latitude: parseFloat(h.latitude),
             longitude: parseFloat(h.longitude)
           })) : [];
           setAllHubs(sanitizedHubs);
+        } else {
+          console.log("❌ [DEBUG] Failed to fetch hubs, status:", res.status);
         }
       } catch (err) {
-        console.log("❌ Failed to fetch hubs:", err);
+        console.log("❌ [DEBUG] Failed to fetch hubs exception:", err);
       }
     }
     fetchAllHubs();
   }, []);
 
   const topHubs = useMemo(() => {
-    if (!driverCoords || allHubs.length === 0) return allHubs.slice(0, 4);
+    if (!driverCoords || allHubs.length === 0) {
+      console.log("🔍 [DEBUG] topHubs fallback: driverCoords?", !!driverCoords, "allHubs count:", allHubs.length);
+      return allHubs.slice(0, 4);
+    }
 
-    return allHubs
-      .map(hub => ({
-        ...hub,
-        distanceKm: getDistanceFromLatLonInKm(
-          driverCoords.latitude,
-          driverCoords.longitude,
-          hub.latitude,
-          hub.longitude
-        )
-      }))
+    const mapped = allHubs
+      .map(hub => {
+        const lat = parseFloat(hub.latitude);
+        const lon = parseFloat(hub.longitude);
+        return {
+          ...hub,
+          latitude: lat,
+          longitude: lon,
+          distanceKm: getDistanceFromLatLonInKm(
+            driverCoords.latitude,
+            driverCoords.longitude,
+            lat,
+            lon
+          )
+        };
+      })
       .sort((a, b) => a.distanceKm - b.distanceKm)
       .slice(0, 4);
+
+    console.log("🔍 [DEBUG] Computed topHubs:", mapped.map(h => `${h.name} (${h.distanceKm?.toFixed(2)}km)`));
+    return mapped;
   }, [allHubs, driverCoords]);
 
-  useEffect(() => {
-    if (topHubs.length > 0 && !currentHub) {
-      handleHubSelection(topHubs[0]);
-    }
-  }, [topHubs]);
-
   const handleHubSelection = useCallback(async (hub) => {
+    if (!hub || !hub.id) {
+      console.log("⚠️ [DEBUG] handleHubSelection called with invalid hub:", hub);
+      return;
+    }
+
+    console.log(`🎯 [DEBUG] Hub selected -> ID: ${hub.id}, Name: ${hub.name}`);
     setCurrentHub(hub);
     setSelectedRoute(null);
     setLoadingCorridors(true);
     
     try {
-      // 👇 CHANGED FROM live-corridors to routes/from (matching the passenger app)
+      const corridorUrl = `${API_URL}/api/routes/from/${hub.id}`;
+      console.log("🔍 [DEBUG] Fetching corridors from URL:", corridorUrl);
+      
       const [corridorRes, requestsRes] = await Promise.all([
-        fetch(`${API_URL}/api/routes/from/${encodeURIComponent(hub.name)}`),
+        fetch(corridorUrl),
         fetch(`${API_URL}/api/corridors/passenger-requests`)
       ]);
 
+      console.log("🔍 [DEBUG] Corridors response status:", corridorRes.status);
       const corridorsData = await corridorRes.json();
+      console.log("🔍 [DEBUG] Corridors data received:", corridorsData);
+
       const requestsData = await requestsRes.json();
 
       setPredefinedCorridors(Array.isArray(corridorsData) ? corridorsData : []);
@@ -631,11 +669,19 @@ export default function CreateCorridorScreen({ navigation }) {
       setPassengerRequests(localRequests);
 
     } catch (err) {
+      console.log("❌ [DEBUG] Error fetching corridors for hub:", err);
       Alert.alert("Data Error", "Could not synchronize corridors for this hub.");
     } finally {
       setLoadingCorridors(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (topHubs.length > 0 && !currentHub) {
+      console.log("🎯 [DEBUG] Auto-selecting nearest hub from topHubs:", topHubs[0].name);
+      handleHubSelection(topHubs[0]);
+    }
+  }, [topHubs, handleHubSelection]);
 
   const handleAcceptStandardOffer = async (offerParam) => {
     const isEvent = offerParam && offerParam.nativeEvent;
@@ -692,14 +738,19 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   let currentDriverDistance = null;
-  if (driverCoords && currentHub?.latitude && currentHub?.longitude) {
-    currentDriverDistance = getDistanceFromLatLonInKm(
-      driverCoords.latitude,
-      driverCoords.longitude,
-      parseFloat(currentHub.latitude),
-      parseFloat(currentHub.longitude)
-    );
+  if (driverCoords && currentHub && currentHub.latitude !== undefined && currentHub.longitude !== undefined) {
+    const hubLat = parseFloat(currentHub.latitude);
+    const hubLng = parseFloat(currentHub.longitude);
+    if (!isNaN(hubLat) && !isNaN(hubLng)) {
+      currentDriverDistance = getDistanceFromLatLonInKm(
+        driverCoords.latitude,
+        driverCoords.longitude,
+        hubLat,
+        hubLng
+      );
+    }
   }
+
   const ALLOWED_RANGE_KM = 2.0;
   const isInRangeOfSelected = currentDriverDistance !== null && currentDriverDistance <= ALLOWED_RANGE_KM;
 
@@ -732,7 +783,7 @@ export default function CreateCorridorScreen({ navigation }) {
     if (!isInRangeOfSelected) {
       Alert.alert(
         "Out of Allowable Range", 
-        `You are currently ~${currentDriverDistance ? currentDriverDistance.toFixed(1) : "?"} km away from ${currentHub.name}. You must be within ${ALLOWED_RANGE_KM} km of the hub boundary to launch.`
+        `You are currently ~${currentDriverDistance !== null ? currentDriverDistance.toFixed(2) : "?"} km away from ${currentHub.name}. You must be within ${ALLOWED_RANGE_KM} km of the hub boundary to launch.`
       );
       return;
     }
@@ -975,7 +1026,7 @@ export default function CreateCorridorScreen({ navigation }) {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hubChipsScroll}>
                 {topHubs.map((hub) => {
                   const isSelected = currentHub && currentHub.id === hub.id;
-                  const distStr = hub.distanceKm ? `${hub.distanceKm.toFixed(1)} km` : "";
+                  const distStr = hub.distanceKm !== undefined ? `${hub.distanceKm.toFixed(1)} km` : "";
                   return (
                     <TouchableOpacity
                       key={`hub-chip-${hub.id}`}
@@ -1021,19 +1072,16 @@ export default function CreateCorridorScreen({ navigation }) {
                 ) : (
                  predefinedCorridors.map((route, idx) => {
                     const rId = route.route_id || route.id;
-                    console.log(`Route [${idx}] ID: ${rId} | pass_through_name:`, route.pass_through_name, "Full Route Object:", route);
                     const isRouteSelected = selectedRoute && (selectedRoute.route_id === rId || selectedRoute.id === rId);
                     
-                  
-                   // 🧭 Force pass-through layout to take top priority if it exists
                     const pickupName = route.pickup_hub_name || currentHub?.name || "Start";
                     const passThroughName = route.pass_through_name; 
                     const destinationName = route.destination_name || "Destination";
-                    console.log(passThroughName);
 
                     const routeDisplayName = passThroughName 
                       ? `${pickupName} ➔ ${passThroughName} ➔ ${destinationName}`
                       : (route.name || route.route_name || `${pickupName} ➔ ${destinationName}`);
+                    
                     const totalCapacity = route.capacity || route.total_seats || 4;
                     const availableSeats = route.available_seats !== undefined ? route.available_seats : totalCapacity;
                     const basePrice = route.recommended_base_price || route.fare || 150;
@@ -1068,12 +1116,11 @@ export default function CreateCorridorScreen({ navigation }) {
                             <Text style={styles.priceBadgeText}>{basePrice} ETB</Text>
                           </View>
                         </View>
-                        {/* Description (if provided) */}
+
                         {route.description ? (
                           <Text style={styles.corridorDescription}>{route.description}</Text>
                         ) : null}
 
-                        {/* Offer Metadata Row: Capacity & Active Offer Status */}
                         <View style={styles.corridorMetaRow}>
                           <View style={styles.metaItem}>
                             <Ionicons name="car-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
@@ -1089,9 +1136,7 @@ export default function CreateCorridorScreen({ navigation }) {
                           )}
                         </View>
 
-                        {/* Live Driver Queue, Unmet Passenger Demand & Wait Stats */}
                         <View style={styles.queueStatsFooter}>
-                          {/* DRIVERS QUEUED */}
                           <View style={styles.queueInfoBadge}>
                             <Ionicons name="car-sport-outline" size={14} color="#059669" style={{ marginRight: 4 }} />
                             <Text style={styles.queueInfoText}>
@@ -1099,7 +1144,6 @@ export default function CreateCorridorScreen({ navigation }) {
                             </Text>
                           </View>
 
-                          {/* UNMET PASSENGER DEMAND */}
                           <View style={[styles.queueInfoBadge, waitingPassengers > 0 && styles.demandBadgeActive]}>
                             <Ionicons
                               name="people-outline"
@@ -1115,7 +1159,6 @@ export default function CreateCorridorScreen({ navigation }) {
                             </Text>
                           </View>
 
-                          {/* ESTIMATED WAIT */}
                           <View style={styles.queueInfoBadge}>
                             <Ionicons name="time-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
                             <Text style={styles.queueInfoText}>
