@@ -25,7 +25,6 @@ import { playSound } from "../../utils/soundPlayer";
 const { width, height } = Dimensions.get("window");
 
 const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "";
-// Automatically strips trailing '/api' if present so code paths like '/api/hubs' don't duplicate
 const API_URL = RAW_API_URL.endsWith('/api') ? RAW_API_URL.slice(0, -4) : RAW_API_URL;
 console.log("🔌 [DEBUG] API_URL loaded as:", API_URL);
 
@@ -307,8 +306,6 @@ export default function CreateCorridorScreen({ navigation }) {
   const currentDriverId = user?.id || user?.user_id || null;
   const activeVehicleId = user?.vehicle_id || user?.vehicleId || 1;
 
-  console.log("🔍 [DEBUG] CreateCorridorScreen mounted. Driver ID:", currentDriverId);
-
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const userRole = user?.role || "driver";
   const userName = user?.name || user?.full_name || "Driver";
@@ -351,7 +348,6 @@ export default function CreateCorridorScreen({ navigation }) {
   }, []);
 
   const handleToggleOnline = (value) => {
-    console.log("🔌 [DEBUG] Toggle Online changed to:", value);
     setIsOnline(value);
     if (!value) {
       setSelectedRoute(null);
@@ -360,13 +356,11 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   const handleModeSwitch = (newMode) => {
-    console.log("🔄 [DEBUG] Operating mode switched to:", newMode);
     if (selectedRoute) setSelectedRoute(null);
     if (currentOffer) setCurrentOffer(null);
     setOperatingMode(newMode);
   };
 
-  // 🔌 SOCKET & DISPATCH LISTENER LOGIC
   useEffect(() => {
     if (!currentDriverId || !isStandardActive) {
       if (socketRef.current) {
@@ -425,7 +419,6 @@ export default function CreateCorridorScreen({ navigation }) {
     }
   };
 
-  // 🌍 GPS LOCATION TRACKING
   useEffect(() => {
     let isMounted = true;
     let locationSubscription;
@@ -433,13 +426,9 @@ export default function CreateCorridorScreen({ navigation }) {
 
     async function setupLocationTracking() {
       try {
-        console.log("📍 [DEBUG] Requesting foreground location permissions...");
         let { status } = await Location.requestForegroundPermissionsAsync();
-        console.log("📍 [DEBUG] Location permission status:", status);
-        
         if (status !== 'granted') {
           if (isMounted) {
-            console.log("⚠️ [DEBUG] Location permission denied. Using fallback location.");
             setCurrentRegion(FALLBACK_LOCATION);
             setDriverCoords(FALLBACK_LOCATION);
             setLoadingLocation(false);
@@ -450,8 +439,6 @@ export default function CreateCorridorScreen({ navigation }) {
         let location = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
-
-        console.log("📍 [DEBUG] Initial GPS position fetched:", location?.coords);
 
         if (isMounted && location) {
           const coords = {
@@ -506,7 +493,6 @@ export default function CreateCorridorScreen({ navigation }) {
         });
 
       } catch (error) {
-        console.log("❌ [DEBUG] Location tracking error:", error);
         if (isMounted) {
           setCurrentRegion(FALLBACK_LOCATION);
           setDriverCoords(FALLBACK_LOCATION);
@@ -531,8 +517,6 @@ export default function CreateCorridorScreen({ navigation }) {
     if (!currentHub?.name) return;
 
     const normalizedHub = currentHub.name.toLowerCase().trim();
-    console.log("🔌 [DEBUG] Joining socket hub room:", normalizedHub);
-
     const socket = io(API_URL, {
       transports: ["websocket"],
       autoConnect: true,
@@ -584,23 +568,18 @@ export default function CreateCorridorScreen({ navigation }) {
   useEffect(() => {
     async function fetchAllHubs() {
       try {
-        console.log("🔍 [DEBUG] Fetching all hubs from:", `${API_URL}/api/hubs`);
         const res = await fetch(`${API_URL}/api/hubs`);
-        console.log("🔍 [DEBUG] /api/hubs HTTP status:", res.status);
         if (res.ok) {
           const data = await res.json();
-          console.log("🔍 [DEBUG] Hubs data received count:", Array.isArray(data) ? data.length : "Not an array");
           const sanitizedHubs = Array.isArray(data) ? data.map(h => ({
             ...h,
             latitude: parseFloat(h.latitude),
             longitude: parseFloat(h.longitude)
           })) : [];
           setAllHubs(sanitizedHubs);
-        } else {
-          console.log("❌ [DEBUG] Failed to fetch hubs, status:", res.status);
         }
       } catch (err) {
-        console.log("❌ [DEBUG] Failed to fetch hubs exception:", err);
+        console.log("❌ Failed to fetch hubs exception:", err);
       }
     }
     fetchAllHubs();
@@ -608,11 +587,10 @@ export default function CreateCorridorScreen({ navigation }) {
 
   const topHubs = useMemo(() => {
     if (!driverCoords || allHubs.length === 0) {
-      console.log("🔍 [DEBUG] topHubs fallback: driverCoords?", !!driverCoords, "allHubs count:", allHubs.length);
       return allHubs.slice(0, 4);
     }
 
-    const mapped = allHubs
+    return allHubs
       .map(hub => {
         const lat = parseFloat(hub.latitude);
         const lon = parseFloat(hub.longitude);
@@ -630,35 +608,23 @@ export default function CreateCorridorScreen({ navigation }) {
       })
       .sort((a, b) => a.distanceKm - b.distanceKm)
       .slice(0, 4);
-
-    console.log("🔍 [DEBUG] Computed topHubs:", mapped.map(h => `${h.name} (${h.distanceKm?.toFixed(2)}km)`));
-    return mapped;
   }, [allHubs, driverCoords]);
 
   const handleHubSelection = useCallback(async (hub) => {
-    if (!hub || !hub.id) {
-      console.log("⚠️ [DEBUG] handleHubSelection called with invalid hub:", hub);
-      return;
-    }
+    if (!hub || !hub.id) return;
 
-    console.log(`🎯 [DEBUG] Hub selected -> ID: ${hub.id}, Name: ${hub.name}`);
     setCurrentHub(hub);
     setSelectedRoute(null);
     setLoadingCorridors(true);
     
     try {
       const corridorUrl = `${API_URL}/api/routes/from/${hub.id}`;
-      console.log("🔍 [DEBUG] Fetching corridors from URL:", corridorUrl);
-      
       const [corridorRes, requestsRes] = await Promise.all([
         fetch(corridorUrl),
         fetch(`${API_URL}/api/corridors/passenger-requests`)
       ]);
 
-      console.log("🔍 [DEBUG] Corridors response status:", corridorRes.status);
       const corridorsData = await corridorRes.json();
-      console.log("🔍 [DEBUG] Corridors data received:", corridorsData);
-
       const requestsData = await requestsRes.json();
 
       setPredefinedCorridors(Array.isArray(corridorsData) ? corridorsData : []);
@@ -669,7 +635,6 @@ export default function CreateCorridorScreen({ navigation }) {
       setPassengerRequests(localRequests);
 
     } catch (err) {
-      console.log("❌ [DEBUG] Error fetching corridors for hub:", err);
       Alert.alert("Data Error", "Could not synchronize corridors for this hub.");
     } finally {
       setLoadingCorridors(false);
@@ -678,7 +643,6 @@ export default function CreateCorridorScreen({ navigation }) {
 
   useEffect(() => {
     if (topHubs.length > 0 && !currentHub) {
-      console.log("🎯 [DEBUG] Auto-selecting nearest hub from topHubs:", topHubs[0].name);
       handleHubSelection(topHubs[0]);
     }
   }, [topHubs, handleHubSelection]);
@@ -1108,7 +1072,8 @@ export default function CreateCorridorScreen({ navigation }) {
                               size={18}
                               color={isRouteSelected ? "#059669" : "#374151"}
                             />
-                            <Text style={styles.corridorRouteName} numberOfLines={1}>
+                            {/* Full text visibility with 2 lines */}
+                            <Text style={styles.corridorRouteName} numberOfLines={2}>
                               {routeDisplayName}
                             </Text>
                           </View>
@@ -1543,7 +1508,7 @@ const styles = StyleSheet.create({
   },
   routeTitleContainer: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     flex: 1,
     marginRight: 8,
   },
@@ -1553,6 +1518,7 @@ const styles = StyleSheet.create({
     color: "#111827",
     marginLeft: 6,
     flex: 1,
+    lineHeight: 18,
   },
   priceBadge: {
     backgroundColor: "#E0F2FE",
