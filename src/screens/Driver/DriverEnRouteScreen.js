@@ -13,10 +13,12 @@ import {
 import MapView, { Marker, Polyline, Circle, PROVIDER_DEFAULT } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
 
 const { width } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -38,18 +40,10 @@ const cleanMinimalMapStyle = [
 
 const resolvePickupCoordinates = (params) => {
   const rawRide = params?.ride?.ride || params?.ride || params || {};
-
-  const lat = parseFloat(
-    rawRide.pickup_lat ?? rawRide.pickupLat ?? rawRide.passenger_lat ?? 9.0105
+  return toMapCoordinate(
+    rawRide.pickup_lat ?? rawRide.pickupLat ?? rawRide.passenger_lat,
+    rawRide.pickup_lng ?? rawRide.pickupLng ?? rawRide.passenger_lng
   );
-  const lng = parseFloat(
-    rawRide.pickup_lng ?? rawRide.pickupLng ?? rawRide.passenger_lng ?? 38.7613
-  );
-
-  return {
-    latitude: isNaN(lat) ? 9.0105 : lat,
-    longitude: isNaN(lng) ? 38.7613 : lng,
-  };
 };
 
 export default function DriverEnRouteScreen({ route, navigation }) {
@@ -68,10 +62,9 @@ export default function DriverEnRouteScreen({ route, navigation }) {
   const passengerPickupCoords = resolvePickupCoordinates(route.params);
 
   // 3. Driver Coordinates & Heading State
-  const [driverCoords, setDriverCoords] = useState({
-    latitude: parseFloat(rawRideData.driver_lat ?? 9.0300),
-    longitude: parseFloat(rawRideData.driver_lng ?? 38.7400),
-  });
+  const [driverCoords, setDriverCoords] = useState(() =>
+    toMapCoordinate(rawRideData.driver_lat, rawRideData.driver_lng)
+  );
   const [heading, setHeading] = useState(0);
 
   // Passenger & Ride Metadata
@@ -113,8 +106,8 @@ export default function DriverEnRouteScreen({ route, navigation }) {
   useEffect(() => {
     if (
       mapRef.current &&
-      driverCoords?.latitude &&
-      passengerPickupCoords?.latitude
+      isValidMapCoordinate(driverCoords) &&
+      isValidMapCoordinate(passengerPickupCoords)
     ) {
       mapRef.current.fitToCoordinates(
         [driverCoords, passengerPickupCoords],
@@ -124,7 +117,7 @@ export default function DriverEnRouteScreen({ route, navigation }) {
         }
       );
     }
-  }, [driverCoords.latitude, passengerPickupCoords.latitude]);
+  }, [driverCoords?.latitude, passengerPickupCoords?.latitude]);
 
   // Handle Arrival API Action
 const handleMarkArrived = async () => {
@@ -205,6 +198,7 @@ const handleMarkArrived = async () => {
   };
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={["top", "right", "bottom", "left"]}>
     <View style={StyleSheet.absoluteFillObject}>
       {/* MINIMAL MAP */}
       <MapView
@@ -212,7 +206,11 @@ const handleMarkArrived = async () => {
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_DEFAULT}
         initialRegion={{
-          ...driverCoords,
+          ...(isValidMapCoordinate(driverCoords)
+            ? driverCoords
+            : isValidMapCoordinate(passengerPickupCoords)
+              ? passengerPickupCoords
+              : { latitude: 9.0235, longitude: 38.8275 }),
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
@@ -222,7 +220,7 @@ const handleMarkArrived = async () => {
         showsCompass={false}
       >
         {/* PASSENGER PICKUP MARKER */}
-        <Marker
+        {isValidMapCoordinate(passengerPickupCoords) && <Marker
           coordinate={passengerPickupCoords}
           title="Passenger Pickup"
           description={passengerName}
@@ -237,10 +235,10 @@ const handleMarkArrived = async () => {
               <Ionicons name="person" size={13} color="#FFFFFF" />
             </View>
           </View>
-        </Marker>
+        </Marker>}
 
         {/* GEOFENCE CIRCLE */}
-        <Circle
+        {isValidMapCoordinate(passengerPickupCoords) && <Circle
           center={passengerPickupCoords}
           radius={500}
           strokeColor={rideStatus === "arrived" ? "#2563EB" : "#059669"}
@@ -250,10 +248,10 @@ const handleMarkArrived = async () => {
               : "rgba(5, 150, 105, 0.15)"
           }
           strokeWidth={2}
-        />
+        />}
 
         {/* DRIVER CAR MARKER */}
-        {driverCoords?.latitude && (
+        {isValidMapCoordinate(driverCoords) && (
           <Marker
             coordinate={driverCoords}
             title="Your Location"
@@ -271,7 +269,7 @@ const handleMarkArrived = async () => {
         )}
 
         {/* ROUTE POLYLINE */}
-        {driverCoords?.latitude && passengerPickupCoords?.latitude && (
+        {isValidMapCoordinate(driverCoords) && isValidMapCoordinate(passengerPickupCoords) && (
           <Polyline
             coordinates={[driverCoords, passengerPickupCoords]}
             strokeColor={rideStatus === "arrived" ? "#2563EB" : "#059669"}
@@ -370,10 +368,12 @@ const handleMarkArrived = async () => {
         )}
       </View>
     </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1 },
   // Target Pin
   destinationHalo: {
     width: 48,

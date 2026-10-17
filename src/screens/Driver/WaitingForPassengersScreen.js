@@ -3,11 +3,11 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 export default function WaitingForPassengersScreen({ navigation }) {
@@ -23,7 +23,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
   // Financial Pricing Logic Engine
   const pricePerSeat = passengers.length >= 4 ? 70 : passengers.length === 3 ? 80 : 120;
   const totalGrossYield = passengers.length * pricePerSeat;
-  const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
+  const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
 
   // 📡 Real-Time Database Roster Polling Pipeline
   useEffect(() => {
@@ -61,7 +61,7 @@ export default function WaitingForPassengersScreen({ navigation }) {
     if (!activeRideOfferId) return;
     
     try {
-      const res = await fetch("http://98.89.38.224:5000/api/rides/start-trip", {
+      const res = await fetch(`${API_URL}/api/rides/start-trip`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ride_offer_id: activeRideOfferId }),

@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   Alert,
   Dimensions,
   ScrollView,
@@ -21,11 +20,13 @@ import CorridorDrawer from "../Corridor_Drawer";
 import { useAuth } from "../../AuthContext";
 import { io } from "socket.io-client";
 import { playSound } from "../../utils/soundPlayer";
+import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
 
-const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "";
-const API_URL = RAW_API_URL.endsWith('/api') ? RAW_API_URL.slice(0, -4) : RAW_API_URL;
+const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
+const API_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/$/, "");
 console.log("🔌 [DEBUG] API_URL loaded as:", API_URL);
 
 const cleanMinimalMapStyle = [
@@ -85,7 +86,7 @@ const DispatchMap = memo(({
   isCorridorActive
 }) => {
   useEffect(() => {
-    if (mapRef.current && driverCoords?.latitude && targetHubForLine?.latitude) {
+    if (mapRef.current && isValidMapCoordinate(driverCoords) && isValidMapCoordinate(targetHubForLine)) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       mapRef.current.fitToCoordinates(
         [
@@ -119,10 +120,11 @@ const DispatchMap = memo(({
         {topHubs.map((hub) => {
           const isSelectedActive = currentHub && currentHub.id === hub.id;
           const isNearest = nearestHub && nearestHub.id === hub.id;
-          const hubLat = parseFloat(hub.latitude);
-          const hubLng = parseFloat(hub.longitude);
+          const hubCoordinate = toMapCoordinate(hub.latitude, hub.longitude);
 
-          if (isNaN(hubLat) || isNaN(hubLng)) return null;
+          if (!hubCoordinate) return null;
+          const hubLat = hubCoordinate.latitude;
+          const hubLng = hubCoordinate.longitude;
 
           return (
             <React.Fragment key={`hub-${hub.id}`}>
@@ -324,7 +326,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [currentHub, setCurrentHub] = useState(null);
   const [nearestHub] = useState(null);
-  const [driverCoords, setDriverCoords] = useState(FALLBACK_LOCATION);
+  const [driverCoords, setDriverCoords] = useState(null);
   const [heading, setHeading] = useState(0);
 
   const [loadingCorridors, setLoadingCorridors] = useState(false);
@@ -338,7 +340,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const mapRef = useRef(null);
   const prevLocRef = useRef(null);
 
-  const [currentRegion, setCurrentRegion] = useState(FALLBACK_LOCATION);
+  const [currentRegion, setCurrentRegion] = useState(null);
   const [loadingLocation, setLoadingLocation] = useState(true);
 
   useEffect(() => {
@@ -429,8 +431,8 @@ export default function CreateCorridorScreen({ navigation }) {
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           if (isMounted) {
-            setCurrentRegion(FALLBACK_LOCATION);
-            setDriverCoords(FALLBACK_LOCATION);
+            setCurrentRegion(null);
+            setDriverCoords(null);
             setLoadingLocation(false);
           }
           return;
@@ -493,10 +495,7 @@ export default function CreateCorridorScreen({ navigation }) {
         });
 
       } catch (error) {
-        if (isMounted) {
-          setCurrentRegion(FALLBACK_LOCATION);
-          setDriverCoords(FALLBACK_LOCATION);
-        }
+        if (isMounted) console.error("Driver GPS initialization failed:", error);
       } finally {
         if (isMounted) {
           setLoadingLocation(false);
@@ -592,20 +591,20 @@ export default function CreateCorridorScreen({ navigation }) {
 
     return allHubs
       .map(hub => {
-        const lat = parseFloat(hub.latitude);
-        const lon = parseFloat(hub.longitude);
+        const coordinate = toMapCoordinate(hub.latitude, hub.longitude);
+        if (!coordinate) return null;
         return {
           ...hub,
-          latitude: lat,
-          longitude: lon,
+          ...coordinate,
           distanceKm: getDistanceFromLatLonInKm(
             driverCoords.latitude,
             driverCoords.longitude,
-            lat,
-            lon
+            coordinate.latitude,
+            coordinate.longitude
           )
         };
       })
+      .filter(Boolean)
       .sort((a, b) => a.distanceKm - b.distanceKm)
       .slice(0, 4);
   }, [allHubs, driverCoords]);
@@ -702,15 +701,14 @@ export default function CreateCorridorScreen({ navigation }) {
   };
 
   let currentDriverDistance = null;
-  if (driverCoords && currentHub && currentHub.latitude !== undefined && currentHub.longitude !== undefined) {
-    const hubLat = parseFloat(currentHub.latitude);
-    const hubLng = parseFloat(currentHub.longitude);
-    if (!isNaN(hubLat) && !isNaN(hubLng)) {
+  if (isValidMapCoordinate(driverCoords) && currentHub) {
+    const currentHubCoordinate = toMapCoordinate(currentHub.latitude, currentHub.longitude);
+    if (currentHubCoordinate) {
       currentDriverDistance = getDistanceFromLatLonInKm(
         driverCoords.latitude,
         driverCoords.longitude,
-        hubLat,
-        hubLng
+        currentHubCoordinate.latitude,
+        currentHubCoordinate.longitude
       );
     }
   }
@@ -790,6 +788,9 @@ export default function CreateCorridorScreen({ navigation }) {
       }
       playSound("1.mp3");
       navigation.navigate("WaitingForRiders", { 
+        driverId: currentDriverId,
+        routeId: selectedRoute.route_id || selectedRoute.id,
+        rideOfferId: data.ride_id,
         ride: {
           id: data.ride_id,
           start_location: data.start_location,

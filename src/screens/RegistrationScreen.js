@@ -26,7 +26,9 @@ import RoleSelectionModal from "./RoleSelectionModal";
 
 const { width } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL;
+const API_URL = `${(process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "")}/api`;
 const TELEGRAM_BOT_URL = process.env.EXPO_PUBLIC_TELEGRAM_BOT_URL;
 
 
@@ -166,12 +168,13 @@ export default function RegistrationScreen() {
     }
 
     setIsSubmitting(true);
+    let targetUrl = "";
     try {
       let deepLink = "";
       let sessionId = "";
 
       if (authMode === "register") {
-        const targetUrl = `${API_URL}/auth/register-init`;
+        targetUrl = `${API_URL}/auth/register-init`;
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -189,7 +192,7 @@ export default function RegistrationScreen() {
         sessionId = data.userId;
         deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
       } else {
-        const targetUrl = `${API_URL}/auth/signin-init`;
+        targetUrl = `${API_URL}/auth/signin-init`;
         const res = await fetch(targetUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -217,7 +220,11 @@ export default function RegistrationScreen() {
         Alert.alert("Error", "Could not open Telegram. Ensure Telegram is installed.");
       }
     } catch (err) {
-      Alert.alert("Authentication Error", err.message);
+      console.error("[Authentication Error]", { url: targetUrl, error: err });
+      const message = err.message === "Network request failed"
+        ? `Could not connect to ${targetUrl}. Check that the server is running and port 5000 is reachable.`
+        : err.message;
+      Alert.alert("Authentication Error", message);
     } finally {
       setIsSubmitting(false);
     }

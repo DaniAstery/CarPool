@@ -24,10 +24,10 @@ import io from "socket.io-client";
 import CorridorDrawer from "../screens/Corridor_Drawer";
 import { playSound } from "../utils/soundPlayer";
 import { useLocationPinger } from '../hooks/useLocationPinger';
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://100.108.52.79:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
 const socket = io(SOCKET_URL, {
   transports: ['websocket'],
   autoConnect: true,
@@ -163,11 +163,17 @@ export default function PassengerScreen({ navigation }) {
           return;
         }
 
-        const ayatLat = 9.0220;
-        const ayatLng = 38.8450;
-        const initialCoords = { latitude: ayatLat, longitude: ayatLng };
-        setUserCoords(initialCoords);
-        await resolveClosestHub(ayatLat, ayatLng);
+        const initialLocation = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const initialCoords = toMapCoordinate(
+          initialLocation.coords.latitude,
+          initialLocation.coords.longitude
+        );
+        if (initialCoords) {
+          setUserCoords(initialCoords);
+          await resolveClosestHub(initialCoords.latitude, initialCoords.longitude);
+        }
 
         locationSubscription = await Location.watchPositionAsync(
           {
@@ -311,15 +317,18 @@ export default function PassengerScreen({ navigation }) {
         const dest = detailsData.place;
         setSelectedDestination(dest);
 
-        const originLat = userCoords?.latitude || 9.0220;
-        const originLng = userCoords?.longitude || 38.8450;
+        const origin = toMapCoordinate(userCoords?.latitude, userCoords?.longitude);
+        if (!origin) {
+          Alert.alert("Location unavailable", "Wait for your current location before estimating this trip.");
+          return;
+        }
 
         const estimateRes = await fetch(`${API_URL}/rides/estimate-fare`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            origin_lat: originLat,
-            origin_lng: originLng,
+            origin_lat: origin.latitude,
+            origin_lng: origin.longitude,
             destination_lat: dest.lat,
             destination_lng: dest.lng,
           }),
@@ -369,7 +378,13 @@ export default function PassengerScreen({ navigation }) {
           onPress: async () => {
             try {
               if (!userCoords) {
-                setUserCoords({ latitude: 9.0022471, longitude: 38.8100596 });
+                Alert.alert("Location unavailable", "Your current location is needed to join this corridor.");
+                return;
+              }
+              const pickup = toMapCoordinate(userCoords.latitude, userCoords.longitude);
+              if (!pickup) {
+                Alert.alert("Location unavailable", "Your current location is invalid. Please retry GPS.");
+                return;
               }
 
               const pickupHubId = selectedPickupHub ? selectedPickupHub.id : 7; 
@@ -382,8 +397,8 @@ export default function PassengerScreen({ navigation }) {
 
               playSound(1);
               const payload = {
-                user_lat: userCoords?.latitude || 9.0022471,
-                user_lng: userCoords?.longitude || 38.8100596,
+                user_lat: pickup.latitude,
+                user_lng: pickup.longitude,
                 user_id: currentUserId,
                 pickup_hub_id: pickupHubId,
                 route_id: targetRouteId,
@@ -459,12 +474,17 @@ export default function PassengerScreen({ navigation }) {
           style: "default",
           onPress: async () => {
             try {
+              const pickup = toMapCoordinate(userCoords?.latitude, userCoords?.longitude);
+              if (!pickup) {
+                Alert.alert("Location unavailable", "Your current location is needed to request a standard ride.");
+                return;
+              }
               playSound(1);
               
               const payload = {
                 user_id: currentUserId,
-                pickup_lat: userCoords?.latitude || 9.0022471,
-                pickup_lng: userCoords?.longitude || 38.8100596,
+                pickup_lat: pickup.latitude,
+                pickup_lng: pickup.longitude,
                 destination_lat: selectedDestination.lat,
                 destination_lng: selectedDestination.lng,
                 destination_name: selectedDestination.name || customDestinationInput.trim(),
@@ -518,10 +538,10 @@ export default function PassengerScreen({ navigation }) {
     ? (distanceToHub >= 1000 ? `${(distanceToHub / 1000).toFixed(1)} km` : `${distanceToHub}m`) 
     : "Locating...";
 
-  const pickupHubCoords = selectedPickupHub ? {
-    latitude: parseFloat(selectedPickupHub.latitude),
-    longitude: parseFloat(selectedPickupHub.longitude)
-  } : null;
+  const pickupHubCoords = selectedPickupHub
+    ? toMapCoordinate(selectedPickupHub.latitude, selectedPickupHub.longitude)
+    : null;
+  const selectedDestinationCoords = toMapCoordinate(selectedDestination?.lat, selectedDestination?.lng);
 
   return (
     <View style={styles.outerContainer}>
@@ -532,15 +552,15 @@ export default function PassengerScreen({ navigation }) {
         style={styles.absoluteMap}
         onPress={handleMapPress}
         initialRegion={{
-          latitude: userCoords?.latitude || 9.0220,
-          longitude: userCoords?.longitude || 38.8450,
+          latitude: userCoords?.latitude ?? 9.0235,
+          longitude: userCoords?.longitude ?? 38.8275,
           latitudeDelta: 0.04,
           longitudeDelta: 0.04,
         }}
         showsUserLocation={true}
         showsMyLocationButton={false}
       >
-        {userCoords && (
+        {isValidMapCoordinate(userCoords) && (
           <Marker
             coordinate={{ latitude: userCoords.latitude, longitude: userCoords.longitude }}
             title="Your Location"
@@ -552,7 +572,7 @@ export default function PassengerScreen({ navigation }) {
           </Marker>
         )}
 
-        {rideMode === "shared" && pickupHubCoords && (
+        {rideMode === "shared" && isValidMapCoordinate(pickupHubCoords) && (
           <>
             <Marker
               coordinate={pickupHubCoords}
@@ -564,7 +584,7 @@ export default function PassengerScreen({ navigation }) {
               </View>
             </Marker>
 
-            {userCoords && (
+            {isValidMapCoordinate(userCoords) && (
               <MapViewDirections
                 origin={{ latitude: userCoords.latitude, longitude: userCoords.longitude }}
                 destination={pickupHubCoords}
@@ -593,10 +613,10 @@ export default function PassengerScreen({ navigation }) {
           </>
         )}
 
-        {rideMode === "standard" && selectedDestination && (
+        {rideMode === "standard" && selectedDestination && isValidMapCoordinate(selectedDestinationCoords) && (
           <>
             <Marker
-              coordinate={{ latitude: selectedDestination.lat, longitude: selectedDestination.lng }}
+              coordinate={selectedDestinationCoords}
               title={selectedDestination.name || "Destination"}
               description={selectedDestination.address}
             >
@@ -605,10 +625,10 @@ export default function PassengerScreen({ navigation }) {
               </View>
             </Marker>
 
-            {userCoords && (
+            {isValidMapCoordinate(userCoords) && (
               <MapViewDirections
                 origin={{ latitude: userCoords.latitude, longitude: userCoords.longitude }}
-                destination={{ latitude: selectedDestination.lat, longitude: selectedDestination.lng }}
+                destination={selectedDestinationCoords}
                 apikey={GOOGLE_MAPS_API_KEY}
                 strokeWidth={5}
                 strokeColor="#2563EB"

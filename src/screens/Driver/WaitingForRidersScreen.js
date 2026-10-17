@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
@@ -13,16 +12,23 @@ import {
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 import { playSound } from "../../utils/soundPlayer";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
-
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 export default function WaitingForRidersScreen({ route, navigation }) {
   const { user } = useAuth();
-  const currentDriverId = user?.id || user?.user_id || route?.params?.driverId;
+  const currentDriverId = route?.params?.driverId || user?.id || user?.user_id;
 
   const [loading, setLoading] = useState(true);
-  const [seatsFilled, setSeatsFilled] = useState(0);
+  const [seatsFilled, setSeatsFilled] = useState(
+    Number(route?.params?.ride?.filled) || 0
+  );
+  const [totalSeats, setTotalSeats] = useState(
+    Number(route?.params?.ride?.total_seats) || 3
+  );
   const [statusText, setStatusText] = useState("Waiting for riders to join");
   const [activityLogs, setActivityLogs] = useState([]);
 
@@ -35,6 +41,9 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   // Track previous matched count to detect increments for sound triggering
   const prevMatchedRef = useRef(0);
   const isInitialFetch = useRef(true);
+  const isCheckingStatusRef = useRef(false);
+  const hasNavigatedRef = useRef(false);
+  const insets = useSafeAreaInsets();
 
   // 🚫 DISABLE ANDROID HARDWARE BACK BUTTON
   useEffect(() => {
@@ -49,23 +58,36 @@ export default function WaitingForRidersScreen({ route, navigation }) {
       return;
     }
 
-    console.log(`📡 Streaming waiting pool status for Driver ID: [${currentDriverId}]`);
+    console.log(`Streaming waiting pool status for driver ${currentDriverId}`);
 
     async function checkWaitingPoolStatus() {
+      if (isCheckingStatusRef.current || hasNavigatedRef.current) return;
+      isCheckingStatusRef.current = true;
+
       try {
         const response = await fetch(
           `${API_URL}/api/rides/waiting-pool-status/${currentDriverId}`
         );
         
         if (!response.ok) {
+          console.warn(`Waiting pool status request failed: HTTP ${response.status}`);
           setLoading(false);
           return;
         }
 
         const data = await response.json();
-        const totalSearching = data.totalSearching || 0;
-        const totalMatched = data.totalMatched || 0;
-        const matchedRiders = data.matchedRiders || [];
+        const totalSearching = Number(data.totalSearching ?? data.searching_count) || 0;
+        const riderList = data.matchedRiders || data.passengers || data.riders;
+        const matchedRiders = Array.isArray(riderList) ? riderList : [];
+        const reportedMatched = Number(data.totalMatched);
+        const totalMatched = Math.max(
+          Number.isFinite(reportedMatched) ? reportedMatched : 0,
+          matchedRiders.length
+        );
+        const reportedCapacity = Number(data.totalSeats ?? data.total_seats);
+        const capacity = Number.isFinite(reportedCapacity) && reportedCapacity > 0
+          ? reportedCapacity
+          : Number(route?.params?.ride?.total_seats) || 3;
 
         // 🎵 PLAY SOUND WHEN NEW RIDER MATCHES/JOINS INCREMENTS
         if (!isInitialFetch.current && totalMatched > prevMatchedRef.current) {
@@ -80,44 +102,50 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         if (data.pricePerSeat) setPricePerSeat(data.pricePerSeat);
         if (data.routeId) setRouteId(data.routeId);
         if (data.hubId) setCurrentPickupHubId(data.hubId);
+        if (capacity !== totalSeats) setTotalSeats(capacity);
 
-        // 🎯 TOTAL CAPACITY ACCUMULATION: Combined headcount footprint
-        const currentActiveHeadcount = totalSearching + totalMatched;
-        setSeatsFilled(currentActiveHeadcount);
+        // Only riders assigned to this offer count toward the driver's seats.
+        setSeatsFilled(Math.min(totalMatched, capacity));
         setLoading(false);
 
         // Populate recent activity logs dynamically
         if (matchedRiders.length > 0) {
-          const formattedLogs = matchedRiders.map((rider) => ({
-            id: String(rider.userId),
-            message: `Passenger ID ${rider.userId} ${rider.status === 'matched' ? 'matched' : 'joined'}`,
-            time: "Just now",
-          }));
+          const formattedLogs = matchedRiders.map((rider, idx) => {
+            const rId = rider.userId || rider.user_id || rider.id || idx + 1;
+            return {
+              id: String(rId),
+              message: `Passenger ID ${rId} matched`,
+              time: "Just now",
+            };
+          });
           setActivityLogs(formattedLogs);
           setStatusText(`${totalMatched} matched, ${totalSearching} searching...`);
+        } else if (totalMatched > 0) {
+          setStatusText(`${totalMatched} rider(s) joined, ${totalSearching} searching...`);
         } else if (totalSearching > 0) {
           setStatusText(`${totalSearching} rider(s) searching nearby...`);
         } else {
           setStatusText("Waiting for riders to join");
         }
 
-        // 🚀 CRITICAL DISPATCH ADVANCEMENT:
-        if (totalMatched >= 2 || currentActiveHeadcount >= 2) {
-          console.log("🚀 Match threshold satisfied! Advancing to ProposalDriver.");
-          clearInterval(syncInterval);
-          navigation.replace("ProposalDriver", { 
-            routeId: data.routeId, 
-            rideOfferId: data.rideOfferId,
+        // A pending offer is created before any riders join; only assigned seats advance.
+        if (totalMatched >= 2) {
+          hasNavigatedRef.current = true;
+          navigation.replace("WaitingForAcceptance", {
+            routeId: data.routeId || routeId,
+            rideOfferId: data.rideOfferId || data.ride_offer_id || data.id || route?.params?.rideOfferId,
             driverId: currentDriverId,
-            hubId: data.hubId,
-            hubName: data.hubName,
-            destinationName: data.destinationName 
+            hubId: data.hubId || currentPickupHubId,
+            hubName: data.hubName || hubNameDisplay,
+            destinationName: data.destinationName || destinationDisplay
           });
         }
 
       } catch (err) {
-        console.log("Database syncing dropped out:", err);
+        console.error("Waiting pool status sync failed:", err);
         setLoading(false);
+      } finally {
+        isCheckingStatusRef.current = false;
       }
     }
 
@@ -125,7 +153,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
     const syncInterval = setInterval(checkWaitingPoolStatus, 2500);
 
     return () => clearInterval(syncInterval);
-  }, [currentDriverId, navigation]);
+  }, [currentDriverId, navigation, routeId]);
 
   // 📴 GO OFFLINE HANDLER WITH BACKEND CLEANUP
   const executeGoOffline = async () => {
@@ -136,7 +164,16 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         body: JSON.stringify({ driver_id: currentDriverId }),
       });
 
-      const data = await response.json();
+      const textResponse = await response.text();
+      let data;
+      try {
+        data = JSON.parse(textResponse);
+      } catch (parseErr) {
+        console.log("❌ Server returned non-JSON HTML response:", textResponse);
+        Alert.alert("Server Error", "Received an invalid response from the server.");
+        return;
+      }
+
       if (!response.ok) {
         Alert.alert("Error", data.error || "Could not go offline.");
         return;
@@ -207,7 +244,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
 
           <View style={styles.progressCircleWrapper}>
             <View style={[styles.outerProgressCircle, seatsFilled > 0 && styles.outerProgressCircleActive]}>
-              <Text style={styles.circleCounterMetricsText}>{seatsFilled}/3</Text>
+              <Text style={styles.circleCounterMetricsText}>{seatsFilled}/{totalSeats}</Text>
               <Text style={styles.circleSubLabelMetricsText}>seats filled</Text>
             </View>
           </View>
@@ -239,7 +276,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         )}
       </ScrollView>
 
-      <View style={styles.bottomControlContainer}>
+      <View style={[styles.bottomControlContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <TouchableOpacity 
           style={styles.goOfflineOutlinedButton}
           activeOpacity={0.7}

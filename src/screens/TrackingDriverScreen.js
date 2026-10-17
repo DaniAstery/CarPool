@@ -15,10 +15,12 @@ import MapViewDirections from "react-native-maps-directions";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import io from "socket.io-client";
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000";
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const { width } = Dimensions.get("window");
@@ -49,7 +51,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
   const [tripStatus, setTripStatus] = useState(initialStatus || "accepted");
   const [driverLocation, setDriverLocation] = useState(null);
   const [passengerLocation, setPassengerLocation] = useState(null);
-  const [pickupCoords, setPickupCoords] = useState({ latitude: 9.0105, longitude: 38.7935 });
+  const [pickupCoords, setPickupCoords] = useState(null);
   const [destinationCoords, setDestinationCoords] = useState(null);
   
   const [tripMetrics, setTripMetrics] = useState({
@@ -107,12 +109,10 @@ export default function TrackingDriverScreen({ route, navigation }) {
         if (!res.ok) return;
         const data = await res.json();
         
-        if (data?.pickup_lat && data?.pickup_lng) {
-          setPickupCoords({ latitude: parseFloat(data.pickup_lat), longitude: parseFloat(data.pickup_lng) });
-        }
-        if (data?.destination_lat && data?.destination_lng) {
-          setDestinationCoords({ latitude: parseFloat(data.destination_lat), longitude: parseFloat(data.destination_lng) });
-        }
+        const pickup = toMapCoordinate(data?.pickup_lat, data?.pickup_lng);
+        const destination = toMapCoordinate(data?.destination_lat, data?.destination_lng);
+        if (pickup) setPickupCoords(pickup);
+        if (destination) setDestinationCoords(destination);
         if (data?.status) {
           setTripStatus(data.status);
         }
@@ -192,7 +192,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
   const activeRouteDestination = isArrivedOrInTrip ? (destinationCoords || pickupCoords) : (passengerLocation || pickupCoords);
 
   useEffect(() => {
-    if (mapRef.current && activeRouteOrigin && activeRouteDestination && tripStatus !== "completed") {
+    if (mapRef.current && isValidMapCoordinate(activeRouteOrigin) && isValidMapCoordinate(activeRouteDestination) && tripStatus !== "completed") {
       mapRef.current.fitToCoordinates([activeRouteOrigin, activeRouteDestination], {
         edgePadding: { top: 120, right: 60, bottom: 320, left: 60 },
         animated: true,
@@ -209,7 +209,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "bottom", "left"]}>
       {/* 🔝 HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.navigate("Passenger")}>
@@ -236,8 +236,8 @@ export default function TrackingDriverScreen({ route, navigation }) {
           provider={PROVIDER_DEFAULT}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
-            latitude: pickupCoords.latitude,
-            longitude: pickupCoords.longitude,
+            latitude: pickupCoords?.latitude ?? passengerLocation?.latitude ?? 9.0235,
+            longitude: pickupCoords?.longitude ?? passengerLocation?.longitude ?? 38.8275,
             latitudeDelta: 0.015,
             longitudeDelta: 0.015,
           }}
@@ -246,7 +246,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
           showsMyLocationButton={true}
           showsCompass={false}
         >
-          {driverLocation && tripStatus !== "completed" && (
+          {isValidMapCoordinate(driverLocation) && tripStatus !== "completed" && (
             <Marker coordinate={driverLocation} anchor={{ x: 0.5, y: 0.5 }} rotation={driverLocation.heading || 0} flat={true}>
               <View style={styles.emeraldCarWrapper}>
                 <View style={styles.emeraldCarInnerBubble}>
@@ -256,13 +256,13 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }} title="Pickup">
+          {isValidMapCoordinate(pickupCoords) && <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }} title="Pickup">
             <View style={styles.royalBlueDestinationHalo}>
               <View style={styles.royalBlueDestinationBadge} />
             </View>
-          </Marker>
+          </Marker>}
 
-          {destinationCoords && (
+          {isValidMapCoordinate(destinationCoords) && (
             <Marker coordinate={destinationCoords} anchor={{ x: 0.5, y: 0.5 }} title="Destination">
               <View style={[styles.royalBlueDestinationHalo, { backgroundColor: "rgba(239, 68, 68, 0.2)" }]}>
                 <View style={[styles.royalBlueDestinationBadge, { backgroundColor: "#EF4444" }]} />
@@ -270,7 +270,7 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          {activeRouteOrigin && activeRouteDestination && tripStatus !== "completed" && (
+          {isValidMapCoordinate(activeRouteOrigin) && isValidMapCoordinate(activeRouteDestination) && tripStatus !== "completed" && (
             <MapViewDirections
               origin={activeRouteOrigin}
               destination={activeRouteDestination}

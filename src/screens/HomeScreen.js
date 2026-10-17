@@ -1,7 +1,8 @@
 import React from "react";
-import { StyleSheet, View, Text, TouchableOpacity, SafeAreaView, StatusBar } from "react-native";
+import { StyleSheet, View, Text, TouchableOpacity, StatusBar } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../AuthContext";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function HomeScreen({ navigation }) {
   const { user } = useAuth();

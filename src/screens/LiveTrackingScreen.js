@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   Alert,
   Dimensions,
   ScrollView,
@@ -19,10 +18,30 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from "@expo/vector-ico
 import { io } from "socket.io-client";
 import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
-const API_URL_PASSENGER= process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+const API_URL_PASSENGER = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || API_URL
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+
+const parsePassengerIds = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(id => parseInt(id, 10)).filter(id => Number.isInteger(id));
+  }
+  if (typeof value === "string") {
+    return value
+      .replace(/[{}\[\]]/g, "")
+      .split(",")
+      .map(id => parseInt(id.trim(), 10))
+      .filter(id => Number.isInteger(id));
+  }
+  return [];
+};
 
 const DEFAULT_LOCATION = {
   latitude: 9.0235,
@@ -34,7 +53,7 @@ const DEFAULT_LOCATION = {
 
 // Fetch real street-level walking path from OSRM public walking router with urban grid fallback
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
-  if (!userLoc || !hubLoc || !hubLoc.latitude || !userLoc.latitude) {
+  if (!isValidMapCoordinate(userLoc) || !isValidMapCoordinate(hubLoc)) {
     return { distance: null, duration: null, coordinates: [] };
   }
 
@@ -88,7 +107,7 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
 
 // Fetch real street-level driving route from OSRM public driving router
 const fetchDrivingRoute = async (origin, destination) => {
-  if (!origin || !destination || !origin.latitude || !destination.latitude || !origin.longitude || !destination.longitude) {
+  if (!isValidMapCoordinate(origin) || !isValidMapCoordinate(destination)) {
     return [];
   }
 
@@ -117,7 +136,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
   const hasFitted = useRef(false);
 
   useEffect(() => {
-    if (mapRef.current && pickupLocation?.latitude && destinationLocation?.latitude && !hasFitted.current) {
+    if (mapRef.current && isValidMapCoordinate(pickupLocation) && isValidMapCoordinate(destinationLocation) && !hasFitted.current) {
       hasFitted.current = true;
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       const coordsToFit = [
@@ -149,7 +168,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
       showsCompass={false}
     >
       {/* 🧭 1. Circular Glowing Compass Arrow Passenger Marker */}
-      {currentLocation && currentLocation.latitude && (
+      {isValidMapCoordinate(currentLocation) && (
         <Marker 
           coordinate={currentLocation} 
           title="Your Location" 
@@ -166,7 +185,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
       )}
 
       {/* 🚗 2. Live Assigned Driver Pin Marker */}
-      {driverLocation && driverLocation.latitude && driverLocation.longitude && (
+      {isValidMapCoordinate(driverLocation) && (
         <Marker 
           coordinate={driverLocation} 
           title={driverLocation.title || "Assigned Driver"} 
@@ -183,7 +202,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
       )}
 
       {/* 🟢 3. Pickup Hub Marker (Emerald Green Ride-App Dot) */}
-      {pickupLocation && pickupLocation.latitude && pickupLocation.longitude && (
+      {isValidMapCoordinate(pickupLocation) && (
         <Marker 
           coordinate={{ latitude: Number(pickupLocation.latitude), longitude: Number(pickupLocation.longitude) }} 
           title={pickupLocation.title || "Pickup Hub"} 
@@ -196,7 +215,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
       )}
 
       {/* 🔵 4. Destination Hub Marker (Royal Blue Ride-App Dot) */}
-      {destinationLocation && destinationLocation.latitude && destinationLocation.longitude && (
+      {isValidMapCoordinate(destinationLocation) && (
         <Marker 
           coordinate={{ latitude: Number(destinationLocation.latitude), longitude: Number(destinationLocation.longitude) }} 
           title={destinationLocation.title || "Destination Hub"} 
@@ -234,8 +253,17 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
 
 export default function LiveTrackingScreen({ route, navigation }) {
   const { user } = useAuth();
-  const currentUserId = parseInt(user?.id || user?.user_id, 10);
-  const rideOfferId = route?.params?.rideOfferId || 0;
+  const currentUserId = parseInt(
+    user?.id || user?.user_id || user?.userId || route?.params?.userId || route?.params?.user_id,
+    10
+  );
+  const rideOfferId =
+    route?.params?.rideOfferId ||
+    route?.params?.ride_offer_id ||
+    route?.params?.ride_id ||
+    route?.params?.id ||
+    route?.params?.ride?.id ||
+    0;
 
   const arrivedSoundPlayedRef = useRef(false);
   const prevCoRiderStatusesRef = useRef({});
@@ -248,7 +276,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const [vehicleInfo, setVehicleInfo] = useState("Corridor Shuttle");
   const [coRiders, setCoRiders] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
+  const [currentLocation, setCurrentLocation] = useState(null);
   const [driverLocation, setDriverLocation] = useState({ latitude: null, longitude: null, title: "Assigned Driver" });
   
   const [pickupLocation, setPickupLocation] = useState({ latitude: null, longitude: null, title: "Pickup Hub" });
@@ -351,23 +379,21 @@ const navigateToDeparture = useCallback(() => {
         const data = await res.json();
         if (data.success && data.coordinates && isMounted) {
           const coords = data.coordinates;
-          const startLat = parseFloat(coords.start_latitude);
-          const startLng = parseFloat(coords.start_longitude);
-          const endLat = parseFloat(coords.end_latitude);
-          const endLng = parseFloat(coords.end_longitude);
+          const pickup = toMapCoordinate(coords.start_latitude, coords.start_longitude);
+          const destination = toMapCoordinate(coords.end_latitude, coords.end_longitude);
 
-          if (startLat && startLng) {
+          if (pickup) {
             setPickupLocation({
-              latitude: startLat,
-              longitude: startLng,
+              latitude: pickup.latitude,
+              longitude: pickup.longitude,
               title: coords.start_hub_name || "Pickup Hub"
             });
           }
 
-          if (endLat && endLng) {
+          if (destination) {
             setDestinationLocation({
-              latitude: endLat,
-              longitude: endLng,
+              latitude: destination.latitude,
+              longitude: destination.longitude,
               title: coords.end_hub_name || "Destination Hub"
             });
           }
@@ -388,7 +414,7 @@ const navigateToDeparture = useCallback(() => {
   useEffect(() => {
     let isMounted = true;
     async function loadWalkingRoute() {
-      if (currentLocation?.latitude && pickupLocation?.latitude) {
+      if (isValidMapCoordinate(currentLocation) && isValidMapCoordinate(pickupLocation)) {
         const routeData = await fetchWalkingRoute(currentLocation, pickupLocation);
         if (isMounted) {
           setWalkingDistance(routeData.distance);
@@ -405,7 +431,7 @@ const navigateToDeparture = useCallback(() => {
   useEffect(() => {
     let isMounted = true;
     async function updateStreetRoute() {
-      if (pickupLocation.latitude && destinationLocation.latitude) {
+      if (isValidMapCoordinate(pickupLocation) && isValidMapCoordinate(destinationLocation)) {
         const routePoints = await fetchDrivingRoute(pickupLocation, destinationLocation);
         if (isMounted && routePoints.length > 0) {
           setRouteCoordinates(routePoints);
@@ -436,6 +462,22 @@ const navigateToDeparture = useCallback(() => {
         if (isSubscribed && data.success) {
           if (data.pickup_hub) setPickupHubName(data.pickup_hub);
           if (data.dropoff_hub) setDropoffHubName(data.dropoff_hub);
+          const dropoff = toMapCoordinate(data.dropoff_lat, data.dropoff_lng);
+          if (dropoff) {
+            setDestinationLocation(previous => {
+              const title = data.dropoff_hub || "Destination Hub";
+              if (
+                previous.latitude === dropoff.latitude &&
+                previous.longitude === dropoff.longitude &&
+                previous.title === title
+              ) return previous;
+              return {
+                latitude: dropoff.latitude,
+                longitude: dropoff.longitude,
+                title
+              };
+            });
+          }
           if (data.driverName) setDriverName(data.driverName);
           if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
           
@@ -450,12 +492,34 @@ const navigateToDeparture = useCallback(() => {
           }
 
           const newDriverStatus = (data.driver_status || "accepted").toLowerCase().trim();
-          const passengers = data.passengers || [];
-          const myRow = passengers.find(
+          const passengers = Array.isArray(data.passengers) ? data.passengers : [];
+          const acceptedIds = parsePassengerIds(data.accepted_passengers);
+          const passengersById = new Map(
+            passengers
+              .map(passenger => {
+                const id = parseInt(passenger.user_id || passenger.userId || passenger.id, 10);
+                return Number.isInteger(id) ? [id, passenger] : null;
+              })
+              .filter(Boolean)
+          );
+          acceptedIds.forEach(id => {
+            if (!passengersById.has(id)) {
+              passengersById.set(id, {
+                user_id: id,
+                userId: id,
+                full_name: `Rider ${id}`,
+                status: "accepted"
+              });
+            }
+          });
+          const manifestPassengers = Array.from(passengersById.values());
+          const myRow = manifestPassengers.find(
             (p) => parseInt(p.user_id || p.userId || p.id, 10) === resolvedUserId
           );
 
-          const rawMyStatus = myRow?.status?.toLowerCase() || "accepted";
+          const rawMyStatus = acceptedIds.includes(resolvedUserId)
+            ? "accepted"
+            : myRow?.status?.toLowerCase() || "accepted";
 
           if (newDriverStatus === "in_trip" || rawMyStatus === "in_trip") {
             navigateToDeparture();
@@ -479,7 +543,7 @@ const navigateToDeparture = useCallback(() => {
           let coRiderStatusChangedToArrived = false;
 
           const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
-          const parsedCoRiders = passengers
+          const parsedCoRiders = manifestPassengers
             .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== resolvedUserId)
             .map((p, idx) => {
               const pId = parseInt(p.user_id || p.userId || p.id, 10);
@@ -508,6 +572,7 @@ const navigateToDeparture = useCallback(() => {
           setCoRiders(parsedCoRiders);
         }
       } catch (err) {
+        console.error("Live tracking presence sync failed:", err);
       } finally {
         if (isSubscribed) {
           timerId = setTimeout(fetchHubPresenceStatus, 10000); // 10s fallback loop
@@ -519,7 +584,7 @@ const navigateToDeparture = useCallback(() => {
     fetchHubPresenceStatus();
 
     // Setup Instant Socket.io Listener matching backend emission
-    const socketBaseUrl = API_URL.replace('/api', '');
+    const socketBaseUrl = API_URL;
     socket = io(socketBaseUrl);
 
     socket.on("connect", () => {
@@ -559,16 +624,31 @@ const navigateToDeparture = useCallback(() => {
       Alert.alert("Authentication Error", "User session not fully loaded. Please wait a moment and try again.");
       return;
     }
+    const targetRideOfferId = parseInt(rideOfferId, 10);
+    if (!Number.isInteger(targetRideOfferId) || targetRideOfferId <= 0) {
+      Alert.alert("Ride Unavailable", "The active ride could not be identified. Please return to your ride and try again.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const response = await fetch(`${API_URL_PASSENGER}/rides/signal-arrival`, {
+      const arrivalUrl = `${API_URL_PASSENGER}/rides/signal-arrival`;
+      const response = await fetch(arrivalUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: resolvedUserId }),
+        body: JSON.stringify({
+          user_id: resolvedUserId,
+          ride_offer_id: targetRideOfferId
+        }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new Error(`The server returned an invalid response (${response.status}).`);
+      }
 
       if (!response.ok || !data.success) {
         Alert.alert("Arrival Error", data.error || data.message || "Could not update arrival status.");
@@ -592,8 +672,13 @@ const navigateToDeparture = useCallback(() => {
         setCoRiders(instantCoRiders);
       }
     } catch (err) {
-      console.log("❌ Network Error on arrival:", err);
-      Alert.alert("Network Error", "Failed to reach server. Please try again.");
+      console.error("Arrival update failed:", err);
+      Alert.alert(
+        "Arrival Update Failed",
+        err.message === "Network request failed"
+          ? `Could not connect to ${API_URL_PASSENGER}. Check your internet connection and try again.`
+          : err.message || "Could not update arrival status. Please try again."
+      );
     } finally {
       setIsSubmitting(false);
     }

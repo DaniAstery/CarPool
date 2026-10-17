@@ -1,7 +1,9 @@
 // src/hooks/useRideGateway.js
 import { useEffect, useRef } from "react";
 
-const API_BASE_URL = "http://100.108.52.79:5000/api";
+const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "") + "/api";
 
 export function useRideGateway({ userId, userRole, navigationRef, enabled = true }) {
   const lastRoutedStateRef = useRef(null);

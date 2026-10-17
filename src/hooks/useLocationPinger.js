@@ -1,8 +1,9 @@
 import { useEffect } from 'react';
 import * as Location from 'expo-location';
 
-// ⚠️ Ensure this IP matches your server machine and port 5001
-const SERVER_URL = 'http://98.89.38.224:5000/api/location/ping';
+const SERVER_URL = `${(process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "")}/api/location/ping`;
 
 export const useLocationPinger = (userOrId, isActive = false) => {
   // Extract primitive user ID safely from object or raw value

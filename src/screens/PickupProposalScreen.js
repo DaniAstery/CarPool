@@ -5,7 +5,6 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   Dimensions,
   ScrollView,
   BackHandler,
@@ -17,22 +16,23 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 import { playSound } from "../utils/soundPlayer";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000";
-
-
-const DEFAULT_LOCATION = {
-  latitude: 9.0220,
-  longitude: 38.8450,
-  heading: 0,
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const DEFAULT_MAP_REGION = {
+  latitude: 9.0235,
+  longitude: 38.8275,
   latitudeDelta: 0.015,
   longitudeDelta: 0.015,
 };
 
 // Fetch real street-level walking path from OSRM public walking router with urban grid fallback
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
-  if (!userLoc || !hubLoc || !hubLoc.latitude || !userLoc.latitude) {
+  if (!isValidMapCoordinate(userLoc) || !isValidMapCoordinate(hubLoc)) {
     return { distance: null, duration: null, coordinates: [] };
   }
 
@@ -100,7 +100,7 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       customMapStyle={cleanMinimalMapStyle}
     >
       {/* 🧭 Circular Glowing Compass Arrow Passenger Marker */}
-      {currentLocation && currentLocation.latitude && (
+      {isValidMapCoordinate(currentLocation) && (
         <Marker 
           coordinate={currentLocation} 
           title="Your Current Location" 
@@ -118,7 +118,7 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       )}
 
       {/* 📍 Clean Pickup Hub Marker */}
-      {meetupLocation && meetupLocation.latitude && (
+      {isValidMapCoordinate(meetupLocation) && (
         <Marker 
           coordinate={{ latitude: meetupLocation.latitude, longitude: meetupLocation.longitude }} 
           title={meetupLocation.name || "Pickup Hub"} 
@@ -162,7 +162,7 @@ export default function PickupProposalScreen({ navigation }) {
   const [timeLeft, setTimeLeft] = useState(45);
   const [driverState, setDriverState] = useState("pending");
   
-  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
+  const [currentLocation, setCurrentLocation] = useState(null);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   
   const [walkingDistance, setWalkingDistance] = useState(null);
@@ -246,14 +246,18 @@ export default function PickupProposalScreen({ navigation }) {
       const data = await res.json();
       if (data.success && data.coordinates) {
         const coords = data.coordinates;
+        const pickup = toMapCoordinate(coords.start_latitude, coords.start_longitude);
+        if (!pickup) throw new Error("The route has no valid pickup hub coordinates.");
         setMeetupHub({
           name: coords.start_hub_name || "Pickup Hub",
-          latitude: parseFloat(coords.start_latitude),
-          longitude: parseFloat(coords.start_longitude),
+          latitude: pickup.latitude,
+          longitude: pickup.longitude,
         });
+      } else {
+        throw new Error(data.error || "Could not resolve the route pickup hub.");
       }
     } catch (err) {
-      console.log("❌ Error fetching map coordinates:", err);
+      console.error("❌ Error fetching map coordinates:", err);
     }
   }, []);
 
@@ -261,7 +265,7 @@ export default function PickupProposalScreen({ navigation }) {
   useEffect(() => {
     let isMounted = true;
     async function loadWalkingRoute() {
-      if (currentLocation?.latitude && meetupHub?.latitude) {
+      if (isValidMapCoordinate(currentLocation) && isValidMapCoordinate(meetupHub)) {
         const routeData = await fetchWalkingRoute(currentLocation, meetupHub);
         if (isMounted) {
           setWalkingDistance(routeData.distance);
@@ -276,7 +280,7 @@ export default function PickupProposalScreen({ navigation }) {
 
   // Explicitly fit map bounds to keep BOTH the compass arrow and pickup hub pin framed
   useEffect(() => {
-    if (mapRef.current && currentLocation?.latitude && meetupHub?.latitude) {
+    if (mapRef.current && isValidMapCoordinate(currentLocation) && isValidMapCoordinate(meetupHub)) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       
       const coordsToFit = [

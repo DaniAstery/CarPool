@@ -13,13 +13,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import io from "socket.io-client";
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000";
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
 
 const { width } = Dimensions.get("window");
+const DEFAULT_MAP_REGION = { latitude: 9.0235, longitude: 38.8275, latitudeDelta: 0.012, longitudeDelta: 0.012 };
 
 export default function StandardScreen({ route, navigation }) {
   const { standardRequestId, rideId, userId, pickupData, destinationData } = route.params || {};
@@ -120,17 +122,14 @@ export default function StandardScreen({ route, navigation }) {
     ]);
   };
 
-  const pickupCoords = {
-    latitude: parseFloat(pickupData?.lat || 9.0105),
-    longitude: parseFloat(pickupData?.lng || 38.7935),
-  };
-
-  const destCoords = destinationData?.lat
-    ? {
-        latitude: parseFloat(destinationData.lat),
-        longitude: parseFloat(destinationData.lng),
-      }
-    : null;
+  const pickupCoords = toMapCoordinate(
+    pickupData?.lat ?? pickupData?.latitude,
+    pickupData?.lng ?? pickupData?.longitude
+  );
+  const destCoords = toMapCoordinate(
+    destinationData?.lat ?? destinationData?.latitude,
+    destinationData?.lng ?? destinationData?.longitude
+  );
 
   const pulseScale = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -143,7 +142,7 @@ export default function StandardScreen({ route, navigation }) {
   });
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "bottom", "left"]}>
       {/* 🔝 HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.navigate("Passenger")}>
@@ -162,7 +161,7 @@ export default function StandardScreen({ route, navigation }) {
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
-            ...pickupCoords,
+            ...(pickupCoords || destCoords || DEFAULT_MAP_REGION),
             latitudeDelta: 0.012,
             longitudeDelta: 0.012,
           }}
@@ -170,7 +169,7 @@ export default function StandardScreen({ route, navigation }) {
           showsCompass={false}
         >
           {/* PICKUP MARKER (Emerald Palette) */}
-          <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }}>
+          {isValidMapCoordinate(pickupCoords) && <Marker coordinate={pickupCoords} anchor={{ x: 0.5, y: 0.5 }}>
             <View style={styles.markerWrapper}>
               <Animated.View
                 style={[
@@ -184,10 +183,10 @@ export default function StandardScreen({ route, navigation }) {
                 </View>
               </View>
             </View>
-          </Marker>
+          </Marker>}
 
           {/* DESTINATION MARKER (Royal Blue Palette) */}
-          {destCoords && (
+          {isValidMapCoordinate(destCoords) && (
             <Marker coordinate={destCoords} anchor={{ x: 0.5, y: 0.5 }}>
               <View style={styles.royalBlueDestinationHalo}>
                 <View style={styles.royalBlueDestinationBadge} />
@@ -196,7 +195,7 @@ export default function StandardScreen({ route, navigation }) {
           )}
 
           {/* ROUTE LINE */}
-          {destCoords && (
+          {isValidMapCoordinate(pickupCoords) && isValidMapCoordinate(destCoords) && (
             <Polyline
               coordinates={[pickupCoords, destCoords]}
               strokeColor="#059669"

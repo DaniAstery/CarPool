@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
-  SafeAreaView,
   Dimensions,
   Animated,
   Easing,
@@ -13,9 +12,10 @@ import {
 import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { playSound } from "../utils/soundPlayer";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
 
 
 export default function MatchingScreen({ navigation, route }) {
@@ -23,12 +23,7 @@ export default function MatchingScreen({ navigation, route }) {
   const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 150");
   const [isCancelling, setIsCancelling] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105, 
-    longitude: 38.7935, 
-    latitudeDelta: 0.012, 
-    longitudeDelta: 0.012,
-  });
+  const [currentLocation, setCurrentLocation] = useState(null);
 
   const mapRef = useRef(null);
   const radarAnim = useRef(new Animated.Value(0)).current;
@@ -231,7 +226,12 @@ export default function MatchingScreen({ navigation, route }) {
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
-          initialRegion={currentLocation}
+          initialRegion={{
+            latitude: currentLocation?.latitude ?? 9.0235,
+            longitude: currentLocation?.longitude ?? 38.8275,
+            latitudeDelta: 0.012,
+            longitudeDelta: 0.012,
+          }}
           showsCompass={false}
           showsMyLocationButton={false}
           toolbarEnabled={false}

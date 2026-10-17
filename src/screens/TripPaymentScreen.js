@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -13,6 +12,7 @@ import { Ionicons, FontAwesome5, MaterialCommunityIcons } from "@expo/vector-ico
 import * as Clipboard from "expo-clipboard";
 import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function TripPaymentScreen({ route, navigation }) {
   const { user } = useAuth();
@@ -28,7 +28,7 @@ export default function TripPaymentScreen({ route, navigation }) {
   const [driverPhone, setDriverPhone] = useState("");
   const [isLoadingDetails, setIsLoadingDetails] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
-  const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
+  const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
 
   // Fetch payment info and calculate correct split cost dynamically if not fully provided via route params
   useEffect(() => {

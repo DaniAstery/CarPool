@@ -14,13 +14,13 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import io from "socket.io-client";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
 
 const { width } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
-
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -41,12 +41,10 @@ const cleanMinimalMapStyle = [
 ];
 
 const resolveDestinationCoordinates = (rawRide) => {
-  const lat = parseFloat(rawRide?.destination_lat ?? 8.9806);
-  const lng = parseFloat(rawRide?.destination_lng ?? 38.7915);
-  return {
-    latitude: isNaN(lat) ? 8.9806 : lat,
-    longitude: isNaN(lng) ? 38.7915 : lng,
-  };
+  return toMapCoordinate(
+    rawRide?.destination_lat ?? rawRide?.destinationLat,
+    rawRide?.destination_lng ?? rawRide?.destinationLng
+  );
 };
 
 // Haversine formula to calculate distance between two GPS coordinates in kilometers
@@ -83,10 +81,9 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
 
   // 2. Coordinates & Metrics
   const destinationCoords = resolveDestinationCoordinates(rawRideData);
-  const [driverCoords, setDriverCoords] = useState({
-    latitude: parseFloat(rawRideData.driver_lat ?? rawRideData.pickup_lat ?? 9.0105),
-    longitude: parseFloat(rawRideData.driver_lng ?? rawRideData.pickup_lng ?? 38.7613),
-  });
+  const [driverCoords, setDriverCoords] = useState(() =>
+    toMapCoordinate(rawRideData.driver_lat, rawRideData.driver_lng)
+  );
   const [heading, setHeading] = useState(0);
 
   const [distanceKm, setDistanceKm] = useState(0.0);
@@ -220,13 +217,13 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
 
   // 7. Auto-Fit Camera
   useEffect(() => {
-    if (mapRef.current && driverCoords?.latitude && destinationCoords?.latitude) {
+    if (mapRef.current && isValidMapCoordinate(driverCoords) && isValidMapCoordinate(destinationCoords)) {
       mapRef.current.fitToCoordinates([driverCoords, destinationCoords], {
         edgePadding: { top: 120, right: 60, bottom: 350, left: 60 },
         animated: true,
       });
     }
-  }, [driverCoords.latitude, destinationCoords.latitude]);
+  }, [driverCoords?.latitude, destinationCoords?.latitude]);
 
   const handleCompleteTrip = async () => {
     if (isSubmitting || !pricingConfig) return;
@@ -275,26 +272,27 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
+      <SafeAreaView style={styles.centerContainer} edges={["top", "right", "bottom", "left"]}>
         <ActivityIndicator size="large" color="#111827" />
         <Text style={styles.loadingText}>Loading Addis Ababa Pricing Config...</Text>
-      </View>
+      </SafeAreaView>
     );
   }
 
   if (error || !pricingConfig) {
     return (
-      <View style={styles.centerContainer}>
+      <SafeAreaView style={styles.centerContainer} edges={["top", "right", "bottom", "left"]}>
         <Text style={styles.errorTitle}>Configuration Error</Text>
         <Text style={styles.errorSub}>{error || "Could not load pricing config ID 1."}</Text>
         <TouchableOpacity style={styles.retryButton} onPress={initTripSession}>
           <Text style={styles.retryButtonText}>Retry Connection</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
+    <SafeAreaView style={styles.safeArea} edges={["top", "right", "bottom", "left"]}>
     <View style={StyleSheet.absoluteFillObject}>
       {/* MINIMAL MAP */}
       <MapView
@@ -302,7 +300,11 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         style={StyleSheet.absoluteFillObject}
         provider={PROVIDER_DEFAULT}
         initialRegion={{
-          ...driverCoords,
+          ...(isValidMapCoordinate(driverCoords)
+            ? driverCoords
+            : isValidMapCoordinate(destinationCoords)
+              ? destinationCoords
+              : { latitude: 9.0235, longitude: 38.8275 }),
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
@@ -312,7 +314,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         showsCompass={false}
       >
         {/* DESTINATION MARKER */}
-        <Marker
+        {isValidMapCoordinate(destinationCoords) && <Marker
           coordinate={destinationCoords}
           title="Drop-off Location"
           description={destinationName}
@@ -327,10 +329,10 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
               <Ionicons name="flag" size={13} color="#FFFFFF" />
             </View>
           </View>
-        </Marker>
+        </Marker>}
 
         {/* DRIVER CAR MARKER */}
-        {driverCoords?.latitude && (
+        {isValidMapCoordinate(driverCoords) && (
           <Marker
             coordinate={driverCoords}
             title="Your Location"
@@ -348,7 +350,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         )}
 
         {/* ROUTE POLYLINE */}
-        {driverCoords?.latitude && destinationCoords?.latitude && (
+        {isValidMapCoordinate(driverCoords) && isValidMapCoordinate(destinationCoords) && (
           <Polyline
             coordinates={[driverCoords, destinationCoords]}
             strokeColor="#111827"
@@ -431,10 +433,12 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         </TouchableOpacity>
       </View>
     </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: { flex: 1 },
   centerContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#FFFFFF", padding: 24 },
   loadingText: { marginTop: 12, fontSize: 13, color: "#64748B", fontWeight: "600" },
   errorTitle: { fontSize: 18, fontWeight: "800", color: "#DC2626", marginBottom: 6 },

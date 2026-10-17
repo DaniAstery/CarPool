@@ -9,55 +9,36 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext"; 
 import { playSound } from "../../utils/soundPlayer";
 
 const { width } = Dimensions.get("window");
 // Automatically use your production URL if set, otherwise fallback to local/Tailscale for development
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
-
-const calculateBearing = (startLat, startLng, destLat, destLng) => {
-  const startLatRad = (startLat * Math.PI) / 180;
-  const startLngRad = (startLng * Math.PI) / 180;
-  const destLatRad = (destLat * Math.PI) / 180;
-  const destLngRad = (destLng * Math.PI) / 180;
-
-  const y = Math.sin(destLngRad - startLngRad) * Math.cos(destLatRad);
-  const x =
-    Math.cos(startLatRad) * Math.sin(destLatRad) -
-    Math.sin(startLatRad) * Math.cos(destLatRad) * Math.cos(destLngRad - startLngRad);
-  let computedHeading = (Math.atan2(y, x) * 180) / Math.PI;
-  return (computedHeading + 360) % 360;
-};
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 export default function ProposalDriver({ navigation, route }) {
   // 🔐 1. AUTH & SYSTEM PARAMETERS (Standardized to match NavigateToPickup)
   const { user } = useAuth();
   const currentDriverId =
-    route?.params?.driverId || user?.id || user?.driver_id || 10;
+    route?.params?.driverId || user?.id || user?.driver_id;
   const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id || null;
   const routeId = route?.params?.routeId || route?.params?.route_id || "1";
 
-  const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105, 
-    longitude: 38.7935, 
-    latitudeDelta: 0.008, 
-    longitudeDelta: 0.008,
-  });
-  
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
   const [mapCoordinates, setMapCoordinates] = useState(null);
   const [poolPassengers, setPoolPassengers] = useState([]);
   const [strictlyAcceptedCount, setStrictlyAcceptedCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [manifestSyncIssue, setManifestSyncIssue] = useState(false);
+  const [lastManifestSync, setLastManifestSync] = useState(null);
   const [timeLeft, setTimeLeft] = useState(45); 
-  const [heading, setHeading] = useState(0);
 
   const activeRideOfferIdRef = useRef(null);
-  const prevLocRef = useRef(null);
+  const isSyncingManifestRef = useRef(false);
+  const hasNavigatedToPickupRef = useRef(false);
 
   // 🎵 Ref tracking to detect count increments for sound effects ("2" for matched, "4" for accepted)
   const prevMatchedCountRef = useRef(0);
@@ -69,74 +50,10 @@ export default function ProposalDriver({ navigation, route }) {
 
   const hasMinimumTwoPassengersAccepted = strictlyAcceptedCount >= 2;
   const isDriverButtonUnlocked = hasMinimumTwoPassengersAccepted;
-  const isOfferLockedIn = driverAccepted || offerDetails?.status === "accepted" || offerDetails?.status === "inprogress";
-
-  // Location & Compass Engine Setup
-  useEffect(() => {
-    let locationSubscription;
-    let headingSubscription;
-
-    (async () => {
-      try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          let location = await Location.getCurrentPositionAsync({});
-          const initialCoord = {
-            latitude: location.coords.latitude, 
-            longitude: location.coords.longitude,
-            latitudeDelta: 0.008, 
-            longitudeDelta: 0.008,
-          };
-          setCurrentLocation(initialCoord);
-          prevLocRef.current = initialCoord;
-        }
-
-        locationSubscription = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 4 },
-          (location) => {
-            const newCoord = {
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              latitudeDelta: 0.008,
-              longitudeDelta: 0.008,
-            };
-
-            if (prevLocRef.current) {
-              const computedHeading = calculateBearing(
-                prevLocRef.current.latitude,
-                prevLocRef.current.longitude,
-                newCoord.latitude,
-                newCoord.longitude
-              );
-              if (computedHeading > 0 && !headingSubscription) {
-                setHeading(computedHeading);
-              }
-            }
-            prevLocRef.current = newCoord;
-            setCurrentLocation(newCoord);
-          }
-        );
-
-        headingSubscription = await Location.watchHeadingAsync((headingObj) => {
-          if (headingObj) {
-            const compassHeading = headingObj.trueHeading >= 0 ? headingObj.trueHeading : headingObj.magHeading;
-            if (compassHeading >= 0) {
-              setHeading(compassHeading);
-            }
-          }
-        });
-      } catch (err) {
-        console.log("GPS hardware connection failure:", err);
-      } finally {
-        setLoading(false);
-      }
-    })();
-
-    return () => {
-      if (locationSubscription) locationSubscription.remove();
-      if (headingSubscription) headingSubscription.remove();
-    };
-  }, []);
+  const offerStatus = String(offerDetails?.status || "").toLowerCase().trim();
+  const isOfferLockedIn =
+    driverAccepted ||
+    ["accepted", "arrived", "in_trip", "inprogress"].includes(offerStatus);
 
   // Timer Controller
   useEffect(() => {
@@ -163,9 +80,14 @@ export default function ProposalDriver({ navigation, route }) {
 
   // Live Sync Polling & Manifest State Pipeline
   useEffect(() => {
-    if (!currentDriverId) return;
+    if (!currentDriverId) {
+      return;
+    }
 
     async function syncDatabaseManifestState() {
+      if (isSyncingManifestRef.current || hasNavigatedToPickupRef.current) return;
+      isSyncingManifestRef.current = true;
+
       try {
         const proposalUrl = `${API_URL}/api/rides/driver-proposal/${currentDriverId}`;
         const res = await fetch(proposalUrl);
@@ -174,37 +96,65 @@ export default function ProposalDriver({ navigation, route }) {
           if (data && (data.hasActiveProposal || data.id)) {
             setOfferDetails(data);
             activeRideOfferIdRef.current = data.ride_offer_id || data.id;
+            setManifestSyncIssue(false);
+            setLastManifestSync(new Date());
 
             let acceptedIds = [];
             if (data.accepted_passengers) {
               if (Array.isArray(data.accepted_passengers)) {
-                acceptedIds = data.accepted_passengers.map(id => parseInt(id, 10));
+                acceptedIds = data.accepted_passengers
+                  .map(id => parseInt(id, 10))
+                  .filter(id => !isNaN(id));
               } else if (typeof data.accepted_passengers === "string") {
                 acceptedIds = data.accepted_passengers
                   .replace(/{|}/g, "")
+                  .replace(/\[|\]/g, "")
                   .split(",")
                   .map(id => parseInt(id.trim(), 10))
                   .filter(id => !isNaN(id));
               }
             }
 
-            let rawPoolArray = data.passengers || data.route_pool_passengers || [];
+            let rawPoolArray = data.passengers;
+            if (!rawPoolArray || (Array.isArray(rawPoolArray) && rawPoolArray.length === 0)) {
+              rawPoolArray = data.route_pool_passengers || [];
+            }
             if (typeof rawPoolArray === "string") {
-              try { rawPoolArray = JSON.parse(rawPoolArray); } catch (e) {}
+              try {
+                rawPoolArray = JSON.parse(rawPoolArray);
+              } catch (err) {
+                console.warn("Could not parse passenger manifest from driver proposal:", err);
+                rawPoolArray = [];
+              }
             }
 
             const cleanPoolArray = Array.isArray(rawPoolArray) 
-              ? rawPoolArray.filter(p => p && p.user_id !== null && !isNaN(parseInt(p.user_id, 10)))
+              ? rawPoolArray.filter(p => p && !isNaN(parseInt(p.user_id ?? p.userId ?? p.id, 10)))
               : [];
 
-            const visibleRoster = cleanPoolArray.map(passenger => {
-              const uId = parseInt(passenger.user_id, 10);
-              const isExplicitlyAccepted = acceptedIds.includes(uId) || passenger.status === "accepted";
-              return {
+            const rosterByUserId = new Map(cleanPoolArray.map(passenger => {
+              const uId = parseInt(passenger.user_id ?? passenger.userId ?? passenger.id, 10);
+              const passengerStatus = String(passenger.status || "").toLowerCase().trim();
+              const isExplicitlyAccepted =
+                acceptedIds.includes(uId) ||
+                ["accepted", "arrived", "in_trip", "inprogress", "completed"].includes(passengerStatus);
+              return [uId, {
                 user_id: uId,
-                name: passenger.passenger_name || `Passenger Slot ${uId}`,
+                name: passenger.passenger_name || passenger.name || `Passenger Slot ${uId}`,
                 status: isExplicitlyAccepted ? "accepted" : "matched"
-              };
+              }];
+            }));
+            const visibleRoster = Array.from(rosterByUserId.values());
+
+            const visibleIds = new Set(visibleRoster.map(passenger => passenger.user_id));
+            new Set(acceptedIds).forEach(userId => {
+              if (!visibleIds.has(userId)) {
+                visibleRoster.push({
+                  user_id: userId,
+                  name: `Passenger ${userId}`,
+                  status: "accepted"
+                });
+              }
             });
 
             const finalAcceptedCount = visibleRoster.filter(p => p.status === "accepted").length;
@@ -226,7 +176,9 @@ export default function ProposalDriver({ navigation, route }) {
             setStrictlyAcceptedCount(finalAcceptedCount);
             setPoolPassengers(visibleRoster);
 
-            if (data.status === "accepted" || data.status === "inprogress") {
+            const offerStatus = String(data.status || "").toLowerCase().trim();
+            if (["accepted", "arrived", "in_trip", "inprogress"].includes(offerStatus)) {
+              hasNavigatedToPickupRef.current = true;
               setDriverAccepted(true);
               const payloadId = parseInt(data.ride_offer_id || data.id, 10);
               navigation.replace("NavigateToPickup", { 
@@ -236,6 +188,9 @@ export default function ProposalDriver({ navigation, route }) {
               });
             }
           }
+        } else {
+          console.warn(`Driver proposal request failed: HTTP ${res.status}`);
+          setManifestSyncIssue(true);
         }
 
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
@@ -249,6 +204,9 @@ export default function ProposalDriver({ navigation, route }) {
         }
       } catch (err) {
         console.error("Manifest & Map Coordinates Sync Error:", err);
+        setManifestSyncIssue(true);
+      } finally {
+        isSyncingManifestRef.current = false;
       }
     }
 
@@ -259,6 +217,12 @@ export default function ProposalDriver({ navigation, route }) {
 
   const handleDriverAccept = async () => {
     if (!isDriverButtonUnlocked || isOfferLockedIn || timeLeft <= 0) return;
+    const activeRideOfferId = activeRideOfferIdRef.current || rideOfferId;
+    if (!activeRideOfferId) {
+      Alert.alert("Offer Unavailable", "The active ride offer could not be identified. Please retry shortly.");
+      return;
+    }
+
     setDriverAccepted(true); 
     
     try {
@@ -266,14 +230,14 @@ export default function ProposalDriver({ navigation, route }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          ride_offer_id: activeRideOfferIdRef.current || 1, 
+          ride_offer_id: activeRideOfferId,
           driver_id: currentDriverId 
         }),
       });
 
       const responseData = await res.json();
       if (res.ok && responseData.success) {
-        const finalId = parseInt(responseData.rideOfferId || activeRideOfferIdRef.current || 1, 10);
+        const finalId = parseInt(responseData.rideOfferId || activeRideOfferId, 10);
         navigation.replace("NavigateToPickup", { 
           routeId: routeId, 
           rideOfferId: finalId,
@@ -285,11 +249,17 @@ export default function ProposalDriver({ navigation, route }) {
       }
     } catch (err) {
       setDriverAccepted(false);
-      Alert.alert("Connection Failure", "Could not reach Corridor routing hub.");
+      Alert.alert("Connection Failure", `Could not reach Corridor routing hub: ${err.message}`);
     }
   };
 
   const handleDriverDecline = async () => {
+    const activeRideOfferId = activeRideOfferIdRef.current || rideOfferId;
+    if (!activeRideOfferId) {
+      Alert.alert("Offer Unavailable", "The active ride offer could not be identified. Please retry shortly.");
+      return;
+    }
+
     Alert.alert("Decline Dispatch?", "Rejecting removes you from queue line logs.", [
       { text: "Cancel", style: "cancel" },
       {
@@ -300,7 +270,10 @@ export default function ProposalDriver({ navigation, route }) {
             await fetch(`${API_URL}/api/rides/driver-decline`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ driver_id: currentDriverId, ride_offer_id: activeRideOfferIdRef.current || 1 }),
+              body: JSON.stringify({
+                driver_id: currentDriverId,
+                ride_offer_id: activeRideOfferId
+              }),
             });
           } catch (e) {}
           navigation.reset({
@@ -313,7 +286,7 @@ export default function ProposalDriver({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "bottom", "left"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation?.goBack()}>
           <Text style={styles.backButton}>←</Text>
@@ -323,7 +296,11 @@ export default function ProposalDriver({ navigation, route }) {
       </View>
 
       <View style={styles.contentContainer}>
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          style={styles.manifestScrollView}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
           
           <View style={styles.priceTierCard}>
             <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
@@ -336,6 +313,25 @@ export default function ProposalDriver({ navigation, route }) {
             <View style={styles.priceBreakdownBox}>
               <Text style={styles.breakdownText}>• Base Rate: <Text style={{fontWeight:'700', color: '#059669'}}>{`ETB ${pricePerSeat}`}</Text> per accepted seat.</Text>
             </View>
+          </View>
+
+          <View style={styles.syncStatusCard}>
+            <View style={[styles.syncStatusDot, manifestSyncIssue && styles.syncStatusDotError]} />
+            <View style={styles.syncStatusCopy}>
+              <Text style={styles.syncStatusTitle}>Passenger manifest</Text>
+              <Text style={styles.syncStatusMessage}>
+                {manifestSyncIssue
+                  ? "Connection issue — retrying live updates"
+                  : lastManifestSync
+                    ? `Live • Updated ${lastManifestSync.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+                    : "Connecting to live passenger updates..."}
+              </Text>
+            </View>
+            <Ionicons
+              name={manifestSyncIssue ? "warning-outline" : "sync-outline"}
+              size={18}
+              color={manifestSyncIssue ? "#B45309" : "#059669"}
+            />
           </View>
 
           <View style={[styles.timerBanner, !hasMinimumTwoPassengersAccepted ? styles.timerWaiting : timeLeft < 15 ? styles.timerUrgent : null]}>
@@ -356,16 +352,30 @@ export default function ProposalDriver({ navigation, route }) {
           <View style={styles.cardHeaderRow}>
             <View style={styles.locationPinCircle}><Ionicons name="git-commit-sharp" size={20} color="#059669" /></View>
             <View style={styles.locationTextWrapper}>
-              <Text style={styles.locationTitle}>{mapCoordinates?.start_hub_name || offerDetails?.start_hub_name || offerDetails?.start_location || "Megenagna Departure Hub"}</Text>
-              <Text style={styles.locationSubtitle}>{`Destination: ${mapCoordinates?.end_hub_name || offerDetails?.end_hub_name || offerDetails?.end_location || "Piassa"}`}</Text>
+              <Text style={styles.locationTitle}>{mapCoordinates?.start_hub_name || offerDetails?.start_hub_name || "Resolving pickup hub..."}</Text>
+              <Text style={styles.locationSubtitle}>{`Destination: ${mapCoordinates?.end_hub_name || offerDetails?.end_hub_name || "Resolving destination..."}`}</Text>
             </View>
           </View>
 
-          <Text style={styles.sectionHeading}>{`Manifest RoutePool Registry (${poolPassengers.length})`}</Text>
+          <View style={styles.manifestHeadingRow}>
+            <View>
+              <Text style={styles.sectionHeading}>Passenger manifest</Text>
+              <Text style={styles.manifestSubheading}>
+                {`${poolPassengers.length} joined • ${strictlyAcceptedCount} accepted`}
+              </Text>
+            </View>
+            <View style={styles.thresholdBadge}>
+              <Text style={styles.thresholdBadgeText}>{`${Math.min(strictlyAcceptedCount, 2)}/2 confirmed`}</Text>
+            </View>
+          </View>
           <View style={styles.statusTable}>
             {poolPassengers.length === 0 ? (
-              <View style={{ paddingVertical: 12, alignItems: "center" }}>
-                <Text style={{ color: "#6B7280", fontSize: 13 }}>No passengers found on route.</Text>
+              <View style={styles.emptyManifest}>
+                <Ionicons name="people-outline" size={24} color="#9CA3AF" />
+                <Text style={styles.emptyManifestTitle}>Waiting for passengers</Text>
+                <Text style={styles.emptyManifestText}>
+                  Riders will appear here as they join this corridor.
+                </Text>
               </View>
             ) : (
               poolPassengers.map((passenger) => {
@@ -436,9 +446,16 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 16, fontWeight: "700", color: "#111111" },
   
   contentContainer: { flex: 1, backgroundColor: "#FFFFFF" },
-  scrollContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 },
+  manifestScrollView: { flex: 1 },
+  scrollContent: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16 },
 
   priceTierCard: { backgroundColor: "#F9FAFB", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, padding: 14, marginBottom: 12 },
+  syncStatusCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F0FDF4", borderWidth: 1, borderColor: "#DCFCE7", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 14 },
+  syncStatusDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#059669", marginRight: 10 },
+  syncStatusDotError: { backgroundColor: "#D97706" },
+  syncStatusCopy: { flex: 1 },
+  syncStatusTitle: { fontSize: 12, fontWeight: "700", color: "#111827" },
+  syncStatusMessage: { fontSize: 11, color: "#6B7280", marginTop: 2 },
   priceTierHeading: { fontSize: 11, fontWeight: "700", color: "#6B7280", letterSpacing: 0.5 },
   priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 },
   mainPriceText: { fontSize: 22, fontWeight: "800", color: "#111111" },
@@ -455,8 +472,15 @@ const styles = StyleSheet.create({
   locationTextWrapper: { flex: 1 },
   locationTitle: { fontSize: 15, fontWeight: "700" },
   locationSubtitle: { fontSize: 12, color: "#6B7280" },
-  sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8 },
+  manifestHeadingRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  sectionHeading: { fontSize: 14, fontWeight: "700", color: "#111827" },
+  manifestSubheading: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+  thresholdBadge: { backgroundColor: "#ECFDF5", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8 },
+  thresholdBadgeText: { color: "#047857", fontSize: 11, fontWeight: "700" },
   statusTable: { marginBottom: 16 },
+  emptyManifest: { alignItems: "center", paddingVertical: 20, paddingHorizontal: 16, backgroundColor: "#F9FAFB", borderRadius: 10, borderWidth: 1, borderColor: "#E5E7EB" },
+  emptyManifestTitle: { color: "#374151", fontSize: 13, fontWeight: "700", marginTop: 7 },
+  emptyManifestText: { color: "#6B7280", fontSize: 11, textAlign: "center", marginTop: 3 },
   tableRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#F3F4F6" },
   tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
   tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500" },
@@ -466,7 +490,7 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 12, fontWeight: "600" },
   textMatched: { color: "#0284C7" },
   textAccepted: { color: "#059669" },
-  actionButtonContainer: { marginTop: 4 },
+  actionButtonContainer: { marginTop: "auto", paddingTop: 12, paddingBottom: 8 },
   buttonButtonGroup: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
   declineButton: { width: "30%", borderWidth: 1, borderColor: "#EF4444", borderRadius: 12, paddingVertical: 14, alignItems: "center", justifyContent: "center" },
   declineButtonText: { color: "#EF4444", fontWeight: "700" },

@@ -2,26 +2,16 @@ import React, { useState } from "react";
 import {
   View,
   Text,
-  SafeAreaView,
   StyleSheet,
   TouchableOpacity,
   Button,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function PassengerJoinedPoolScreen({ route, navigation }) {
   const ride = route?.params?.ride || {};
 
   const [status, setStatus] = useState("confirmed");
-
-  const passengerLocation = {
-    latitude: 9.0222,
-    longitude: 38.7468,
-  };
-
-  const driverLocation = {
-    latitude: 9.0255,
-    longitude: 38.7425,
-  };
 
   return (
     <SafeAreaView style={styles.container}>

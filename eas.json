@@ -6,26 +6,38 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
-       "env": {
-      "EXPO_PUBLIC_API_URL": "http://3.80.214.175:5000",
-      "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.80.214.175:5000/api",
-      "EXPO_PUBLIC_SOCKET_URL": "http://3.80.214.175:5000",
-      "EXPO_PUBLIC_API_URL_SignTG": "http://3.80.214.175:5000/api"
-    }
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+      }
     },
     "production": {
-    "autoIncrement": true,
-    "android": {
-      "credentialsSource": "local"
+      "autoIncrement": true,
+      "android": {
+        "credentialsSource": "local"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+      }
     }
-  }
   },
   "submit": {
     "production": {}

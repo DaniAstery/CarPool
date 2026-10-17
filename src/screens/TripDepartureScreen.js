@@ -3,7 +3,6 @@ import {
   StyleSheet,
   View,
   Text,
-  SafeAreaView,
   Dimensions,
   ScrollView,
   BackHandler,
@@ -19,9 +18,13 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { playSound } from "../utils/soundPlayer";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
 const { width, height } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
 
 const DEFAULT_LOCATION = {
   latitude: 9.0235,
@@ -32,7 +35,7 @@ const DEFAULT_LOCATION = {
 
 // Fetch real street-level driving route from OSRM public driving router
 const fetchDrivingRoute = async (origin, destination) => {
-  if (!origin || !destination || !origin.latitude || !destination.latitude || !origin.longitude || !destination.longitude) {
+  if (!isValidMapCoordinate(origin) || !isValidMapCoordinate(destination)) {
     return [];
   }
 
@@ -87,7 +90,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
       showsCompass={false}
     >
       {/* 🟢 Passenger In-Car Current Location Marker (Physical Phone Orientation) */}
-      {!isTripFinished && currentLocation && currentLocation.latitude && (
+      {!isTripFinished && isValidMapCoordinate(currentLocation) && (
         <Marker
           coordinate={currentLocation}
           title="Your Current Location (In Car)"
@@ -105,7 +108,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
       )}
 
       {/* 🔵 Destination Hub Marker */}
-      {destinationLocation && destinationLocation.latitude && destinationLocation.longitude && (
+      {isValidMapCoordinate(destinationLocation) && (
         <Marker 
           coordinate={{ latitude: Number(destinationLocation.latitude), longitude: Number(destinationLocation.longitude) }} 
           title={destinationLocation.title || "Destination Hub"} 
@@ -137,7 +140,7 @@ export default function TripDepartureScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [tripStatus, setTripStatus] = useState("in_trip");
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
-  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
+  const [currentLocation, setCurrentLocation] = useState(null);
   const [destinationLocation, setDestinationLocation] = useState({ latitude: null, longitude: null, title: "Destination Hub" });
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [heading, setHeading] = useState(0);
@@ -260,20 +263,11 @@ export default function TripDepartureScreen({ route, navigation }) {
         if (data.success && data.coordinates && isMounted) {
           const coords = data.coordinates;
           
-          let destLat = parseFloat(coords.end_latitude);
-          let destLng = parseFloat(coords.end_longitude);
-          const startLat = parseFloat(coords.start_latitude);
-          const startLng = parseFloat(coords.start_longitude);
-
-          if (destLat > 9.10 && startLat < 9.08) {
-            destLat = startLat;
-            destLng = startLng;
-          }
-
-          if (destLat && destLng) {
+          const destination = toMapCoordinate(coords.end_latitude, coords.end_longitude);
+          if (destination) {
             setDestinationLocation({
-              latitude: destLat,
-              longitude: destLng,
+              latitude: destination.latitude,
+              longitude: destination.longitude,
               title: coords.end_hub_name || "CMC"
             });
           }
@@ -299,7 +293,7 @@ export default function TripDepartureScreen({ route, navigation }) {
   useEffect(() => {
     let isMounted = true;
     async function updateStreetRoute() {
-      if (currentLocation.latitude && destinationLocation.latitude) {
+      if (isValidMapCoordinate(currentLocation) && isValidMapCoordinate(destinationLocation)) {
         const routePoints = await fetchDrivingRoute(currentLocation, destinationLocation);
         if (isMounted && routePoints.length > 0) {
           setRouteCoordinates(routePoints);

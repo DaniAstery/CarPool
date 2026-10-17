@@ -14,10 +14,19 @@ import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer";
+import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
 
 const { width, height } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+const DEFAULT_MAP_REGION = {
+  latitude: 9.0235,
+  longitude: 38.8275,
+  latitudeDelta: 0.02,
+  longitudeDelta: 0.02,
+};
 
 const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -37,12 +46,7 @@ export default function ProposalDriver({ navigation, route }) {
   const rideOfferId = route?.params?.rideOfferId || null;
   
   const mapRef = useRef(null);
-  const [currentLocation, setCurrentLocation] = useState({
-    latitude: 9.0105,
-    longitude: 38.7935,
-    latitudeDelta: 0.015,
-    longitudeDelta: 0.015,
-  });
+  const [currentLocation, setCurrentLocation] = useState(null);
 
   const [driverAccepted, setDriverAccepted] = useState(false);
   const [offerDetails, setOfferDetails] = useState(null);
@@ -79,15 +83,15 @@ export default function ProposalDriver({ navigation, route }) {
 
   // 📍 Resolved Hub Coordinates & Names from Dedicated Endpoint
   const startCoords = {
-    latitude: parseFloat(mapHubData?.start_latitude || 9.0105),
-    longitude: parseFloat(mapHubData?.start_longitude || 38.7935),
+    ...toMapCoordinate(mapHubData?.start_latitude, mapHubData?.start_longitude),
     name: mapHubData?.start_hub_name || "Pickup Terminal"
   };
+  const hasStartLocation = isValidMapCoordinate(startCoords);
 
   const endDestinationName = mapHubData?.end_hub_name || "Destination Terminal";
 
   // Compute live distance between device GPS and pickup hub in km
-  const currentDriverDistance = currentLocation && startCoords
+  const currentDriverDistance = isValidMapCoordinate(currentLocation) && hasStartLocation
     ? getDistanceFromLatLonInKm(currentLocation.latitude, currentLocation.longitude, startCoords.latitude, startCoords.longitude)
     : null;
 
@@ -139,18 +143,18 @@ export default function ProposalDriver({ navigation, route }) {
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
         const res = await fetch(`${API_URL}/api/rides/map_coordinates?${queryParam}`);
         
-        const contentType = res.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) {
-          return;
-        }
-
         const data = await res.json();
-        if (res.ok && data.success && data.coordinates) {
+        if (!res.ok || !data.success || !data.coordinates) {
+          throw new Error(data.error || `Map coordinates request failed (${res.status}).`);
+        }
+        if (data.success && data.coordinates) {
           setMapHubData(data.coordinates);
           activeRideOfferIdRef.current = data.coordinates.ride_offer_id;
+          setNetworkError(null);
         }
       } catch (err) {
         console.error("Error fetching map coordinates:", err);
+        setNetworkError(err.message || "Could not load route hub coordinates.");
       }
     }
 
@@ -161,7 +165,7 @@ export default function ProposalDriver({ navigation, route }) {
 
   // Fetch real road path geometry from OSRM public routing API
   useEffect(() => {
-    if (!currentLocation?.latitude || !startCoords?.latitude) return;
+    if (!isValidMapCoordinate(currentLocation) || !hasStartLocation) return;
 
     async function fetchRoadPath() {
       try {
@@ -177,16 +181,11 @@ export default function ProposalDriver({ navigation, route }) {
           }));
           setRouteCoordinates(formattedCoords);
         } else {
-          setRouteCoordinates([
-            { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-            { latitude: startCoords.latitude, longitude: startCoords.latitude }
-          ]);
+          setRouteCoordinates([]);
         }
       } catch (err) {
-        setRouteCoordinates([
-          { latitude: currentLocation.latitude, longitude: currentLocation.longitude },
-          { latitude: startCoords.latitude, longitude: startCoords.latitude }
-        ]);
+        console.warn("Road route unavailable:", err.message);
+        setRouteCoordinates([]);
       }
     }
 
@@ -195,7 +194,7 @@ export default function ProposalDriver({ navigation, route }) {
 
   // Auto-fit map camera when location or pickup hub updates
   useEffect(() => {
-    if (mapRef.current && currentLocation?.latitude && startCoords?.latitude) {
+    if (mapRef.current && isValidMapCoordinate(currentLocation) && hasStartLocation) {
       const bottomPadding = isSheetCollapsed ? 150 : height * 0.45;
       mapRef.current.fitToCoordinates(
         [
@@ -463,7 +462,7 @@ export default function ProposalDriver({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "bottom", "left"]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation?.goBack()}>
           <Text style={styles.backButton}>←</Text>
@@ -485,13 +484,21 @@ export default function ProposalDriver({ navigation, route }) {
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={styles.mapView}
-          initialRegion={currentLocation}
+          initialRegion={{
+            ...(isValidMapCoordinate(currentLocation)
+              ? currentLocation
+              : hasStartLocation
+                ? startCoords
+                : DEFAULT_MAP_REGION),
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          }}
           showsUserLocation={false}
           showsMyLocationButton={false}
           showsCompass={false}
         >
           {/* 1. Driver GPS Location Marker */}
-          {currentLocation?.latitude && currentLocation?.longitude && (
+          {isValidMapCoordinate(currentLocation) && (
             <Marker coordinate={currentLocation} title="Your Vehicle Position" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
               <View style={styles.driverPinnedContainer}>
                 <View style={styles.driverPinBadge}>
@@ -507,7 +514,7 @@ export default function ProposalDriver({ navigation, route }) {
           )}
 
           {/* 2. Pickup Hub Terminal Marker */}
-          {startCoords?.latitude && startCoords?.longitude && (
+          {hasStartLocation && (
             <Marker coordinate={startCoords} title={startCoords.name} description="Assigned Pickup Hub Terminal" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
               <View style={styles.driverPinnedContainer}>
                 <View style={[styles.driverPinBadge, { backgroundColor: "#0284C7" }]}>

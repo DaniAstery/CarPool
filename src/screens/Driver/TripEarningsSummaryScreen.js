@@ -6,18 +6,20 @@ import {
   TouchableOpacity,
   ScrollView,
   BackHandler,
-  SafeAreaView,
   ActivityIndicator,
   Dimensions,
   Image,
 } from "react-native";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5, FontAwesome } from "@expo/vector-icons"; // <--- Ensure FontAwesome is included here
 import { useAuth } from "../../AuthContext";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width } = Dimensions.get("window");
 
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 export default function TripEarningsSummaryScreen({ navigation, route }) {
   // 🔐 1. AUTH & SYSTEM PARAMETERS (Aligned with your project convention)
@@ -29,6 +31,7 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
   const [tripDetails, setTripDetails] = useState({});
   const [financials, setFinancials] = useState({});
   const [passengers, setPassengers] = useState([]);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     if (driverId || rideOfferId) {
@@ -45,17 +48,23 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
         : `driver_id=${driverId}`;
         
       const response = await fetch(`${API_URL}/api/rides/TripSummary?${queryParam}`);
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        throw new Error(`Trip summary endpoint returned HTTP ${response.status}, not JSON.`);
+      }
       const data = await response.json();
 
       if (response.ok && data.success) {
         setTripDetails(data.tripDetails);
         setFinancials(data.financials);
         setPassengers(data.passengers || []);
+        setLoadError("");
       } else {
-        console.error("Failed to load trip summary:", data.error);
+        throw new Error(data.error || `Unable to load trip summary (HTTP ${response.status}).`);
       }
     } catch (error) {
       console.error("Network error fetching trip summary:", error);
+      setLoadError(error.message || "Unable to load trip earnings. Check your connection and retry.");
     } finally {
       setLoading(false);
     }
@@ -107,9 +116,18 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
           <View style={styles.payoutHighlightBox}>
             <Text style={styles.payoutLabel}>Net Driver Payout</Text>
             <Text style={styles.payoutValue}>
-              ETB {financials.netPayout !== undefined ? financials.netPayout.toFixed(2) : "0.00"}
+              ETB {Number(financials.netPayout || 0).toFixed(2)}
             </Text>
           </View>
+
+          {loadError ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{loadError}</Text>
+              <TouchableOpacity onPress={fetchTripSummary} accessibilityRole="button">
+                <Text style={styles.retryText}>RETRY</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           <View style={styles.ledgerRow}>
             <Text style={styles.ledgerRowLabel}>Total Passengers</Text>
@@ -119,19 +137,19 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
 
           <View style={styles.ledgerRow}>
             <Text style={styles.ledgerRowLabel}>Price Per Seat</Text>
-            <Text style={styles.ledgerRowValue}>ETB {financials.pricePerSeat ? financials.pricePerSeat.toFixed(2) : "0.00"}</Text>
+            <Text style={styles.ledgerRowValue}>ETB {Number(financials.pricePerSeat || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.divider} />
 
           <View style={styles.ledgerRow}>
             <Text style={styles.ledgerRowLabel}>Gross Earnings</Text>
-            <Text style={styles.ledgerRowValue}>ETB {financials.grossEarnings !== undefined ? financials.grossEarnings.toFixed(2) : "0.00"}</Text>
+            <Text style={styles.ledgerRowValue}>ETB {Number(financials.grossEarnings || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.divider} />
 
           <View style={styles.ledgerRow}>
             <Text style={styles.ledgerRowLabel}>Platform Fee (10%)</Text>
-            <Text style={styles.platformFeeValue}>- ETB {financials.platformFee !== undefined ? financials.platformFee.toFixed(2) : "0.00"}</Text>
+            <Text style={styles.platformFeeValue}>- ETB {Number(financials.platformFee || 0).toFixed(2)}</Text>
           </View>
         </View>
 
@@ -252,6 +270,9 @@ const styles = StyleSheet.create({
   payoutHighlightBox: { backgroundColor: "#EFF6FF", borderRadius: 10, padding: 14, alignItems: "center", marginBottom: 14, borderWidth: 1, borderColor: "#BFDBFE" },
   payoutLabel: { fontSize: 11, fontWeight: "700", color: "#1E40AF", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
   payoutValue: { fontSize: 24, fontWeight: "900", color: "#1E3A8A" },
+  errorBox: { backgroundColor: "#FEF2F2", borderColor: "#FECACA", borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 12 },
+  errorText: { color: "#991B1B", fontSize: 12, marginBottom: 6 },
+  retryText: { color: "#1D4ED8", fontWeight: "800", fontSize: 12 },
   
   ledgerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8 },
   ledgerRowLabel: { fontSize: 13, color: "#475569", fontWeight: "500" },

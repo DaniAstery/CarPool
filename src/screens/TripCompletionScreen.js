@@ -1,21 +1,56 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Dimensions,
   TouchableOpacity,
   ScrollView,
 } from "react-native";
 import MapView, { PROVIDER_GOOGLE, Marker } from "react-native-maps";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { toMapCoordinate } from "../utils/mapCoordinates";
 
 const { width } = Dimensions.get("window");
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 export default function TripCompletionScreen({ navigation, route }) {
-  // Final Drop-off Node (Bole Terminal Area)
-  const destinationLocation = { latitude: 8.9985, longitude: 38.7855 };
+  const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id;
+  const [destinationLocation, setDestinationLocation] = useState(() =>
+    toMapCoordinate(route?.params?.destination_lat, route?.params?.destination_lng)
+  );
+  const [destinationName, setDestinationName] = useState(route?.params?.destinationName || "Destination hub");
+
+  useEffect(() => {
+    if (!rideOfferId) return;
+    let isMounted = true;
+
+    async function fetchDestinationHub() {
+      try {
+        const response = await fetch(`${API_URL}/api/rides/map_coordinates?ride_offer_id=${rideOfferId}`);
+        const data = await response.json();
+        if (!response.ok || !data.success || !data.coordinates) {
+          throw new Error(data.error || `Destination lookup failed (${response.status}).`);
+        }
+        const coordinate = toMapCoordinate(data.coordinates.end_latitude, data.coordinates.end_longitude);
+        if (!coordinate) throw new Error("The route has no valid destination hub coordinates.");
+        if (isMounted) {
+          setDestinationLocation(coordinate);
+          setDestinationName(data.coordinates.end_hub_name || "Destination hub");
+        }
+      } catch (error) {
+        console.error("Failed to resolve completed-trip destination:", error);
+      }
+    }
+
+    fetchDestinationHub();
+    return () => {
+      isMounted = false;
+    };
+  }, [rideOfferId]);
 
   // Local interactive rating states
   const [driverRating, setDriverRating] = useState(0);
@@ -46,8 +81,8 @@ export default function TripCompletionScreen({ navigation, route }) {
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
           initialRegion={{
-            latitude: destinationLocation.latitude,
-            longitude: destinationLocation.longitude,
+            latitude: destinationLocation?.latitude ?? 9.0235,
+            longitude: destinationLocation?.longitude ?? 38.8275,
             latitudeDelta: 0.006,
             longitudeDelta: 0.006,
           }}
@@ -56,11 +91,11 @@ export default function TripCompletionScreen({ navigation, route }) {
           zoomEnabled={false}
         >
           {/* Static Destination Pin */}
-          <Marker coordinate={destinationLocation}>
+          {destinationLocation && <Marker coordinate={destinationLocation} title={destinationName}>
             <View style={styles.destinationMarkerPin}>
               <Ionicons name="location" size={16} color="#FFFFFF" />
             </View>
-          </Marker>
+          </Marker>}
         </MapView>
       </View>
 

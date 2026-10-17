@@ -7,6 +7,7 @@ import {
   Dimensions,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import MapView, { PROVIDER_GOOGLE, Marker, Polyline } from "react-native-maps";
@@ -15,13 +16,29 @@ import * as Location from "expo-location";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer"; // 👈 Sound Player imported
+import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
 
 const { width, height } = Dimensions.get("window");
 
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+const DEFAULT_MAP_REGION = {
+  latitude: 9.0235,
+  longitude: 38.8275,
+  latitudeDelta: 0.02,
+  longitudeDelta: 0.02,
+};
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://98.89.38.224:5000/api";
-
-const GOOGLE_MAPS_API_KEY = "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao";
+const parsePassengerIds = (value) => {
+  const ids = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.replace(/[{}\[\]]/g, "").split(",")
+      : [];
+  return ids.map((id) => parseInt(id, 10)).filter(Number.isInteger);
+};
 
 const getDistanceFromLatLonInKm = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -60,8 +77,8 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
       provider={PROVIDER_GOOGLE}
       style={StyleSheet.absoluteFillObject}
       initialRegion={{
-        latitude: driverLocation?.latitude || 9.0105,
-        longitude: driverLocation?.longitude || 38.7935,
+        latitude: driverLocation?.latitude ?? pickupLocation?.latitude ?? DEFAULT_MAP_REGION.latitude,
+        longitude: driverLocation?.longitude ?? pickupLocation?.longitude ?? DEFAULT_MAP_REGION.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
       }}
@@ -70,7 +87,7 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
       showsCompass={false}
     >
       {/* 🟢 1. Driver Current Location Marker */}
-      {driverLocation && driverLocation.latitude && (
+      {isValidMapCoordinate(driverLocation) && (
         <Marker
           coordinate={driverLocation}
           title="Your Vehicle Position"
@@ -89,7 +106,7 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
       )}
 
       {/* 🔵 2. Destination / Pickup Hub Marker */}
-      {pickupLocation?.latitude && pickupLocation?.longitude && (
+      {isValidMapCoordinate(pickupLocation) && (
         <Marker
           coordinate={pickupLocation}
           title={pickupLocation.name}
@@ -104,7 +121,7 @@ const DriverNavigationMap = memo(({ driverLocation, pickupLocation, heading, rou
       )}
 
       {/* 🛣️ Realistic Road Route Line (MapViewDirections) */}
-      {driverLocation && pickupLocation?.latitude && (
+      {GOOGLE_MAPS_API_KEY && isValidMapCoordinate(driverLocation) && isValidMapCoordinate(pickupLocation) && (
         <MapViewDirections
           origin={driverLocation}
           destination={pickupLocation}
@@ -123,9 +140,9 @@ export default function NavigateToPickup({ navigation, route }) {
   // 🔐 1. AUTH & SYSTEM PARAMETERS
   const { user } = useAuth();
   const currentDriverId =
-    route?.params?.driverId || user?.id || user?.driver_id || 10;
+    route?.params?.driverId || user?.id || user?.driver_id;
   const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id || null;
-  const routeId = route?.params?.routeId || route?.params?.route_id || "1";
+  const routeId = route?.params?.routeId || route?.params?.route_id || null;
 
   // 📍 2. STATE MATRIX
   const mapRef = useRef(null);
@@ -145,13 +162,13 @@ export default function NavigateToPickup({ navigation, route }) {
 
   // 📍 Resolved Hub Coordinates & Name from Dedicated /api/rides/map_coordinates Endpoint
   const pickupLocation = {
-    latitude: parseFloat(mapHubData?.start_latitude || 9.0105),
-    longitude: parseFloat(mapHubData?.start_longitude || 38.7935),
+    ...toMapCoordinate(mapHubData?.start_latitude, mapHubData?.start_longitude),
     name: mapHubData?.start_hub_name || "Pickup Terminal"
   };
+  const hasPickupLocation = isValidMapCoordinate(pickupLocation);
 
   // Compute live distance between device GPS and pickup hub in km
-  const currentDriverDistance = driverLocation && pickupLocation
+  const currentDriverDistance = isValidMapCoordinate(driverLocation) && hasPickupLocation
     ? getDistanceFromLatLonInKm(driverLocation.latitude, driverLocation.longitude, pickupLocation.latitude, pickupLocation.longitude)
     : null;
 
@@ -215,41 +232,50 @@ export default function NavigateToPickup({ navigation, route }) {
   // 🗺️ 4. FETCH MAP COORDINATES & HUB DATA FROM DEDICATED ENDPOINT
   useEffect(() => {
     if (!currentDriverId) return;
+    let isMounted = true;
 
     async function fetchMapCoordinates() {
       try {
         const queryParam = rideOfferId ? `ride_offer_id=${rideOfferId}` : `driver_id=${currentDriverId}`;
         const res = await fetch(`${API_URL}/api/rides/map_coordinates?${queryParam}`);
-        
-        const contentType = res.headers.get("content-type");
-        if (!contentType || !contentType.includes("application/json")) {
-          return;
-        }
-
         const data = await res.json();
-        if (res.ok && data.success && data.coordinates) {
+        if (!res.ok || !data.success || !data.coordinates) {
+          throw new Error(data.error || `Map coordinates request failed (${res.status}).`);
+        }
+        if (isMounted) {
           setMapHubData(data.coordinates);
+          setNetworkError(null);
         }
       } catch (err) {
         console.error("Error fetching map coordinates:", err);
+        if (isMounted) setNetworkError(err.message || "Could not load route hub coordinates.");
       }
     }
 
     fetchMapCoordinates();
     const interval = setInterval(fetchMapCoordinates, 4000);
-    return () => clearInterval(interval);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [currentDriverId, rideOfferId]);
 
   // 🔄 5. PASSENGER MANIFEST & STATUS POLLING
   useEffect(() => {
+    let isMounted = true;
+    let isSyncing = false;
+
     async function syncRideManifest() {
+      if (!currentDriverId || isSyncing) return;
+      isSyncing = true;
       try {
         const url = `${API_URL}/api/rides/driver-cluster-offer/${currentDriverId}`;
         const res = await fetch(url);
 
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`Passenger manifest request failed (${res.status}).`);
 
         const data = await res.json();
+        if (!isMounted) return;
         setNetworkError(null);
 
         if (!data) return;
@@ -257,78 +283,80 @@ export default function NavigateToPickup({ navigation, route }) {
         setOfferDetails(data);
 
         const currentStatus = data.status ? data.status.toString().trim().toLowerCase() : "";
-        if (currentStatus === "arrived" || currentStatus === "inprogress") {
+        if (["arrived", "in_trip", "inprogress"].includes(currentStatus)) {
           setHasArrived(true);
         }
 
-        let cleanArrivedIds = [];
-        if (data.arrived_passengers) {
-          if (Array.isArray(data.arrived_passengers)) {
-            cleanArrivedIds = data.arrived_passengers.map((id) => parseInt(id, 10));
-          } else if (typeof data.arrived_passengers === "string") {
-            cleanArrivedIds = data.arrived_passengers
-              .replace(/[{}]/g, "")
-              .split(",")
-              .map((id) => parseInt(id.trim(), 10))
-              .filter((id) => !isNaN(id));
-          }
-        }
+        const arrivedIds = new Set(parsePassengerIds(data.arrived_passengers));
+        const acceptedIds = new Set(parsePassengerIds(data.accepted_passengers));
+        const rawPassengers = Array.isArray(data.passengers)
+          ? data.passengers
+          : Array.isArray(data.route_pool_passengers)
+            ? data.route_pool_passengers
+            : typeof data.route_pool_passengers === "string"
+              ? JSON.parse(data.route_pool_passengers)
+              : [];
+        const rosterById = new Map();
 
-        let rawPassengers = [];
-        if (Array.isArray(data.passengers)) {
-          rawPassengers = data.passengers;
-        } else if (Array.isArray(data.route_pool_passengers)) {
-          rawPassengers = data.route_pool_passengers;
-        } else if (typeof data.route_pool_passengers === "string") {
-          try {
-            rawPassengers = JSON.parse(data.route_pool_passengers);
-          } catch (e) {
-            rawPassengers = [];
-          }
-        }
-
-        const unifiedRoster = rawPassengers.map((rider) => {
-          const userId = parseInt(rider.user_id || rider.id, 10);
-          
-          let rawDbStatus = rider?.status
-            ? rider.status.toString().trim().toLowerCase()
-            : "accepted";
-
-          let finalStatus =
-            cleanArrivedIds.includes(userId) || rawDbStatus === "arrived"
-              ? "arrived"
-              : rawDbStatus;
-
-          // 🎵 Play Sound 5 the exact moment a passenger status shifts to arrived
-          if (finalStatus === "arrived" && !arrivedSoundPlayedRef.current.has(userId)) {
-            arrivedSoundPlayedRef.current.add(userId);
-            playSound("5");
-          }
-
-          const passengerName =
-            rider?.passenger_name ||
-            rider?.full_name ||
-            rider?.name ||
-            `Passenger ${userId}`;
-
-          return {
+        rawPassengers.forEach((rider) => {
+          const userId = parseInt(rider?.user_id ?? rider?.userId ?? rider?.id, 10);
+          if (!Number.isInteger(userId)) return;
+          const dbStatus = String(rider.status || "").trim().toLowerCase();
+          const status = arrivedIds.has(userId) || ["arrived", "in_trip", "completed"].includes(dbStatus)
+            ? "arrived"
+            : acceptedIds.has(userId) || ["accepted", "confirmed"].includes(dbStatus)
+              ? "accepted"
+              : dbStatus || "matched";
+          const current = rosterById.get(userId);
+          rosterById.set(userId, {
             user_id: userId,
-            status: finalStatus,
-            name: passengerName,
-            phone_number: rider.phone_number,
-          };
+            status: current?.status === "arrived" || status === "arrived"
+              ? "arrived"
+              : current?.status === "accepted" || status === "accepted"
+                ? "accepted"
+                : status,
+            name: rider.passenger_name || rider.full_name || rider.name || current?.name || `Passenger ${userId}`,
+            phone_number: rider.phone_number || current?.phone_number,
+          });
         });
 
+        acceptedIds.forEach((userId) => {
+          if (!rosterById.has(userId)) {
+            rosterById.set(userId, { user_id: userId, status: "accepted", name: `Passenger ${userId}` });
+          }
+        });
+        arrivedIds.forEach((userId) => {
+          const passenger = rosterById.get(userId);
+          rosterById.set(userId, {
+            ...passenger,
+            user_id: userId,
+            status: "arrived",
+            name: passenger?.name || `Passenger ${userId}`,
+          });
+        });
+
+        const unifiedRoster = Array.from(rosterById.values());
+        unifiedRoster.forEach((passenger) => {
+          if (passenger.status === "arrived" && !arrivedSoundPlayedRef.current.has(passenger.user_id)) {
+            arrivedSoundPlayedRef.current.add(passenger.user_id);
+            playSound("5");
+          }
+        });
         setPoolPassengers(unifiedRoster);
       } catch (err) {
         console.error("❌ [Manifest Sync] Connection Error:", err.message);
-        setNetworkError(`Cannot connect to host: ${API_URL}`);
+        if (isMounted) setNetworkError(err.message || `Cannot connect to host: ${API_URL}`);
+      } finally {
+        isSyncing = false;
       }
     }
 
     syncRideManifest();
     const pollInterval = setInterval(syncRideManifest, 4000);
-    return () => clearInterval(pollInterval);
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+    };
   }, [currentDriverId]);
 
   // 🎯 6. ACTION HANDLERS (Arrival & Trip Start)
@@ -340,6 +368,7 @@ export default function NavigateToPickup({ navigation, route }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           driver_id: currentDriverId,
+          ride_offer_id: rideOfferId,
         }),
       });
 
@@ -370,6 +399,7 @@ export default function NavigateToPickup({ navigation, route }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           driver_id: currentDriverId,
+          ride_offer_id: rideOfferId,
         }),
       });
 
@@ -438,7 +468,7 @@ export default function NavigateToPickup({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "bottom", "left"]}>
       {/* HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation?.goBack()}>
@@ -478,6 +508,13 @@ export default function NavigateToPickup({ navigation, route }) {
             });
           }}
         />
+
+        {!hasPickupLocation && (
+          <View style={styles.mapResolutionBanner}>
+            <ActivityIndicator size="small" color="#059669" />
+            <Text style={styles.mapResolutionText}>Resolving the route pickup hub…</Text>
+          </View>
+        )}
 
         {/* 📏 Distance Banner */}
         {currentDriverDistance !== null && (
@@ -521,7 +558,7 @@ export default function NavigateToPickup({ navigation, route }) {
             </View>
             <View style={styles.locationTextWrapper}>
               <Text style={styles.locationTitle}>
-                {pickupLocation.name}
+                {hasPickupLocation ? pickupLocation.name : "Resolving pickup hub…"}
               </Text>
               <Text style={styles.locationSubtitle}>
                 {hasArrived
@@ -532,7 +569,7 @@ export default function NavigateToPickup({ navigation, route }) {
           </View>
 
           {/* ROSTER MANIFEST TABLE */}
-          <Text style={styles.sectionHeading}>{`Confirmed Manifest (${poolPassengers.length} Passengers)`}</Text>
+          <Text style={styles.sectionHeading}>{`Passenger Manifest (${poolPassengers.length})`}</Text>
           <View style={styles.statusTable}>
             {poolPassengers.length === 0 ? (
               <View style={{ paddingVertical: 12, alignItems: "center" }}>
@@ -598,6 +635,8 @@ const styles = StyleSheet.create({
   errorBanner: { flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: "#EF4444", paddingVertical: 6, paddingHorizontal: 12 },
   errorBannerText: { color: "#FFFFFF", fontSize: 11, fontWeight: "600", marginLeft: 6, textAlign: "center" },
   mapContainer: { flex: 1 },
+  mapResolutionBanner: { position: "absolute", top: 64, alignSelf: "center", flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 18, elevation: 3 },
+  mapResolutionText: { marginLeft: 8, color: "#334155", fontSize: 12, fontWeight: "600" },
   emeraldCarWrapper: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
   emeraldCarInnerBubble: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, elevation: 4 },
   royalBlueDestinationHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },

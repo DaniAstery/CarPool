@@ -18,8 +18,8 @@ import { useAuth } from "../AuthContext";
 
 const { width, height } = Dimensions.get("window");
 const API_URL_PASSENGER =
-  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://100.108.52.79:5000/api";
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://100.108.52.79:5000";
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
+const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
 
 export default function CorridorDrawer({
   visible,

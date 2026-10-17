@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { AppState, View, Text, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from "react-native";
 import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as Location from "expo-location";
 import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from "expo-av";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
 // 🔐 AUTH & CONTEXT
 import { AuthProvider, useAuth } from "./src/AuthContext";
@@ -34,7 +35,166 @@ import TrackingDriverScreen from "./src/screens/TrackingDriverScreen";
 import DriverStandardTripInProgress from "./src/screens/Driver/DriverStandardTripInProgress";
 
 const Stack = createNativeStackNavigator();
-const API_URL = "http://100.108.52.79:5000";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+
+async function fetchRecoveryJson(path) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${API_URL}${path}`, { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function resolveLifecycleRoute(user, { includeCompleted = true } = {}) {
+  const userId = user?.id || user?.user_id;
+  if (!userId) return null;
+  const role = String(user.role || "passenger").toLowerCase().trim();
+  const isDriver = role === "driver";
+
+  if (isDriver) {
+    const proposal = await fetchRecoveryJson(`/api/rides/driver-proposal/${userId}`);
+    if (proposal?.hasActiveProposal && proposal.id) {
+      const status = String(proposal.status || "").toLowerCase().trim();
+      const acceptedCount = Array.isArray(proposal.accepted_passengers)
+        ? proposal.accepted_passengers.length
+        : 0;
+      const passengerCount = Math.max(
+        acceptedCount,
+        Array.isArray(proposal.passengers) ? proposal.passengers.length : 0
+      );
+      const commonParams = {
+        driverId: userId,
+        rideOfferId: proposal.ride_offer_id || proposal.id,
+        ride_offer_id: proposal.ride_offer_id || proposal.id,
+        routeId: proposal.route_id,
+        route_id: proposal.route_id,
+      };
+
+      if (["in_trip", "inprogress", "intransit"].includes(status)) {
+        return { name: "TripInProgress", params: commonParams };
+      }
+      if (["accepted", "arrived", "heading_to_pickup"].includes(status)) {
+        return { name: "NavigateToPickup", params: commonParams };
+      }
+      if (["pending", "proposed", "matched"].includes(status)) {
+        return {
+          name: passengerCount >= 2 ? "WaitingForAcceptance" : "WaitingForRiders",
+          params: {
+            ...commonParams,
+            ride: {
+              id: proposal.id,
+              total_seats: proposal.total_seats,
+              filled: passengerCount,
+            },
+          },
+        };
+      }
+    }
+
+    const driverSession = await fetchRecoveryJson(`/api/rides/driver-active-session/${userId}`);
+    if (driverSession?.hasActiveSession && driverSession.rideOfferId) {
+      const status = String(driverSession.status || "").toLowerCase().trim();
+      const params = {
+        driverId: userId,
+        rideOfferId: driverSession.rideOfferId,
+        ride_offer_id: driverSession.rideOfferId,
+        routeId: driverSession.routeId,
+        route_id: driverSession.routeId,
+      };
+      if (includeCompleted && status === "completed") {
+        return { name: "TripEarningsSummary", params };
+      }
+      if (["in_trip", "inprogress", "intransit"].includes(status)) {
+        return { name: "TripInProgress", params };
+      }
+      if (["accepted", "arrived", "heading_to_pickup"].includes(status)) {
+        return { name: "NavigateToPickup", params };
+      }
+      if (["pending", "proposed", "matched"].includes(status)) {
+        return { name: "WaitingForRiders", params };
+      }
+    }
+  }
+
+  if (!isDriver) {
+    const poolSession = await fetchRecoveryJson(`/passenger/status/${userId}`);
+    const poolStatus = String(poolSession?.status || "").toLowerCase().trim();
+    const rideOfferId = poolSession?.matched_ride_offer_id || null;
+    const routeId = poolSession?.routeId || null;
+
+    if (poolStatus && !["idle", "cancelled", "expired"].includes(poolStatus)) {
+      const params = {
+        userId,
+        rideOfferId,
+        ride_offer_id: rideOfferId,
+        routeId,
+        route_id: routeId,
+        poolId: poolSession.poolId,
+        poolStatus,
+      };
+      if (["in_trip", "inprogress", "started"].includes(poolStatus)) {
+        return { name: "TripDeparture", params };
+      }
+      if (includeCompleted && poolStatus === "completed") {
+        return { name: "TripDeparture", params };
+      }
+      if (["accepted", "arrived"].includes(poolStatus)) {
+        return { name: "LiveTracking", params };
+      }
+      if (["matched", "assigned", "accepted_proposal", "proposed"].includes(poolStatus)) {
+        return { name: "PickupProposal", params };
+      }
+      if (["searching", "pending", "active", "joined"].includes(poolStatus)) {
+        return { name: "MatchingScreen", params };
+      }
+    }
+  }
+
+  const soloSession = await fetchRecoveryJson(
+    `/api/rides/solo/recovery/${userId}?role=${isDriver ? "driver" : "passenger"}&include_completed=${includeCompleted}`
+  );
+  const soloRide = soloSession?.ride;
+  if (soloSession?.success && soloRide?.id) {
+    const status = String(soloRide.status || "").toLowerCase().trim();
+    if (isDriver) {
+      const params = {
+        rideId: soloRide.id,
+        ride: soloRide,
+        driverId: userId,
+        passengerId: soloRide.user_id,
+      };
+      if (["in_trip", "intransit"].includes(status)) {
+        return { name: "DriverStandardTripInProgress", params };
+      }
+      if (["accepted", "arrived", "heading_to_pickup"].includes(status)) {
+        return { name: "DriverEnRoute", params };
+      }
+    } else {
+      const params = {
+        rideId: soloRide.id,
+        standardRequestId: soloRide.id,
+        userId,
+        initialStatus: status,
+        ride: soloRide,
+      };
+      if (["accepted", "arrived", "in_trip", "intransit", "completed"].includes(status)) {
+        return { name: "TrackingDriver", params };
+      }
+      if (["pending", "searching"].includes(status)) {
+        return { name: "Standard", params };
+      }
+    }
+  }
+
+  if (isDriver) return null;
+  return null;
+}
 
 // 📍 GLOBAL NAVIGATION REF
 export const navigationRef = createNavigationContainerRef();
@@ -43,103 +203,40 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
   const { user, isLoading } = useAuth();
   const [initialNavState, setInitialNavState] = useState(null);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
+  const recoveryInFlightRef = useRef(false);
 
-  // 🚪 CENTRALIZED SESSION RECOVERY GATEKEEPER (Debugged Version)
+  // Resolve server lifecycle state before creating the first authenticated screen.
   useEffect(() => {
     let isMounted = true;
 
-    async function restoreActivePassengerSession() {
-      console.log("🔍 [DEBUG APP] restoreActivePassengerSession triggered. User object:", user);
-
-      if (!user || user.role === "driver" || !user.id) {
-        console.log("⚠️ [DEBUG APP] Bypassing session check because user is missing, driver, or lacks an ID.");
-        if (isMounted) {
-          setInitialNavState({
-            index: 0,
-            routes: [{ name: user?.role === "driver" ? "CreateCorridor" : "Passenger", params: { userId: user?.id } }]
-          });
-          setIsRestoringSession(false);
-        }
-        return;
-      }
-
+    async function restoreLifecycle() {
       try {
-        const fetchUrl = `${API_URL}/passenger/status/${user.id}`;
-        console.log(`🔍 [DEBUG APP] Fetching status from: ${fetchUrl}`);
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-        const statusRes = await fetch(fetchUrl, {
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        
-        console.log(`📡 [DEBUG APP] Status HTTP Response Code: ${statusRes.status}`);
-
-        if (!statusRes.ok) {
-          throw new Error(`Status check failed with code ${statusRes.status}`);
-        }
-
-        const statusData = await statusRes.json();
-        console.log(`📦 [DEBUG APP] Raw status payload received from server:`, JSON.stringify(statusData, null, 2));
-
-        if (!isMounted) return;
-
-        const rawStatus = statusData.status || "idle";
-        const normalizedStatus = String(rawStatus).toLowerCase().trim();
-        
-        const targetRideOfferId = statusData.matched_ride_offer_id || null;
-        const targetRouteId = statusData.routeId || null;
-        const targetPoolId = statusData.poolId || null;
-
-        console.log(`🧭 [DEBUG APP] Parsed -> normalizedStatus: "${normalizedStatus}" | targetRideOfferId: ${targetRideOfferId}`);
-
-        const isStaleStatus = ["idle", "completed", "cancelled", "expired"].includes(normalizedStatus);
-        console.log(`🧐 [DEBUG APP] Is status considered stale/inactive? ${isStaleStatus}`);
-
-        if (!isStaleStatus && normalizedStatus) {
-          let targetScreen = "Passenger";
-
-          if (["searching", "pending", "active", "joined"].includes(normalizedStatus)) {
-            targetScreen = "MatchingScreen";
-          } else if (["matched", "assigned", "accepted_proposal"].includes(normalizedStatus)) {
-            targetScreen = "PickupProposal";
-          } else if (["accepted", "arrived"].includes(normalizedStatus)) {
-            targetScreen = "LiveTracking";
-          } else if (["in_trip", "inprogress", "started"].includes(normalizedStatus) || targetRideOfferId) {
-            targetScreen = "TripDeparture";
-          }
-
-          console.log(`🚀 [DEBUG APP] Final routing decision -> Target Screen: ${targetScreen}`);
-
+        const destination = await resolveLifecycleRoute(user);
+        if (isMounted) {
+          const defaultScreen = !user
+            ? "Registration"
+            : user.role === "driver"
+              ? "CreateCorridor"
+              : "Passenger";
           setInitialNavState({
             index: 0,
             routes: [{
-              name: targetScreen,
-              params: {
-                routeId: targetRouteId,
-                rideOfferId: targetRideOfferId,
-                ride_offer_id: targetRideOfferId,
-                userId: user.id,
-                poolId: targetPoolId,
-                poolStatus: normalizedStatus
-              }
-            }]
-          });
-        } else {
-          console.log(`🛑 [DEBUG APP] Status is stale or idle ("${normalizedStatus}"). Falling back to Passenger screen.`);
-          setInitialNavState({
-            index: 0,
-            routes: [{ name: "Passenger", params: { userId: user.id } }]
+              name: destination?.name || defaultScreen,
+              params: destination?.params || { userId: user?.id || user?.user_id },
+            }],
           });
         }
       } catch (err) {
-        console.warn("⚠️ [DEBUG APP] Session recovery caught error/timeout:", err.message);
+        console.warn("Lifecycle recovery unavailable during startup:", err.message);
         if (isMounted) {
+          const defaultScreen = !user
+            ? "Registration"
+            : user.role === "driver"
+              ? "CreateCorridor"
+              : "Passenger";
           setInitialNavState({
             index: 0,
-            routes: [{ name: "Passenger", params: { userId: user?.id } }]
+            routes: [{ name: defaultScreen, params: { userId: user?.id || user?.user_id } }]
           });
         }
       } finally {
@@ -150,11 +247,73 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
     }
 
     if (!isLoading) {
-      restoreActivePassengerSession();
+      restoreLifecycle();
     }
 
     return () => { isMounted = false; };
   }, [user, isLoading]);
+
+  // Re-check on foreground and periodically so a temporary connection loss does
+  // not leave the driver or passenger stranded on a stale lifecycle screen.
+  useEffect(() => {
+    if (isLoading || isRestoringSession || !(user?.id || user?.user_id)) return undefined;
+
+    let isMounted = true;
+    let timerId;
+    let appIsActive = AppState.currentState === "active";
+
+    const checkLifecycle = async () => {
+      if (!isMounted || !appIsActive || recoveryInFlightRef.current || !navigationRef.isReady()) return;
+      recoveryInFlightRef.current = true;
+      try {
+        const currentRoute = navigationRef.getCurrentRoute();
+        const includeCompleted = ["TripInProgress", "TripDeparture", "TrackingDriver"].includes(currentRoute?.name);
+        const destination = await resolveLifecycleRoute(user, { includeCompleted });
+        if (!isMounted || !destination || !navigationRef.isReady()) return;
+
+        const currentParams = currentRoute?.params || {};
+        const currentRideId =
+          currentParams.rideOfferId ||
+          currentParams.ride_offer_id ||
+          currentParams.rideId ||
+          currentParams.standardRequestId;
+        const destinationRideId =
+          destination.params?.rideOfferId ||
+          destination.params?.ride_offer_id ||
+          destination.params?.rideId ||
+          destination.params?.standardRequestId;
+
+        if (currentRoute?.name !== destination.name || String(currentRideId || "") !== String(destinationRideId || "")) {
+          navigationRef.resetRoot({
+            index: 0,
+            routes: [{ name: destination.name, params: destination.params }],
+          });
+        }
+      } catch (err) {
+        console.warn("Lifecycle recovery check failed; will retry:", err.message);
+      } finally {
+        recoveryInFlightRef.current = false;
+        if (isMounted) timerId = setTimeout(checkLifecycle, 8000);
+      }
+    };
+
+    const appStateSubscription = AppState.addEventListener("change", (nextState) => {
+      const wasActive = appIsActive;
+      appIsActive = nextState === "active";
+      if (appIsActive && !wasActive) {
+        if (timerId) clearTimeout(timerId);
+        checkLifecycle();
+      }
+    });
+
+    const readyTimer = setTimeout(checkLifecycle, 1000);
+    return () => {
+      isMounted = false;
+      clearTimeout(readyTimer);
+      clearTimeout(timerId);
+      appStateSubscription.remove();
+    };
+  }, [isLoading, isRestoringSession, user]);
 
   // 1. Prevent screen flash while reading storage or restoring session
   if (isLoading || isRestoringSession) {
@@ -262,12 +421,14 @@ export default function App() {
   }, []);
 
   return (
-    <AuthProvider>
-      <AppNavigator 
-        hasLocationPermission={hasLocationPermission} 
-        requestLocationPermission={requestLocationPermission} 
-      />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <AppNavigator
+          hasLocationPermission={hasLocationPermission}
+          requestLocationPermission={requestLocationPermission}
+        />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 
