@@ -51,6 +51,19 @@ async function fetchRecoveryJson(path) {
   }
 }
 
+function getPoolPassengerCount(poolSession) {
+  const passengers = Array.isArray(poolSession?.passengers) ? poolSession.passengers : null;
+  if (passengers) {
+    const passengerIds = new Set(
+      passengers
+        .map((passenger) => Number(passenger?.user_id ?? passenger?.userId))
+        .filter((passengerId) => Number.isInteger(passengerId) && passengerId > 0)
+    );
+    return passengerIds.size;
+  }
+  return Number(poolSession?.currentPoolCount ?? poolSession?.pool_count ?? 0) || 0;
+}
+
 async function resolveLifecycleRoute(user, { includeCompleted = true } = {}) {
   const userId = user?.id || user?.user_id;
   if (!userId) return null;
@@ -123,10 +136,14 @@ async function resolveLifecycleRoute(user, { includeCompleted = true } = {}) {
   }
 
   if (!isDriver) {
-    const poolSession = await fetchRecoveryJson(`/passenger/status/${userId}`);
+    const poolSession =
+      (await fetchRecoveryJson(`/api/routes/status/${userId}`)) ||
+      (await fetchRecoveryJson(`/passenger/status/${userId}`));
     const poolStatus = String(poolSession?.status || "").toLowerCase().trim();
     const rideOfferId = poolSession?.matched_ride_offer_id || null;
     const routeId = poolSession?.routeId || null;
+    const passengerCount = getPoolPassengerCount(poolSession);
+    const rideStatus = String(poolSession?.rideStatus || "").toLowerCase().trim();
 
     if (poolStatus && !["idle", "cancelled", "expired"].includes(poolStatus)) {
       const params = {
@@ -137,20 +154,34 @@ async function resolveLifecycleRoute(user, { includeCompleted = true } = {}) {
         route_id: routeId,
         poolId: poolSession.poolId,
         poolStatus,
+        currentPoolCount: passengerCount,
       };
-      if (["in_trip", "inprogress", "started"].includes(poolStatus)) {
+      if (
+        ["in_trip", "inprogress", "started"].includes(poolStatus) ||
+        ["departed", "started", "inprogress", "in_trip"].includes(rideStatus)
+      ) {
         return { name: "TripDeparture", params };
       }
       if (includeCompleted && poolStatus === "completed") {
         return { name: "TripDeparture", params };
       }
-      if (["accepted", "arrived"].includes(poolStatus)) {
+      const passengerAccepted = ["accepted", "arrived"].includes(poolStatus);
+      const driverAccepted = ["accepted", "arrived"].includes(rideStatus);
+      if (passengerAccepted && driverAccepted) {
         return { name: "LiveTracking", params };
       }
-      if (["matched", "assigned", "accepted_proposal", "proposed"].includes(poolStatus)) {
+      if (
+        rideOfferId &&
+        (
+          passengerCount >= 2 ||
+          passengerAccepted
+        )
+      ) {
         return { name: "PickupProposal", params };
       }
-      if (["searching", "pending", "active", "joined"].includes(poolStatus)) {
+      if (
+        ["searching", "pending", "active", "joined", "matched", "assigned", "accepted_proposal", "proposed"].includes(poolStatus)
+      ) {
         return { name: "MatchingScreen", params };
       }
     }

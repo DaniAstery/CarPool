@@ -26,11 +26,17 @@ import { playSound } from "../utils/soundPlayer";
 import { useLocationPinger } from '../hooks/useLocationPinger';
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER ||
+  process.env.EXPO_PUBLIC_API_URL ||
+  "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = (process.env.EXPO_PUBLIC_SOCKET_URL || API_URL)
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 const socket = io(SOCKET_URL, {
-  transports: ['websocket'],
   autoConnect: true,
+  reconnection: true,
 });
 
 // 🔑 Insert your Google Cloud Maps API key or EXPO_PUBLIC variable here
@@ -53,39 +59,24 @@ const getDynamicSeatPrice = (route, activePaxCount) => {
   }
 };
 
-// Calculate remaining countdown seconds for matched corridors
-const getRemainingSeconds = (route) => {
-  if (!route.matched_at && !route.match_expires_at) return 0;
-  
-  const expiryTime = route.match_expires_at 
-    ? new Date(route.match_expires_at).getTime() 
-    : new Date(route.matched_at).getTime() + (3 * 60 * 1000);
-
-  const seconds = Math.floor((expiryTime - Date.now()) / 1000);
-  return seconds > 0 ? seconds : 0;
-};
-
-// Format seconds to MM:SS
-const formatCountdown = (seconds) => {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-};
-
 export default function PassengerScreen({ navigation }) {
   const { user } = useAuth();
   
-  const currentUserId = user?.id || user?.userId || 12;
+  const currentUserId = Number(user?.id ?? user?.user_id ?? user?.userId);
   useLocationPinger(currentUserId, true);
   const userRole = user?.role || "passenger";
   const userName = user?.name || user?.full_name || "Passenger";
 
   const mapRef = useRef(null);
   const corridorScrollRef = useRef(null);
+  const selectedPickupHubRef = useRef(null);
+  const fetchCorridorsRef = useRef(null);
+  const corridorRefreshTimerRef = useRef(null);
 
   const [checkingGatekeeper, setCheckingGatekeeper] = useState(true);
   const [isLocating, setIsLocating] = useState(true);
   const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [corridorLoadError, setCorridorLoadError] = useState("");
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [canScrollCorridors, setCanScrollCorridors] = useState(false);
 
@@ -112,42 +103,6 @@ export default function PassengerScreen({ navigation }) {
       activeHubNameRef.current = selectedPickupHub.name;
     }
   }, [selectedPickupHub]);
-
-
- useEffect(() => {
-  if (!socket) return;
-
-  const handleRoutePoolUpdate = (updatedData) => {
-    console.log("⚡ [Socket] Route pool update received:", updatedData);
-
-    setRoutes((prevRoutes) =>
-      prevRoutes.map((route) => {
-        const routeId = String(route.route_id || route.id);
-        const incomingId = String(updatedData.route_id);
-
-        if (routeId === incomingId) {
-          console.log(`✅ [UI Match] Updating Route #${routeId} -> Pax: ${updatedData.searching_pax}, Price: ${updatedData.price}`);
-          return {
-            ...route,
-            searching_pax: updatedData.searching_pax,
-            matched_pax: updatedData.matched_pax,
-            current_pax: updatedData.current_pax,
-            price: updatedData.price,
-            dynamic_price: updatedData.price, 
-            status: updatedData.status,
-          };
-        }
-        return route;
-      })
-    );
-  };
-
-  socket.on('route_pool_updated', handleRoutePoolUpdate);
-
-  return () => {
-    socket.off('route_pool_updated', handleRoutePoolUpdate);
-  };
-}, [socket]);
 
 
   /* 📍 GEOLOCATION & HUB TRACKING */
@@ -211,7 +166,9 @@ export default function PassengerScreen({ navigation }) {
 
       if (validationData && validationData.nearestHub) {
         const targetHub = validationData.nearestHub;
+        const hubChanged = String(selectedPickupHubRef.current?.id) !== String(targetHub.id);
         setSelectedPickupHub(targetHub);
+        selectedPickupHubRef.current = targetHub;
         activeHubNameRef.current = targetHub.name;
         
         if (validationData.distanceInMeters) {
@@ -221,8 +178,7 @@ export default function PassengerScreen({ navigation }) {
           setDistanceToHub(Math.round(dist * 1000));
         }
 
-        // 🔑 Pass the full targetHub object to send hub.id
-        fetchActiveCorridors(targetHub);
+        if (hubChanged) fetchActiveCorridors(targetHub);
       }
     } catch (err) {
       console.log("Error querying closest hub matrix:", err);
@@ -243,22 +199,104 @@ export default function PassengerScreen({ navigation }) {
   };
 
   const fetchActiveCorridors = async (hub, showLoader = true) => {
+    if (!hub?.id) {
+      setCorridorLoadError("Could not identify your pickup hub. Refresh your location and try again.");
+      return;
+    }
     if (showLoader) setLoadingRoutes(true);
     try {
-      const hubId = hub.id || 1; 
+      const hubId = hub.id;
       const res = await fetch(`${API_URL}/routes/from/${hubId}`);
+      if (!res.ok) {
+        throw new Error(`Corridor lookup failed (HTTP ${res.status}).`);
+      }
       const data = await res.json();
-      const fetchedRoutes = Array.isArray(data) ? data : [];
+      if (!Array.isArray(data)) {
+        throw new Error(data.error || "The corridor service returned an invalid response.");
+      }
+      const fetchedRoutes = data;
       setRoutes(fetchedRoutes);
       setCanScrollCorridors(fetchedRoutes.length > 2);
+      setCorridorLoadError("");
     } catch (err) {
       console.log("Route corridor compilation lookup error:", err);
-      setRoutes([]);
-      setCanScrollCorridors(false);
+      setCorridorLoadError(err.message || "Unable to load available corridors.");
     } finally {
       if (showLoader) setLoadingRoutes(false);
     }
   };
+  fetchCorridorsRef.current = fetchActiveCorridors;
+
+  useEffect(() => {
+    const refreshCorridors = () => {
+      const hub = selectedPickupHubRef.current;
+      if (hub?.id) fetchCorridorsRef.current?.(hub, false);
+    };
+    const scheduleCorridorRefresh = () => {
+      if (corridorRefreshTimerRef.current) clearTimeout(corridorRefreshTimerRef.current);
+      corridorRefreshTimerRef.current = setTimeout(refreshCorridors, 150);
+    };
+    const handleRoutePoolUpdate = (update) => {
+      const incomingRouteId = String(update?.route_id ?? "");
+      if (incomingRouteId) {
+        setRoutes((currentRoutes) => currentRoutes.map((route) => {
+          if (String(route.route_id || route.id) !== incomingRouteId) return route;
+          const searchingPax = Number.isFinite(Number(update.searching_pax))
+            ? Number(update.searching_pax)
+            : Number(route.searching_pax || 0);
+          const matchedPax = Number.isFinite(Number(update.matched_pax))
+            ? Number(update.matched_pax)
+            : Number(route.matched_pax || 0);
+          const currentPax = Number.isFinite(Number(update.current_pax))
+            ? Number(update.current_pax)
+            : searchingPax + matchedPax;
+          return {
+            ...route,
+            searching_pax: searchingPax,
+            matched_pax: matchedPax,
+            current_pax: currentPax,
+            price: update.price ?? getDynamicSeatPrice(route, currentPax),
+            status: update.status || route.status,
+            matched_at: update.matched_at || route.matched_at,
+            match_expires_at: update.match_expires_at || route.match_expires_at,
+          };
+        }));
+      }
+      scheduleCorridorRefresh();
+    };
+    const handleCorridorOfferUpdate = (update) => {
+      const incomingRouteId = String(update?.route_id ?? "");
+      if (incomingRouteId) {
+        setRoutes((currentRoutes) => currentRoutes.map((route) => (
+          String(route.route_id || route.id) === incomingRouteId
+            ? {
+                ...route,
+                ride_offer_id: update.ride_offer_id || route.ride_offer_id,
+                offer_status: update.status || route.offer_status,
+                driver_name: update.driver_name || route.driver_name,
+                vehicle_make: update.vehicle_make || route.vehicle_make,
+                vehicle_model: update.vehicle_model || route.vehicle_model,
+              }
+            : route
+        )));
+      }
+      scheduleCorridorRefresh();
+    };
+
+    socket.on("connect", refreshCorridors);
+    socket.on("route_pool_updated", handleRoutePoolUpdate);
+    socket.on("corridor_offer_updated", handleCorridorOfferUpdate);
+    if (socket.connected) refreshCorridors();
+    const fallbackRefresh = setInterval(refreshCorridors, 20000);
+
+    return () => {
+      socket.off("connect", refreshCorridors);
+      socket.off("route_pool_updated", handleRoutePoolUpdate);
+      socket.off("corridor_offer_updated", handleCorridorOfferUpdate);
+      clearInterval(fallbackRefresh);
+      if (corridorRefreshTimerRef.current) clearTimeout(corridorRefreshTimerRef.current);
+    };
+  }, []);
 
   const handleMapPress = () => {
     Keyboard.dismiss();
@@ -365,7 +403,7 @@ export default function PassengerScreen({ navigation }) {
   };
 
   const joinPool = async (item) => {
-    const routePrice = parseFloat(item.price) || 150;
+    const routePrice = Number(item.dynamicPrice ?? item.price);
 
     Alert.alert(
       "Confirm Corridor Share Ride",
@@ -377,6 +415,10 @@ export default function PassengerScreen({ navigation }) {
           style: "default",
           onPress: async () => {
             try {
+              if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+                Alert.alert("Sign-in Required", "Please sign in again before joining a corridor.");
+                return;
+              }
               if (!userCoords) {
                 Alert.alert("Location unavailable", "Your current location is needed to join this corridor.");
                 return;
@@ -387,11 +429,19 @@ export default function PassengerScreen({ navigation }) {
                 return;
               }
 
-              const pickupHubId = selectedPickupHub ? selectedPickupHub.id : 7; 
+              const pickupHubId = Number(selectedPickupHub?.id);
+              if (!Number.isInteger(pickupHubId) || pickupHubId <= 0) {
+                Alert.alert("Pickup Hub Unavailable", "We could not identify your pickup hub. Refresh your location and try again.");
+                return;
+              }
               const targetRouteId = parseInt(item.route_id || item.id, 10);
               
-              if (!targetRouteId || isNaN(targetRouteId)) {
+              if (!Number.isInteger(targetRouteId) || targetRouteId <= 0) {
                 Alert.alert("System Sync Error", `Could not resolve a valid corridor route sequence ID.`);
+                return;
+              }
+              if (!Number.isFinite(routePrice) || routePrice < 0) {
+                Alert.alert("Fare Unavailable", "The fare for this corridor is not available yet. Refresh and try again.");
                 return;
               }
 
@@ -883,7 +933,19 @@ export default function PassengerScreen({ navigation }) {
                 {loadingRoutes && <ActivityIndicator size="small" color="#059669" />}
               </View>
 
-              {routes.length === 0 ? (
+              {corridorLoadError ? (
+                <View style={styles.fallbackBlock}>
+                  <Text style={styles.fallbackTitle}>Corridors Could Not Load</Text>
+                  <Text style={styles.fallbackSub}>{corridorLoadError}</Text>
+                  <TouchableOpacity
+                    onPress={() => selectedPickupHub && fetchActiveCorridors(selectedPickupHub)}
+                    style={styles.retryCorridorsButton}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.retryCorridorsText}>RETRY</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : routes.length === 0 ? (
                 <View style={styles.fallbackBlock}>
                   <Ionicons name="map-outline" size={28} color="#9CA3AF" />
                   <Text style={styles.fallbackTitle}>No Corridors Found</Text>
@@ -927,14 +989,18 @@ export default function PassengerScreen({ navigation }) {
                         const totalActivePax = rawCurrentPax > 0 ? rawCurrentPax : calculatedSum;
 
                         const isMatchedStatus = route.status === 'matched' || matchedPax > 0;
-                        const remainingSeconds = getRemainingSeconds(route);
-                        const isJoinWindowOpen = isMatchedStatus && remainingSeconds > 0;
 
                         const dynamicPrice = route.price !== undefined && route.price !== null
                           ? route.price
-                          : (route.dynamic_price !== undefined && route.dynamic_price !== null
-                              ? route.dynamic_price
-                              : getDynamicSeatPrice(route, totalActivePax));
+                          : getDynamicSeatPrice(route, totalActivePax);
+                        const activeOffer = Boolean(route.ride_offer_id) &&
+                          ["pending", "matched", "active"].includes(String(route.offer_status || "").toLowerCase());
+                        const waitingDriverCount = Number(route.waiting_driver_count) || 0;
+                        const waitingDriverNames = Array.isArray(route.waiting_driver_names)
+                          ? route.waiting_driver_names.filter((name) => typeof name === "string" && name.trim())
+                          : [];
+                        const driverName = route.driver_name;
+                        const vehicleName = [route.vehicle_make, route.vehicle_model].filter(Boolean).join(" ");
 
                         const formattedPrice = Number(dynamicPrice).toFixed(0);
 
@@ -946,14 +1012,14 @@ export default function PassengerScreen({ navigation }) {
                             style={[
                               styles.supremeCard,
                               isOutOfRange && styles.disabledCard,
-                              isJoinWindowOpen && styles.matchedCardBorder
+                              isMatchedStatus && styles.matchedCardBorder
                             ]} 
                             onPress={() => joinPool({ 
                               ...route, 
                               route_id: routeId, 
                               dynamicPrice, 
                               activePaxCount: totalActivePax,
-                              isMatchedPool: isJoinWindowOpen 
+                              isMatchedPool: isMatchedStatus
                             })}
                             disabled={isOutOfRange}
                             activeOpacity={0.8}
@@ -965,14 +1031,14 @@ export default function PassengerScreen({ navigation }) {
                               
                               <View style={[
                                 styles.seatBadge, 
-                                isJoinWindowOpen 
+                                isMatchedStatus
                                   ? styles.amberBadge 
                                   : (totalActivePax > 0 ? styles.activeSeatBadge : styles.emptySeatBadge)
                               ]}>
                                 <View style={[
                                   styles.pulseDot, 
                                   { 
-                                    backgroundColor: isJoinWindowOpen 
+                                  backgroundColor: isMatchedStatus
                                       ? "#F59E0B" 
                                       : (totalActivePax > 0 ? "#10B981" : "#9CA3AF") 
                                   }
@@ -980,34 +1046,47 @@ export default function PassengerScreen({ navigation }) {
                                 <Text style={[
                                   styles.seatText, 
                                   { 
-                                    color: isJoinWindowOpen 
+                                  color: isMatchedStatus
                                       ? "#B45309" 
                                       : (totalActivePax > 0 ? "#047857" : "#4B5563") 
                                   }
                                 ]}>
                                   {totalActivePax > 0 
-                                    ? `${totalActivePax}/${maxSeats} ${isJoinWindowOpen ? 'Matched' : 'Waiting'}` 
+                                  ? `${totalActivePax}/${maxSeats} ${isMatchedStatus ? 'Matched' : 'Waiting'}`
                                     : "0 Waiting"}
                                 </Text>
                               </View>
                             </View>
 
-                            {isJoinWindowOpen && (
-                              <View style={styles.matchedTimerBanner}>
-                                <Ionicons name="timer-outline" size={16} color="#B45309" />
-                                <Text style={styles.matchedTimerText}>
-                                  Driver matched! Join window closes in{" "}
-                                  <Text style={styles.countdownBold}>
-                                    {formatCountdown(remainingSeconds)}
-                                  </Text>
+                            <Text style={styles.passengerBreakdown}>
+                              {searchingPax} waiting passenger{searchingPax === 1 ? "" : "s"}
+                              {matchedPax > 0 ? ` · ${matchedPax} matched` : ""}
+                            </Text>
+
+                            {waitingDriverCount > 0 && (
+                              <View style={styles.driverWaitingTag}>
+                                <Ionicons name="car-outline" size={13} color="#047857" />
+                                <Text style={styles.driverWaitingText}>
+                                  {waitingDriverNames.length > 0 ? `${waitingDriverNames.join(", ")} · ` : ""}
+                                  {waitingDriverCount} driver{waitingDriverCount === 1 ? "" : "s"} queued
                                 </Text>
                               </View>
                             )}
-                            
+
+                            {activeOffer && (
+                              <View style={styles.driverWaitingTag}>
+                                <Ionicons name="car-outline" size={13} color="#047857" />
+                                <Text style={styles.driverWaitingText}>
+                                  {driverName ? `${driverName} has an active offer` : "Active driver offer"}
+                                  {vehicleName ? ` · ${vehicleName}` : ""}
+                                </Text>
+                              </View>
+                            )}
+
                             <View style={styles.cardFooter}>
                               <View style={styles.priceContainer}>
                                 <Text style={styles.priceLabel}>
-                                  {isJoinWindowOpen 
+                                  {isMatchedStatus
                                     ? `MATCHED FARE (Rider #${totalActivePax + 1})` 
                                     : (totalActivePax > 0 ? `LOCK-IN FARE (Rider #${totalActivePax + 1})` : "STARTING FARE (1st Pax)")}
                                 </Text>
@@ -1022,17 +1101,17 @@ export default function PassengerScreen({ navigation }) {
                                   { 
                                     color: isOutOfRange 
                                       ? "#9CA3AF" 
-                                      : (isJoinWindowOpen ? "#D97706" : "#059669") 
+                                      : (isMatchedStatus ? "#D97706" : "#059669")
                                   }
                                 ]}>
                                   {isOutOfRange 
                                     ? "Out of Range" 
-                                    : (isJoinWindowOpen ? "Join Matched Pool" : (totalActivePax > 0 ? "Join Pool" : "Request Pool"))}
+                                    : (isMatchedStatus ? "Join Matched Pool" : (totalActivePax > 0 ? "Join Pool" : "Request Pool"))}
                                 </Text>
                                 <Ionicons 
                                   name="chevron-forward-circle" 
                                   size={22} 
-                                  color={isOutOfRange ? "#D1D5DB" : (isJoinWindowOpen ? "#D97706" : "#059669")} 
+                                  color={isOutOfRange ? "#D1D5DB" : (isMatchedStatus ? "#D97706" : "#059669")}
                                 />
                               </View>
                             </View>
@@ -1395,6 +1474,8 @@ const styles = StyleSheet.create({
   fallbackBlock: { justifyContent: "center", alignItems: "center", paddingHorizontal: 20, paddingVertical: 18, backgroundColor: "#FFFFFF", borderRadius: 16 },
   fallbackTitle: { fontSize: 14, fontWeight: "800", color: "#374151", textAlign: "center", marginTop: 4 },
   fallbackSub: { fontSize: 11, color: "#9CA3AF", textAlign: "center", marginTop: 2, lineHeight: 16 },
+  retryCorridorsButton: { marginTop: 10, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: "#ECFDF5" },
+  retryCorridorsText: { color: "#047857", fontSize: 11, fontWeight: "800" },
 
   supremeCard: {
     backgroundColor: "#FFFFFF",
@@ -1425,6 +1506,9 @@ const styles = StyleSheet.create({
   emptySeatBadge: { backgroundColor: "#F3F4F6" },
   pulseDot: { width: 5, height: 5, borderRadius: 2.5, marginRight: 4 },
   seatText: { fontSize: 10, fontWeight: "700" },
+  passengerBreakdown: { color: "#64748B", fontSize: 10, fontWeight: "600", marginBottom: 8 },
+  driverWaitingTag: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 4, backgroundColor: "#ECFDF5", borderRadius: 8, marginBottom: 8 },
+  driverWaitingText: { color: "#047857", fontSize: 10, fontWeight: "700", marginLeft: 5 },
 
   cardFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderTopWidth: 1, borderTopColor: "#F3F4F6", paddingTop: 8 },
   priceContainer: {},
@@ -1466,24 +1550,5 @@ const styles = StyleSheet.create({
   },
   amberBadge: {
     backgroundColor: '#FEF3C7',
-  },
-  matchedTimerBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    marginTop: 8,
-  },
-  matchedTimerText: {
-    fontSize: 12,
-    color: '#92400E',
-    marginLeft: 6,
-    fontWeight: '500',
-  },
-  countdownBold: {
-    fontWeight: '700',
-    color: '#B45309',
   },
 });

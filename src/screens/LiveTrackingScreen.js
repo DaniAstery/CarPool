@@ -19,7 +19,7 @@ import { io } from "socket.io-client";
 import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
@@ -28,6 +28,9 @@ const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
 const API_URL_PASSENGER = `${(
   process.env.EXPO_PUBLIC_API_URL_PASSENGER || API_URL
 ).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = (process.env.EXPO_PUBLIC_SOCKET_URL || API_URL)
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 const parsePassengerIds = (value) => {
   if (Array.isArray(value)) {
@@ -41,6 +44,23 @@ const parsePassengerIds = (value) => {
       .filter(id => Number.isInteger(id));
   }
   return [];
+};
+
+const passengerStatusRank = {
+  searching: 0,
+  matched: 1,
+  accepted: 2,
+  arrived: 3,
+  in_trip: 4,
+  completed: 5,
+};
+
+const preservePassengerProgress = (previousStatus, nextStatus) => {
+  const previous = String(previousStatus || "").toLowerCase().trim();
+  const next = String(nextStatus || "").toLowerCase().trim();
+  return (passengerStatusRank[previous] ?? -1) > (passengerStatusRank[next] ?? -1)
+    ? previous
+    : next;
 };
 
 const DEFAULT_LOCATION = {
@@ -134,16 +154,24 @@ const fetchDrivingRoute = async (origin, destination) => {
 // ------------------------------------------------------------------
 const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, destinationLocation, walkingRouteCoordinates, routeCoordinates, mapRef, isDrawerExpanded }) => {
   const hasFitted = useRef(false);
+  const hasFittedPassengerLocation = useRef(false);
+  const lastFittedDrawerState = useRef(isDrawerExpanded);
+  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
-    if (mapRef.current && isValidMapCoordinate(pickupLocation) && isValidMapCoordinate(destinationLocation) && !hasFitted.current) {
-      hasFitted.current = true;
+    const hasPassengerLocation = isValidMapCoordinate(currentLocation);
+    const drawerStateChanged = lastFittedDrawerState.current !== isDrawerExpanded;
+    const shouldFit =
+      !hasFitted.current ||
+      (hasPassengerLocation && !hasFittedPassengerLocation.current) ||
+      drawerStateChanged;
+    if (mapReady && mapRef.current && isValidMapCoordinate(pickupLocation) && isValidMapCoordinate(destinationLocation) && shouldFit) {
       const bottomPadding = isDrawerExpanded ? height * 0.55 : height * 0.25;
       const coordsToFit = [
-        ...(currentLocation?.latitude ? [{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }] : []),
-        ...(driverLocation?.latitude ? [{ latitude: driverLocation.latitude, longitude: driverLocation.longitude }] : []),
         { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude },
         { latitude: destinationLocation.latitude, longitude: destinationLocation.longitude },
+        ...(hasPassengerLocation ? [{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }] : []),
+        ...(isValidMapCoordinate(driverLocation) ? [{ latitude: driverLocation.latitude, longitude: driverLocation.longitude }] : []),
         ...walkingRouteCoordinates,
         ...routeCoordinates
       ];
@@ -153,9 +181,14 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
           edgePadding: { top: 90, right: 60, bottom: bottomPadding, left: 60 },
           animated: true,
         });
-      } catch (e) {}
+        hasFitted.current = true;
+        if (hasPassengerLocation) hasFittedPassengerLocation.current = true;
+        lastFittedDrawerState.current = isDrawerExpanded;
+      } catch (err) {
+        console.warn("Could not frame the pickup and trip route on the map:", err.message);
+      }
     }
-  }, [currentLocation, driverLocation, pickupLocation, destinationLocation, walkingRouteCoordinates, routeCoordinates, mapRef, isDrawerExpanded]);
+  }, [mapReady, currentLocation, driverLocation, pickupLocation, destinationLocation, walkingRouteCoordinates, routeCoordinates, mapRef, isDrawerExpanded]);
 
   return (
     <MapView
@@ -163,6 +196,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
       style={StyleSheet.absoluteFillObject}
       provider={PROVIDER_DEFAULT}
       initialRegion={DEFAULT_LOCATION}
+      onMapReady={() => setMapReady(true)}
       showsUserLocation={false}
       showsMyLocationButton={false}
       showsCompass={false}
@@ -206,10 +240,16 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
         <Marker 
           coordinate={{ latitude: Number(pickupLocation.latitude), longitude: Number(pickupLocation.longitude) }} 
           title={pickupLocation.title || "Pickup Hub"} 
-          anchor={{ x: 0.5, y: 0.5 }}
+          anchor={{ x: 0.5, y: 1 }}
         >
-          <View style={styles.glowingEmeraldOuterHalo}>
-            <View style={styles.glowingEmeraldBadge} />
+          <View style={styles.pickupPinContainer}>
+            <View style={styles.pickupPinLabel}>
+              <Ionicons name="location-sharp" size={13} color="#FFFFFF" />
+              <Text style={styles.pickupPinText} numberOfLines={1}>
+                {pickupLocation.title || "PICKUP"}
+              </Text>
+            </View>
+            <View style={styles.pickupPinTip} />
           </View>
         </Marker>
       )}
@@ -253,6 +293,7 @@ const TrackingMap = memo(({ currentLocation, driverLocation, pickupLocation, des
 
 export default function LiveTrackingScreen({ route, navigation }) {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const currentUserId = parseInt(
     user?.id || user?.user_id || user?.userId || route?.params?.userId || route?.params?.user_id,
     10
@@ -268,6 +309,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const arrivedSoundPlayedRef = useRef(false);
   const prevCoRiderStatusesRef = useRef({});
   const prevDriverStateRef = useRef("accepted");
+  const myStatusRef = useRef("accepted");
 
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [myStatus, setMyStatus] = useState("accepted");
@@ -491,7 +533,7 @@ const navigateToDeparture = useCallback(() => {
             });
           }
 
-          const newDriverStatus = (data.driver_status || "accepted").toLowerCase().trim();
+          const newDriverStatus = (data.driver_status || "pending").toLowerCase().trim();
           const passengers = Array.isArray(data.passengers) ? data.passengers : [];
           const acceptedIds = parsePassengerIds(data.accepted_passengers);
           const passengersById = new Map(
@@ -517,9 +559,13 @@ const navigateToDeparture = useCallback(() => {
             (p) => parseInt(p.user_id || p.userId || p.id, 10) === resolvedUserId
           );
 
-          const rawMyStatus = acceptedIds.includes(resolvedUserId)
-            ? "accepted"
-            : myRow?.status?.toLowerCase() || "accepted";
+          const rowMyStatus = String(myRow?.status || "").toLowerCase().trim();
+          const serverMyStatus = ["arrived", "in_trip", "completed"].includes(rowMyStatus)
+            ? rowMyStatus
+            : acceptedIds.includes(resolvedUserId)
+              ? "accepted"
+              : rowMyStatus || "accepted";
+          const rawMyStatus = preservePassengerProgress(myStatusRef.current, serverMyStatus);
 
           if (newDriverStatus === "in_trip" || rawMyStatus === "in_trip") {
             navigateToDeparture();
@@ -538,6 +584,7 @@ const navigateToDeparture = useCallback(() => {
           }
 
           setMyStatus(rawMyStatus);
+          myStatusRef.current = rawMyStatus;
 
           const newCoRiderStatuses = {};
           let coRiderStatusChangedToArrived = false;
@@ -547,7 +594,12 @@ const navigateToDeparture = useCallback(() => {
             .filter((p) => parseInt(p.user_id || p.userId || p.id, 10) !== resolvedUserId)
             .map((p, idx) => {
               const pId = parseInt(p.user_id || p.userId || p.id, 10);
-              const pStatus = (p.status || "accepted").toLowerCase().trim();
+              const serverStatus = String(p.status || "").toLowerCase().trim();
+              const acceptedStatus = acceptedIds.includes(pId) ? "accepted" : serverStatus || "accepted";
+              const pStatus = preservePassengerProgress(
+                prevCoRiderStatusesRef.current[pId],
+                ["arrived", "in_trip", "completed"].includes(serverStatus) ? serverStatus : acceptedStatus
+              );
               
               newCoRiderStatuses[pId] = pStatus;
 
@@ -584,8 +636,7 @@ const navigateToDeparture = useCallback(() => {
     fetchHubPresenceStatus();
 
     // Setup Instant Socket.io Listener matching backend emission
-    const socketBaseUrl = API_URL;
-    socket = io(socketBaseUrl);
+    socket = io(SOCKET_URL, { reconnection: true });
 
     socket.on("connect", () => {
       console.log("⚡ Connected to real-time notification socket");
@@ -656,6 +707,7 @@ const navigateToDeparture = useCallback(() => {
       }
 
       setMyStatus("arrived");
+      myStatusRef.current = "arrived";
       arrivedSoundPlayedRef.current = true;
       playSound("5");  
 
@@ -670,6 +722,9 @@ const navigateToDeparture = useCallback(() => {
             color: colorPalette[idx % colorPalette.length],
           }));
         setCoRiders(instantCoRiders);
+        prevCoRiderStatusesRef.current = Object.fromEntries(
+          instantCoRiders.map((rider) => [rider.id, rider.status.toLowerCase()])
+        );
       }
     } catch (err) {
       console.error("Arrival update failed:", err);
@@ -688,7 +743,7 @@ const navigateToDeparture = useCallback(() => {
   const isDriverArrived = driverState === "arrived";
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       {/* 1. TOP BANNER STATUS BAR */}
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
@@ -721,7 +776,7 @@ const navigateToDeparture = useCallback(() => {
       </View>
 
       {/* COLLAPSIBLE SLIDING PANEL DRAWER */}
-      <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
+      <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed, { paddingBottom: insets.bottom }]}>
         
         {/* Toggle Handle Header */}
         <Pressable 
@@ -876,6 +931,10 @@ const styles = StyleSheet.create({
 
   glowingEmeraldOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(5, 150, 105, 0.2)", justifyContent: "center", alignItems: "center" },
   glowingEmeraldBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#059669", borderWidth: 2, borderColor: "#FFFFFF" },
+  pickupPinContainer: { alignItems: "center", maxWidth: 190 },
+  pickupPinLabel: { flexDirection: "row", alignItems: "center", backgroundColor: "#059669", paddingHorizontal: 10, paddingVertical: 7, borderRadius: 18, borderWidth: 2, borderColor: "#FFFFFF", elevation: 6, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3 },
+  pickupPinText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800", marginLeft: 4, maxWidth: 150 },
+  pickupPinTip: { width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8, borderLeftColor: "transparent", borderRightColor: "transparent", borderTopColor: "#059669", marginTop: -1 },
   glowingDestinationOuterHalo: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(59, 130, 246, 0.2)", justifyContent: "center", alignItems: "center" },
   glowingDestinationBadge: { width: 16, height: 16, borderRadius: 8, backgroundColor: "#3B82F6", borderWidth: 2, borderColor: "#FFFFFF" },
 

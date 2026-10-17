@@ -26,10 +26,18 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
   const { user } = useAuth();
   const driverId = route?.params?.driverId || user?.id || user?.driver_id || 11;
   const rideOfferId = route?.params?.rideOfferId || route?.params?.ride_offer_id || null;
+  const initialGrossEarnings = Math.max(0, Number(route?.params?.finalPrice) || 0);
+  const initialPassengerCount = Math.max(0, Number(route?.params?.ridersCount) || 0);
 
   const [loading, setLoading] = useState(true);
   const [tripDetails, setTripDetails] = useState({});
-  const [financials, setFinancials] = useState({});
+  const [financials, setFinancials] = useState({
+    totalPassengers: initialPassengerCount,
+    pricePerSeat: initialPassengerCount ? initialGrossEarnings / initialPassengerCount : 0,
+    grossEarnings: initialGrossEarnings,
+    platformFee: initialGrossEarnings * 0.1,
+    netPayout: initialGrossEarnings * 0.9,
+  });
   const [passengers, setPassengers] = useState([]);
   const [loadError, setLoadError] = useState("");
 

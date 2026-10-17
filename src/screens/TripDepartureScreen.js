@@ -6,7 +6,6 @@ import {
   Dimensions,
   ScrollView,
   BackHandler,
-  Platform,
   Pressable,
   TouchableOpacity,
   ActivityIndicator,
@@ -18,7 +17,7 @@ import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { playSound } from "../utils/soundPlayer";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 
 const { width, height } = Dimensions.get("window");
@@ -136,6 +135,7 @@ const TripDepartureMap = memo(({ currentLocation, destinationLocation, routeCoor
 export default function TripDepartureScreen({ route, navigation }) {
   const rideOfferId = route?.params?.rideOfferId || 0;
   const userId = route?.params?.userId || 1;
+  const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(true);
   const [tripStatus, setTripStatus] = useState("in_trip");
@@ -400,7 +400,7 @@ export default function TripDepartureScreen({ route, navigation }) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       {/* 1. TOP BANNER STATUS BAR */}
       <View style={[styles.statusBarBanner, isTripFinished && styles.bannerFinishedBg]}>
         <View style={styles.statusIndicatorWrapper}>
@@ -437,7 +437,7 @@ export default function TripDepartureScreen({ route, navigation }) {
       </View>
 
       {/* COLLAPSIBLE SLIDING PANEL DRAWER */}
-      <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed]}>
+      <View style={[styles.slidingPanelDrawer, isDrawerExpanded ? styles.drawerExpanded : styles.drawerCollapsed, { paddingBottom: insets.bottom }]}>
         
         {/* Toggle Handle Header */}
         <Pressable 
@@ -557,7 +557,7 @@ export default function TripDepartureScreen({ route, navigation }) {
 
         {/* Footer Action Button / Checkout Footer with Split Price */}
         {isDrawerExpanded && (
-          <View style={styles.drawerFooterSticky}>
+          <View style={[styles.drawerFooterSticky, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             {isTripFinished ? (
               <TouchableOpacity
                 style={[styles.actionButton, styles.paymentButtonBg]}
@@ -647,7 +647,7 @@ const styles = StyleSheet.create({
   drawerScrollBody: { flexGrow: 0 },
   drawerFooterSticky: { 
     paddingVertical: 12, 
-    paddingBottom: Platform.OS === 'android' ? 24 : 12, 
+    paddingBottom: 12,
     borderTopWidth: 1, 
     borderTopColor: "#E5E7EB", 
     backgroundColor: "#FFFFFF" 

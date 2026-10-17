@@ -8,21 +8,25 @@ import {
   Dimensions,
   ScrollView,
   BackHandler,
-  Platform,
   Pressable,
+  Alert,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../AuthContext'; 
 import { playSound } from "../utils/soundPlayer";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
+import io from "socket.io-client";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = `${(
   process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
 ).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = (process.env.EXPO_PUBLIC_SOCKET_URL || API_URL)
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 const DEFAULT_MAP_REGION = {
   latitude: 9.0235,
   longitude: 38.8275,
@@ -93,7 +97,12 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       ref={mapRef}
       style={StyleSheet.absoluteFillObject}
       provider={PROVIDER_DEFAULT}
-      initialRegion={currentLocation || DEFAULT_LOCATION}
+      initialRegion={{
+        latitude: currentLocation?.latitude ?? DEFAULT_MAP_REGION.latitude,
+        longitude: currentLocation?.longitude ?? DEFAULT_MAP_REGION.longitude,
+        latitudeDelta: DEFAULT_MAP_REGION.latitudeDelta,
+        longitudeDelta: DEFAULT_MAP_REGION.longitudeDelta,
+      }}
       showsUserLocation={false} 
       showsMyLocationButton={false}
       showsCompass={false}
@@ -102,7 +111,10 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
       {/* 🧭 Circular Glowing Compass Arrow Passenger Marker */}
       {isValidMapCoordinate(currentLocation) && (
         <Marker 
-          coordinate={currentLocation} 
+          coordinate={{
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+          }}
           title="Your Current Location" 
           description="Passenger (Compass Heading Active)"
           anchor={{ x: 0.5, y: 0.5 }}
@@ -151,12 +163,15 @@ const MemoizedMap = memo(({ currentLocation, meetupLocation, walkingRouteCoordin
   );
 });
 
-export default function PickupProposalScreen({ navigation }) {
+export default function PickupProposalScreen({ navigation, route }) {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const currentUserId = parseInt(user?.id || user?.user_id, 10);
+  const routeId = route?.params?.routeId || route?.params?.route_id || null;
 
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(true);
   const [userAccepted, setUserAccepted] = useState(false);
+  const [isAcceptingProposal, setIsAcceptingProposal] = useState(false);
   const [myDbStatus, setMyDbStatus] = useState("searching");
   const [coRiders, setCoRiders] = useState([]);
   const [timeLeft, setTimeLeft] = useState(45);
@@ -304,29 +319,94 @@ export default function PickupProposalScreen({ navigation }) {
 
   useEffect(() => {
     let isSubscribed = true;
+    let statusRequestInFlight = false;
     let timerId;
+    let socketRefreshTimer;
 
     async function checkProposalStatus() {
-      if (!isSubscribed || !currentUserId) return;
+      if (!isSubscribed || !currentUserId || statusRequestInFlight) return;
+      statusRequestInFlight = true;
 
       try {
         const controller = new AbortController();
         const abortTimeout = setTimeout(() => controller.abort(), 2500);
+        let res;
+        try {
+          res = await fetch(`${API_URL}/rides/proposal-manifest/${currentUserId}`, {
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(abortTimeout);
+        }
 
-        const res = await fetch(`${API_URL}/rides/proposal-manifest/${currentUserId}`, {
-          signal: controller.signal,
-        });
-        clearTimeout(abortTimeout);
+        if (res.status === 404) {
+          let poolStatus = "";
+          try {
+            const statusController = new AbortController();
+            const statusTimeout = setTimeout(() => statusController.abort(), 2500);
+            let statusResponse;
+            try {
+              statusResponse = await fetch(`${API_URL}/routes/status/${currentUserId}`, {
+                signal: statusController.signal,
+              });
+            } finally {
+              clearTimeout(statusTimeout);
+            }
+            if (statusResponse.ok) {
+              const poolSession = await statusResponse.json();
+              poolStatus = String(poolSession.status || "").toLowerCase().trim();
+            }
+          } catch (statusError) {
+            console.warn("Could not resolve pool state after proposal manifest 404:", statusError.message);
+          }
 
-        if (res.status === 404 || !res.ok) {
-          if (navigation.canGoBack()) navigation.goBack();
-          else navigation.replace("Home");
+          if (isSubscribed) {
+            const recoveryParams = {
+              ...route.params,
+              userId: currentUserId,
+              user_id: currentUserId,
+              routeId: routeId || route?.params?.route_id,
+              hubId: route?.params?.hubId || route?.params?.hub_id,
+            };
+            if (["searching", "pending", "active", "joined"].includes(poolStatus) || !poolStatus) {
+              navigation.replace("MatchingScreen", {
+                ...recoveryParams,
+                proposalManifestUnavailable: true,
+              });
+            } else if (["idle", "cancelled", "expired", "completed"].includes(poolStatus)) {
+              navigation.replace("Passenger");
+            }
+          }
           return;
         }
+        if (!res.ok) throw new Error(`Proposal status request failed (HTTP ${res.status}).`);
 
         if (isSubscribed) {
           const data = await res.json();
-          const passengers = data.passengers || [];
+          const passengerRows = Array.isArray(data.passengers) ? data.passengers : [];
+          const passengersById = new Map();
+          const statusPriority = {
+            searching: 0,
+            matched: 1,
+            assigned: 1,
+            accepted: 2,
+            arrived: 3,
+            in_trip: 4,
+          };
+          for (const passenger of passengerRows) {
+            const passengerId = parseInt(passenger?.user_id ?? passenger?.userId, 10);
+            if (!Number.isInteger(passengerId) || passengerId <= 0) continue;
+            const previousPassenger = passengersById.get(passengerId);
+            const passengerStatus = String(passenger.status || "searching").toLowerCase().trim();
+            const previousStatus = String(previousPassenger?.status || "searching").toLowerCase().trim();
+            if (
+              !previousPassenger ||
+              (statusPriority[passengerStatus] ?? 0) >= (statusPriority[previousStatus] ?? 0)
+            ) {
+              passengersById.set(passengerId, { ...passenger, user_id: passengerId });
+            }
+          }
+          const passengers = [...passengersById.values()];
 
           const activeRideOfferId = data.ride_offer_id || data.rideOfferId || data.matched_ride_offer_id || data.id;
           if (activeRideOfferId) {
@@ -335,7 +415,14 @@ export default function PickupProposalScreen({ navigation }) {
             setMeetupHub(data.hub);
           }
 
-          const normalizedAcceptedIds = (data.accepted_passengers || []).map(id => parseInt(id, 10));
+          const acceptedPassengers = Array.isArray(data.accepted_passengers)
+            ? data.accepted_passengers
+            : typeof data.accepted_passengers === "string"
+              ? data.accepted_passengers.replace(/[{}[\]]/g, "").split(",").filter(Boolean)
+              : [];
+          const normalizedAcceptedIds = acceptedPassengers
+            .map((id) => parseInt(id, 10))
+            .filter(Number.isInteger);
           const isUserAcceptedInOffer = normalizedAcceptedIds.includes(currentUserId);
           
           const myRow = passengers.find(p => parseInt(p.user_id, 10) === currentUserId);
@@ -354,7 +441,7 @@ export default function PickupProposalScreen({ navigation }) {
 
           const colorPalette = ["#E28743", "#764ABC", "#2F4F4F", "#D2691E"];
           const parsedCoRiders = passengers
-            .filter(p => parseInt(p.user_id, 10) !== currentUserId)
+            .filter(p => p && parseInt(p.user_id, 10) !== currentUserId)
             .map((p, idx) => {
               const pId = parseInt(p.user_id, 10);
               const isCoRiderAccepted = normalizedAcceptedIds.includes(pId);
@@ -392,13 +479,18 @@ export default function PickupProposalScreen({ navigation }) {
 
           setDriverState(currentDriverStatus);
 
-          if (currentDriverStatus === "accepted" && activeRideOfferId) {
+          const passengerAccepted = rawMyStatus === "accepted";
+          const driverAccepted = ["accepted", "arrived"].includes(currentDriverStatus);
+          if (passengerAccepted && driverAccepted && activeRideOfferId) {
             navigateToTracking(activeRideOfferId);
             return; 
           }
         }
-      } catch (err) {} 
+      } catch (err) {
+        console.warn("Passenger proposal status refresh failed:", err.message);
+      }
       finally {
+        statusRequestInFlight = false;
         if (isSubscribed) {
           setInitialCheckDone(true);
           timerId = setTimeout(checkProposalStatus, 3000);
@@ -406,18 +498,34 @@ export default function PickupProposalScreen({ navigation }) {
       }
     }
 
+    const socket = io(SOCKET_URL, {
+      reconnection: true,
+    });
+    const refreshForRoute = (update) => {
+      if (!routeId || String(update?.route_id) === String(routeId)) {
+        if (socketRefreshTimer) clearTimeout(socketRefreshTimer);
+        socketRefreshTimer = setTimeout(checkProposalStatus, 100);
+      }
+    };
+    socket.on("connect", checkProposalStatus);
+    socket.on("route_pool_updated", refreshForRoute);
+    socket.on("corridor_offer_updated", refreshForRoute);
+
     checkProposalStatus();
     return () => {
       isSubscribed = false;
       if (timerId) clearTimeout(timerId);
+      if (socketRefreshTimer) clearTimeout(socketRefreshTimer);
+      socket.off("connect", checkProposalStatus);
+      socket.off("route_pool_updated", refreshForRoute);
+      socket.off("corridor_offer_updated", refreshForRoute);
+      socket.disconnect();
     };
-  }, [currentUserId, navigateToTracking, navigation, userAccepted, fetchMapCoordinatesData]);
+  }, [currentUserId, navigateToTracking, navigation, routeId, userAccepted, fetchMapCoordinatesData]);
 
   const handleAcceptProposal = async () => {
-    setUserAccepted(true);
-    setMyDbStatus("accepted");
-    playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
-
+    if (isAcceptingProposal || userAccepted) return;
+    setIsAcceptingProposal(true);
     try {
       const response = await fetch(`${API_URL}/rides/accept-proposal`, {
         method: "POST",
@@ -427,16 +535,21 @@ export default function PickupProposalScreen({ navigation }) {
 
       if (response.ok) {
         const data = await response.json();
-        if (data.ride_offer_id && driverState === "accepted") {
+        if (data.success === false) throw new Error(data.error || "Could not accept this pickup proposal.");
+        setUserAccepted(true);
+        setMyDbStatus("accepted");
+        playSound("4").catch((err) => console.log("⚠️ Sound playback suppressed:", err.message));
+        if (data.ride_offer_id && ["accepted", "arrived"].includes(driverState)) {
           navigateToTracking(data.ride_offer_id);
         }
       } else {
-        setUserAccepted(false);
-        setMyDbStatus("searching");
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Request failed (${response.status}).`);
       }
     } catch (err) {
-      setUserAccepted(false);
-      setMyDbStatus("searching");
+      Alert.alert("Could not accept pickup", err.message || "Check your connection and try again.");
+    } finally {
+      setIsAcceptingProposal(false);
     }
   };
 
@@ -460,7 +573,7 @@ export default function PickupProposalScreen({ navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       {/* 1. TOP BANNER STATUS BAR */}
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
@@ -587,7 +700,7 @@ export default function PickupProposalScreen({ navigation }) {
 
         {/* Sticky Action Buttons inside Drawer (Hidden if collapsed) */}
         {isDrawerExpanded && (
-          <View style={styles.drawerFooterSticky}>
+          <View style={[styles.drawerFooterSticky, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             <View style={styles.actionButtonsRow}>
               <TouchableOpacity
                 style={[styles.actionButton, styles.declineButton]}
@@ -602,18 +715,18 @@ export default function PickupProposalScreen({ navigation }) {
 
               <TouchableOpacity
                 style={[styles.actionButton, styles.acceptButton, userAccepted && styles.actionButtonDisabled]}
-                disabled={userAccepted}
+                disabled={userAccepted || isAcceptingProposal}
                 activeOpacity={0.85}
                 onPress={handleAcceptProposal}
               >
                 <View style={styles.buttonInternalGroup}>
-                  {userAccepted ? (
+                  {userAccepted || isAcceptingProposal ? (
                     <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
                   ) : (
                     <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
                   )}
                   <Text style={styles.acceptButtonText}>
-                    {userAccepted ? "Waiting for driver..." : "Accept Hub"}
+                    {userAccepted ? "Waiting for driver..." : isAcceptingProposal ? "Accepting..." : "Accept Hub"}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -713,7 +826,6 @@ const styles = StyleSheet.create({
   // Footer & Action Buttons
   drawerFooterSticky: { 
     paddingVertical: 10, 
-    paddingBottom: Platform.OS === 'android' ? 24 : 12,
     borderTopWidth: 1, 
     borderTopColor: "#E5E7EB", 
     backgroundColor: "#F9FAFB" 

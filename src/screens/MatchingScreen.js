@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import {
+  AppState,
   View,
   Text,
   StyleSheet,
@@ -13,9 +14,17 @@ import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import { playSound } from "../utils/soundPlayer";
 import { SafeAreaView } from "react-native-safe-area-context";
+import io from "socket.io-client";
 
 const { width } = Dimensions.get("window");
-const API_URL = process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000/api";
+const API_URL = `${(
+  process.env.EXPO_PUBLIC_API_URL_PASSENGER ||
+  process.env.EXPO_PUBLIC_API_URL ||
+  "http://3.223.192.195:5000"
+).replace(/\/api\/?$/, "").replace(/\/$/, "")}/api`;
+const SOCKET_URL = (process.env.EXPO_PUBLIC_SOCKET_URL || API_URL)
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 
 export default function MatchingScreen({ navigation, route }) {
@@ -28,6 +37,7 @@ export default function MatchingScreen({ navigation, route }) {
   const mapRef = useRef(null);
   const radarAnim = useRef(new Animated.Value(0)).current;
   const prevCountRef = useRef(1);
+  const isNavigatingRef = useRef(false);
   
   // 🛡️ SAFE CONFIGURATION UNPACKING MATRIX
   const routeId = route?.params?.routeId || route?.params?.route_id || null;
@@ -96,13 +106,16 @@ export default function MatchingScreen({ navigation, route }) {
     return () => loop.stop();
   }, [radarAnim]);
 
-  // 4. NON-OVERLAPPING FAST POLLING LOOP
+  // 4. Fast status polling with socket-triggered refresh
   useEffect(() => {
     let isMounted = true;
+    let statusRequestInFlight = false;
     let timerId;
+    let socketRefreshTimer;
 
     const checkMyPoolStatus = async () => {
-      if (!isMounted || isCancelling) return;
+      if (!isMounted || isCancelling || isNavigatingRef.current || statusRequestInFlight) return;
+      statusRequestInFlight = true;
 
       try {
         const controller = new AbortController();
@@ -122,16 +135,30 @@ export default function MatchingScreen({ navigation, route }) {
         const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
         
         // 🛡️ ROBUST COUNT EXTRACTION (Checks backend count property and passenger arrays)
-        const currentCount = parseInt(
-          data.currentPoolCount || 
-          data.pool?.currentPoolCount || 
-          (Array.isArray(data.passengers) ? data.passengers.length : null) || 
-          (Array.isArray(data.pool?.passengers) ? data.pool.passengers.length : null) || 
-          1, 
-          10
-        );
+        const rawCount =
+          data.currentPoolCount ??
+          data.pool?.currentPoolCount ??
+          (Array.isArray(data.passengers) ? data.passengers.length : null) ??
+          (Array.isArray(data.pool?.passengers) ? data.pool.passengers.length : null) ??
+          (currentPoolStatus === "idle" ? 0 : 1);
+        const passengerRows = Array.isArray(data.passengers)
+          ? data.passengers
+          : Array.isArray(data.pool?.passengers)
+            ? data.pool.passengers
+            : null;
+        const uniquePassengerIds = passengerRows
+          ? new Set(
+              passengerRows
+                .map((passenger) => Number(passenger?.user_id ?? passenger?.userId))
+                .filter((passengerId) => Number.isInteger(passengerId) && passengerId > 0)
+            )
+          : null;
+        const currentCount = uniquePassengerIds?.size ??
+          (Number.isFinite(Number(rawCount)) ? Number(rawCount) : 1);
 
-        const finalPriceValue = data.finalPrice || data.pool?.finalPrice || data.pool?.base_price || 150;
+        const finalPriceValue = Number(
+          data.finalPrice ?? data.pricePerSeat ?? data.pool?.finalPrice ?? data.pool?.base_price
+        );
 
         // 🎵 SAFE SOUND TRIGGER: Fires Sound 4 strictly when actual passenger count increases
         if (currentCount > prevCountRef.current) {
@@ -140,17 +167,18 @@ export default function MatchingScreen({ navigation, route }) {
         }
 
         setMatchedCount(currentCount);
-        setDisplayedPrice(`ETB ${parseInt(finalPriceValue, 10)}`);
+        setDisplayedPrice(Number.isFinite(finalPriceValue) ? `ETB ${finalPriceValue.toFixed(0)}` : "Fare unavailable");
 
         const rideStatus = (data.rideStatus || data.pool?.rideStatus || "").toLowerCase();
         if (["departed", "started", "inprogress", "in_trip"].includes(rideStatus)) {
-          navigation.replace("LiveTrackingScreen", {
+          isNavigatingRef.current = true;
+          navigation.replace("LiveTracking", {
             id: targetRideOfferId,
             rideOfferId: targetRideOfferId,
             ride_offer_id: targetRideOfferId,
             routeId: routeId || data.routeId || data.pool?.route_id,
             route_id: routeId || data.routeId || data.pool?.route_id,
-            ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}` },
+            ride: { ...ride, price: Number.isFinite(finalPriceValue) ? `ETB ${finalPriceValue.toFixed(0)}` : ride.price },
             userId: currentUserId,
             user_id: currentUserId,
           });
@@ -158,7 +186,20 @@ export default function MatchingScreen({ navigation, route }) {
         }
 
         // 🛡️ STRICT THRESHOLD: Navigate ONLY when target ride offer exists AND passenger count reaches at least 2
-        if (targetRideOfferId !== null && currentCount >= 2) {
+        const proposalStatusReady = [
+          "matched",
+          "assigned",
+          "accepted",
+          "arrived",
+          "in_trip",
+        ].includes(currentPoolStatus);
+        const manifestWasUnavailable = Boolean(route?.params?.proposalManifestUnavailable);
+        if (
+          targetRideOfferId !== null &&
+          currentCount >= 2 &&
+          (!manifestWasUnavailable || proposalStatusReady)
+        ) {
+          isNavigatingRef.current = true;
           const navigationPayload = {
             id: targetRideOfferId,
             rideOfferId: targetRideOfferId,
@@ -168,7 +209,11 @@ export default function MatchingScreen({ navigation, route }) {
             route_id: routeId || data.routeId || data.pool?.route_id,
             userId: currentUserId,
             user_id: currentUserId,
-            ride: { ...ride, price: `ETB ${parseInt(finalPriceValue, 10)}`, finalCount: currentCount },
+            ride: {
+              ...ride,
+              price: Number.isFinite(finalPriceValue) ? `ETB ${finalPriceValue.toFixed(0)}` : ride.price,
+              finalCount: currentCount,
+            },
           };
 
           navigation.replace("PickupProposal", navigationPayload);
@@ -177,18 +222,46 @@ export default function MatchingScreen({ navigation, route }) {
 
       } catch (err) {
         // Suppress temporary network drops during polling
+        isNavigatingRef.current = false;
       } finally {
-        if (isMounted && !isCancelling) {
+        statusRequestInFlight = false;
+        if (isMounted && !isCancelling && !isNavigatingRef.current) {
           timerId = setTimeout(checkMyPoolStatus, 2500);
         }
       }
     };
+
+    const socket = io(SOCKET_URL, {
+      reconnection: true,
+    });
+    const refreshForRoute = (update) => {
+      if (!routeId || String(update?.route_id) === String(routeId)) {
+        if (socketRefreshTimer) clearTimeout(socketRefreshTimer);
+        socketRefreshTimer = setTimeout(checkMyPoolStatus, 100);
+      }
+    };
+    socket.on("connect", checkMyPoolStatus);
+    socket.on("route_pool_updated", refreshForRoute);
+    socket.on("corridor_offer_updated", refreshForRoute);
+
+    const appStateSubscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        if (timerId) clearTimeout(timerId);
+        checkMyPoolStatus();
+      }
+    });
 
     checkMyPoolStatus();
 
     return () => {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
+      if (socketRefreshTimer) clearTimeout(socketRefreshTimer);
+      appStateSubscription.remove();
+      socket.off("connect", checkMyPoolStatus);
+      socket.off("route_pool_updated", refreshForRoute);
+      socket.off("corridor_offer_updated", refreshForRoute);
+      socket.disconnect();
     };
   }, [routeId, hubId, userId, navigation, isCancelling]);
 
