@@ -5,7 +5,7 @@ module.exports = {
     name: "Corridor",
     slug: "corridor-mobility-app",
     owner: "danieas",
-    version: "1.0.0",
+    version: "1.0.21",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
@@ -39,6 +39,7 @@ module.exports = {
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
       package: "com.corridor.mobility",
+      versionCode: 22,
       config: {
         googleMaps: {
           apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY 

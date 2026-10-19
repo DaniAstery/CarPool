@@ -170,7 +170,11 @@ export default function RegistrationScreen() {
     setIsSubmitting(true);
     let targetUrl = "";
     try {
-      let deepLink = "";
+      if (!TELEGRAM_BOT_URL) {
+        throw new Error("Telegram authentication is not configured. Please update the app or contact support.");
+      }
+
+      let startPayload = "";
       let sessionId = "";
 
       if (authMode === "register") {
@@ -190,7 +194,8 @@ export default function RegistrationScreen() {
         if (!res.ok) throw new Error(data.error || "Registration initialization failed.");
 
         sessionId = data.userId;
-        deepLink = `${TELEGRAM_BOT_URL}?start=verify_${sessionId}`;
+        if (!sessionId) throw new Error("Registration initialization returned no user ID.");
+        startPayload = `verify_${sessionId}`;
       } else {
         targetUrl = `${API_URL}/auth/signin-init`;
         const res = await fetch(targetUrl, {
@@ -207,18 +212,23 @@ export default function RegistrationScreen() {
         if (!res.ok) throw new Error(data.error || "Sign-in initialization failed.");
 
         sessionId = data.sessionId;
-        deepLink = `${TELEGRAM_BOT_URL}?start=login_${sessionId}`;
+        if (!sessionId) throw new Error("Sign-in initialization returned no session ID.");
+        startPayload = `login_${sessionId}`;
       }
 
       sessionIdRef.current = sessionId;
 
-      const supported = await Linking.canOpenURL(deepLink);
-      if (supported) {
-        await Linking.openURL(deepLink);
-        setWaitingForTelegram(true);
-      } else {
-        Alert.alert("Error", "Could not open Telegram. Ensure Telegram is installed.");
+      const botUsername = TELEGRAM_BOT_URL.match(/^https?:\/\/(?:www\.)?t\.me\/([^/?#]+)/i)?.[1];
+      if (!botUsername) throw new Error("Telegram authentication has an invalid bot URL.");
+      const appLink = `tg://resolve?domain=${botUsername}&start=${encodeURIComponent(startPayload)}`;
+      const webLink = `${TELEGRAM_BOT_URL.replace(/\/+$/, "")}?start=${encodeURIComponent(startPayload)}`;
+
+      try {
+        await Linking.openURL(appLink);
+      } catch {
+        await Linking.openURL(webLink);
       }
+      setWaitingForTelegram(true);
     } catch (err) {
       console.error("[Authentication Error]", { url: targetUrl, error: err });
       const message = err.message === "Network request failed"
@@ -395,7 +405,7 @@ export default function RegistrationScreen() {
                     {authMode === "register" ? "Verifying Telegram Profile..." : "Authenticating Session..."}
                   </Text>
                   <Text style={styles.waitingSubtext}>
-                    Please tap <Text style={{ fontWeight: "700", color: "#111827" }}>&quot;Share Contact&quot;</Text> inside Telegram, then return here.
+                    Telegram will ask you to share your phone number with @CorridorTelegrambot. Tap “Share Phone Number” there, then return here. The app will verify your number and {authMode === "register" ? "finish creating your account" : "sign you in"} automatically.
                   </Text>
 
                   <TouchableOpacity style={styles.cancelButton} onPress={handleCancelWaiting} activeOpacity={0.8}>

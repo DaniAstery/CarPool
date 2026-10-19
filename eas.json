@@ -11,7 +11,8 @@
         "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
         "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
         "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
-        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_TELEGRAM_BOT_URL": "https://t.me/CorridorTelegrambot"
       }
     },
     "preview": {
@@ -23,7 +24,8 @@
         "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
         "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
         "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
-        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_TELEGRAM_BOT_URL": "https://t.me/CorridorTelegrambot"
       }
     },
     "production": {
@@ -35,7 +37,8 @@
         "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
         "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
         "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
-        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api"
+        "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_TELEGRAM_BOT_URL": "https://t.me/CorridorTelegrambot"
       }
     }
   },
