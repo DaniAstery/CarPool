@@ -156,32 +156,82 @@ export default function PassengerScreen({ navigation }) {
 
   const resolveClosestHub = async (lat, lng) => {
     try {
-      const response = await fetch(`${API_URL}/passenger/validate-location`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_lat: lat, user_lng: lng }),
-      });
+      let validationData = null;
+      try {
+        const response = await fetch(`${API_URL}/passenger/validate-location`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_lat: lat, user_lng: lng }),
+        });
 
-      const validationData = await response.json();
+        if (!response.ok) {
+          throw new Error(`Hub lookup failed (HTTP ${response.status}).`);
+        }
+        validationData = await response.json();
+      } catch (err) {
+        console.warn("Passenger hub validation failed; checking available hubs instead:", err);
+      }
 
-      if (validationData && validationData.nearestHub) {
-        const targetHub = validationData.nearestHub;
-        const hubChanged = String(selectedPickupHubRef.current?.id) !== String(targetHub.id);
-        setSelectedPickupHub(targetHub);
-        selectedPickupHubRef.current = targetHub;
-        activeHubNameRef.current = targetHub.name;
-        
-        if (validationData.distanceInMeters) {
-          setDistanceToHub(Math.round(validationData.distanceInMeters));
-        } else {
-          const dist = calculateHaversine(lat, lng, parseFloat(targetHub.latitude), parseFloat(targetHub.longitude));
-          setDistanceToHub(Math.round(dist * 1000));
+      let targetHub = validationData?.nearestHub;
+      let fallbackDistanceMeters = null;
+
+      if (!targetHub) {
+        const hubsResponse = await fetch(`${API_URL}/hubs`);
+        if (!hubsResponse.ok) {
+          throw new Error(`Available hubs lookup failed (HTTP ${hubsResponse.status}).`);
         }
 
-        if (hubChanged) fetchActiveCorridors(targetHub);
+        const hubs = await hubsResponse.json();
+        if (!Array.isArray(hubs)) {
+          throw new Error("The available hubs service returned an invalid response.");
+        }
+
+        const nearestHub = hubs.reduce((nearest, hub) => {
+          const coordinates = toMapCoordinate(hub.latitude, hub.longitude);
+          if (!coordinates || !hub.id) return nearest;
+
+          const distanceKm = calculateHaversine(
+            lat,
+            lng,
+            coordinates.latitude,
+            coordinates.longitude
+          );
+          return !nearest || distanceKm < nearest.distanceKm
+            ? { hub: { ...hub, ...coordinates }, distanceKm }
+            : nearest;
+        }, null);
+
+        if (!nearestHub) {
+          setSelectedPickupHub(null);
+          selectedPickupHubRef.current = null;
+          setRoutes([]);
+          setCorridorLoadError("No pickup hubs are currently available.");
+          return;
+        }
+
+        targetHub = nearestHub.hub;
+        fallbackDistanceMeters = nearestHub.distanceKm * 1000;
       }
+
+      const hubChanged = String(selectedPickupHubRef.current?.id) !== String(targetHub.id);
+      setSelectedPickupHub(targetHub);
+      selectedPickupHubRef.current = targetHub;
+      activeHubNameRef.current = targetHub.name;
+
+      const reportedDistance = validationData?.distanceInMeters;
+      if (reportedDistance !== undefined && reportedDistance !== null && Number.isFinite(Number(reportedDistance))) {
+        setDistanceToHub(Math.round(Number(reportedDistance)));
+      } else if (fallbackDistanceMeters !== null) {
+        setDistanceToHub(Math.round(fallbackDistanceMeters));
+      } else {
+        const dist = calculateHaversine(lat, lng, parseFloat(targetHub.latitude), parseFloat(targetHub.longitude));
+        setDistanceToHub(Math.round(dist * 1000));
+      }
+
+      if (hubChanged) fetchActiveCorridors(targetHub);
     } catch (err) {
       console.log("Error querying closest hub matrix:", err);
+      setCorridorLoadError(err.message || "Unable to find the nearest pickup hub.");
     } finally {
       setIsLocating(false);
     }
@@ -563,6 +613,16 @@ export default function PassengerScreen({ navigation }) {
                 standardRequestId: data.ride.id,
                 resolvedHubId: data.resolvedHubId,
                 bookingType: "standard",
+                pickupData: {
+                  lat: payload.pickup_lat,
+                  lng: payload.pickup_lng,
+                  address: "Current Pickup Location",
+                },
+                destinationData: {
+                  lat: payload.destination_lat,
+                  lng: payload.destination_lng,
+                  address: payload.destination_address || payload.destination_name,
+                },
                 ride: {
                   id: data.ride.id,
                   corridor: `Direct Pickup ➔ ${selectedDestination.name || customDestinationInput.trim()}`,

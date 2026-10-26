@@ -4,7 +4,7 @@ import { NavigationContainer, createNavigationContainerRef } from "@react-naviga
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import * as Location from "expo-location";
 import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from "expo-av";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 // 🔐 AUTH & CONTEXT
 import { AuthProvider, useAuth } from "./src/AuthContext";
@@ -217,7 +217,7 @@ async function resolveLifecycleRoute(user, { includeCompleted = true } = {}) {
       if (["accepted", "arrived", "in_trip", "intransit", "completed"].includes(status)) {
         return { name: "TrackingDriver", params };
       }
-      if (["pending", "searching"].includes(status)) {
+      if (["pending", "searching", "requested", "created"].includes(status)) {
         return { name: "Standard", params };
       }
     }
@@ -361,7 +361,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
   // 2. Location Permission Gate (Blocks registration/sign-in if location is rejected)
   if (!hasLocationPermission) {
     return (
-      <View style={styles.permissionContainer}>
+      <SafeAreaView style={styles.permissionContainer} edges={["top", "right", "bottom", "left"]}>
         <Text style={styles.permissionIcon}>📍</Text>
         <Text style={styles.permissionTitle}>Location Access Required</Text>
         <Text style={styles.permissionSubtitle}>
@@ -375,7 +375,7 @@ function AppNavigator({ hasLocationPermission, requestLocationPermission }) {
         <TouchableOpacity style={styles.secondaryButton} onPress={() => Linking.openSettings()}>
           <Text style={styles.secondaryButtonText}>Open System Settings</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>
     );
   }
 

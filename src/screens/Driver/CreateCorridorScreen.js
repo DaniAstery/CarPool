@@ -13,7 +13,8 @@ import {
   Switch,
   Modal,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT, Circle } from "react-native-maps";
+import MapView, { Marker, PROVIDER_DEFAULT, Circle } from "react-native-maps";
+import MapViewDirections from "react-native-maps-directions";
 import * as Location from "expo-location";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import CorridorDrawer from "../Corridor_Drawer";
@@ -21,13 +22,14 @@ import { useAuth } from "../../AuthContext";
 import { io } from "socket.io-client";
 import { playSound } from "../../utils/soundPlayer";
 import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { width, height } = Dimensions.get("window");
 
 const RAW_API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
 const API_URL = RAW_API_URL.replace(/\/api\/?$/, "").replace(/\/$/, "");
 console.log("🔌 [DEBUG] API_URL loaded as:", API_URL);
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const cleanMinimalMapStyle = [
   { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
@@ -197,21 +199,17 @@ const DispatchMap = memo(({
           </Marker>
         )}
 
-        {driverCoords && targetHubForLine && !isNaN(parseFloat(targetHubForLine.latitude)) && isCorridorActive && (
-          <Polyline
-            coordinates={[
-              {
-                latitude: parseFloat(driverCoords.latitude),
-                longitude: parseFloat(driverCoords.longitude)
-              },
-              {
-                latitude: parseFloat(targetHubForLine.latitude),
-                longitude: parseFloat(targetHubForLine.longitude)
-              }
-            ]}
+        {GOOGLE_MAPS_API_KEY && isValidMapCoordinate(driverCoords) && isValidMapCoordinate(targetHubForLine) && isCorridorActive && (
+          <MapViewDirections
+            origin={driverCoords}
+            destination={targetHubForLine}
+            apikey={GOOGLE_MAPS_API_KEY}
+            mode="DRIVING"
             strokeColor="#059669"
             strokeWidth={5}
-            geodesic={true}
+            lineCap="round"
+            resetOnChange={false}
+            onError={(message) => console.warn("Driver hub route directions failed:", message)}
           />
         )}
       </MapView>
@@ -305,6 +303,7 @@ const StandardOfferModal = ({ offer, onAccept, onDecline }) => {
 
 export default function CreateCorridorScreen({ navigation }) {
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const currentDriverId = user?.id || user?.user_id || null;
   const activeVehicleId = user?.vehicle_id || user?.vehicleId || 1;
 
@@ -333,6 +332,8 @@ export default function CreateCorridorScreen({ navigation }) {
   const [isPublishing, setIsPublishing] = useState(false);
 
   const [allHubs, setAllHubs] = useState([]);
+  const [loadingHubs, setLoadingHubs] = useState(true);
+  const [hubsLoadError, setHubsLoadError] = useState(false);
   const [predefinedCorridors, setPredefinedCorridors] = useState([]);
   const [passengerRequests, setPassengerRequests] = useState([]);
   const [showRadiusCircle, setShowRadiusCircle] = useState(true);
@@ -391,10 +392,20 @@ export default function CreateCorridorScreen({ navigation }) {
       setCurrentOffer(offerData);
     });
 
+    socketRef.current.on("offer_retracted", ({ rideId, ride_id }) => {
+      const retractedRideId = rideId || ride_id;
+      setCurrentOffer((offer) =>
+        String(offer?.rideId || offer?.ride_id || offer?.id) === String(retractedRideId)
+          ? null
+          : offer
+      );
+    });
+
     return () => {
       if (socketRef.current) {
         socketRef.current.off("connect");
         socketRef.current.off("new_ride_offer");
+        socketRef.current.off("offer_retracted");
         socketRef.current.disconnect();
       }
     };
@@ -565,23 +576,45 @@ export default function CreateCorridorScreen({ navigation }) {
   }, [currentHub?.name]);
 
   useEffect(() => {
+    let isMounted = true;
+
     async function fetchAllHubs() {
       try {
         const res = await fetch(`${API_URL}/api/hubs`);
-        if (res.ok) {
-          const data = await res.json();
-          const sanitizedHubs = Array.isArray(data) ? data.map(h => ({
-            ...h,
-            latitude: parseFloat(h.latitude),
-            longitude: parseFloat(h.longitude)
-          })) : [];
+        if (!res.ok) {
+          throw new Error(`Hub request failed with status ${res.status}.`);
+        }
+
+        const data = await res.json();
+        if (!Array.isArray(data)) {
+          throw new Error("Hub request returned an invalid response.");
+        }
+
+        const sanitizedHubs = data.map(h => ({
+          ...h,
+          latitude: parseFloat(h.latitude),
+          longitude: parseFloat(h.longitude)
+        }));
+        if (isMounted) {
           setAllHubs(sanitizedHubs);
+          setHubsLoadError(false);
         }
       } catch (err) {
-        console.log("❌ Failed to fetch hubs exception:", err);
+        console.error("Failed to fetch nearby hubs:", err);
+        if (isMounted) {
+          setAllHubs([]);
+          setHubsLoadError(true);
+        }
+      } finally {
+        if (isMounted) setLoadingHubs(false);
       }
     }
+
     fetchAllHubs();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const topHubs = useMemo(() => {
@@ -663,14 +696,14 @@ export default function CreateCorridorScreen({ navigation }) {
       return;
     }
 
-    if (!passengerUserId && !targetRideId) {
-      Alert.alert("Offer Error", "Missing passenger or ride identifier in offer.");
+    if (!targetRideId) {
+      Alert.alert("Offer Error", "Missing ride identifier in offer.");
       return;
     }
 
     const targetUrl = `${API_URL}/api/rides/solo/accept`;
     const payload = { 
-      user_id: passengerUserId, 
+      ...(passengerUserId ? { user_id: passengerUserId } : {}),
       ride_id: targetRideId, 
       driver_id: currentDriverId 
     };
@@ -687,9 +720,14 @@ export default function CreateCorridorScreen({ navigation }) {
       if (res.ok && data.success) {
         setCurrentOffer(null);
         navigation.navigate("DriverEnRoute", { 
-          ride: data.ride,
+          ride: {
+            ...data.ride,
+            passenger_name: data.passenger?.full_name,
+            passenger_phone: data.passenger?.phone_number,
+          },
+          rideId: data.ride_id || data.ride?.id || targetRideId,
           driverId: currentDriverId,
-          passengerId: passengerUserId
+          passengerId: data.ride?.user_id || passengerUserId
         });
       } else {
         Alert.alert("Offer Claimed", data.message || "Ride request is no longer available.");
@@ -811,7 +849,7 @@ export default function CreateCorridorScreen({ navigation }) {
 
   if (loadingLocation || !currentRegion) {
     return (
-      <SafeAreaView style={[styles.container, styles.centered]}>
+      <SafeAreaView style={[styles.container, styles.centered]} edges={["top", "right", "bottom", "left"]}>
         <ActivityIndicator size="large" color="#059669" />
         <Text style={styles.loadingText}>Detecting your location & profiles...</Text>
       </SafeAreaView>
@@ -821,7 +859,7 @@ export default function CreateCorridorScreen({ navigation }) {
   const targetHubForLine = currentHub || nearestHub;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "right", "left"]}>
       <StandardOfferModal 
         offer={currentOffer} 
         onAccept={handleAcceptStandardOffer} 
@@ -954,7 +992,7 @@ export default function CreateCorridorScreen({ navigation }) {
         <ScrollView 
           showsVerticalScrollIndicator={false}
           style={styles.drawerScrollBody}
-          contentContainerStyle={{ paddingBottom: 25 }}
+          contentContainerStyle={{ paddingBottom: 120 }}
           keyboardShouldPersistTaps="handled"
         >
           {!isOnline ? (
@@ -985,57 +1023,65 @@ export default function CreateCorridorScreen({ navigation }) {
                 </View>
               </View>
             </View>
-          ) : (
-            <>
-              {/* HUB CHIPS HORIZONTAL SCROLL */}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hubChipsScroll}>
-                {topHubs.map((hub) => {
-                  const isSelected = currentHub && currentHub.id === hub.id;
-                  const distStr = hub.distanceKm !== undefined ? `${hub.distanceKm.toFixed(1)} km` : "";
-                  return (
-                    <TouchableOpacity
-                      key={`hub-chip-${hub.id}`}
-                      style={[
-                        styles.hubChip,
-                        isSelected && styles.hubChipSelected,
-                        !isCorridorActive && styles.hubChipDisabled
-                      ]}
-                      onPress={() => isCorridorActive && handleHubSelection(hub)}
-                      disabled={!isCorridorActive}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons 
-                        name="location" 
-                        size={14} 
-                        color={isSelected ? "#FFFFFF" : isCorridorActive ? "#059669" : "#9CA3AF"} 
-                      />
-                      <Text style={[
-                        styles.hubChipText, 
-                        isSelected && styles.hubChipTextSelected,
-                        !isCorridorActive && styles.hubChipTextDisabled
-                      ]}>
-                        {hub.name} {distStr ? `(${distStr})` : ""}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+          ) : null}
 
-              {/* CORRIDOR SECTION & ROUTES LIST */}
-              <View style={styles.corridorSection}>
-                <Text style={styles.sectionHeadingLabel}>
-                  Available Corridors from {currentHub ? currentHub.name : "Hub"}
-                </Text>
+          <>
+            {/* HUB CHIPS HORIZONTAL SCROLL */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hubChipsScroll}>
+              {loadingHubs ? (
+                <Text style={styles.emptyText}>Loading nearby hubs...</Text>
+              ) : hubsLoadError ? (
+                <Text style={styles.emptyText}>Could not load nearby hubs. Please try again later.</Text>
+              ) : topHubs.length === 0 ? (
+                <Text style={styles.emptyText}>No nearby hubs available.</Text>
+              ) : null}
+              {topHubs.map((hub) => {
+                const isSelected = currentHub && currentHub.id === hub.id;
+                const distStr = hub.distanceKm !== undefined ? `${hub.distanceKm.toFixed(1)} km` : "";
+                return (
+                  <TouchableOpacity
+                    key={`hub-chip-${hub.id}`}
+                    style={[
+                      styles.hubChip,
+                      isSelected && styles.hubChipSelected,
+                      !isCorridorActive && styles.hubChipDisabled
+                    ]}
+                    onPress={() => isCorridorActive && handleHubSelection(hub)}
+                    disabled={!isCorridorActive}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons
+                      name="location"
+                      size={14}
+                      color={isSelected && isCorridorActive ? "#FFFFFF" : isCorridorActive ? "#059669" : "#9CA3AF"}
+                    />
+                    <Text style={[
+                      styles.hubChipText,
+                      isSelected && styles.hubChipTextSelected,
+                      !isCorridorActive && styles.hubChipTextDisabled
+                    ]}>
+                      {hub.name} {distStr ? `(${distStr})` : ""}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
-                {loadingCorridors ? (
-                  <View style={styles.inlineLoader}>
-                    <ActivityIndicator size="small" color="#059669" />
-                    <Text style={styles.inlineLoaderText}>Loading active corridors...</Text>
-                  </View>
-                ) : predefinedCorridors.length === 0 ? (
-                  <Text style={styles.emptyText}>No active routes configured for this hub yet.</Text>
-                ) : (
-                 predefinedCorridors.map((route, idx) => {
+            {/* CORRIDOR SECTION & ROUTES LIST */}
+            <View style={styles.corridorSection}>
+              <Text style={styles.sectionHeadingLabel}>
+                Available Corridors from {currentHub ? currentHub.name : "Hub"}
+              </Text>
+
+              {loadingCorridors ? (
+                <View style={styles.inlineLoader}>
+                  <ActivityIndicator size="small" color="#059669" />
+                  <Text style={styles.inlineLoaderText}>Loading active corridors...</Text>
+                </View>
+              ) : predefinedCorridors.length === 0 ? (
+                <Text style={styles.emptyText}>No active routes configured for this hub yet.</Text>
+              ) : (
+                predefinedCorridors.map((route, idx) => {
                     const rId = route.route_id || route.id;
                     const isRouteSelected = selectedRoute && (selectedRoute.route_id === rId || selectedRoute.id === rId);
                     
@@ -1134,16 +1180,15 @@ export default function CreateCorridorScreen({ navigation }) {
                         </View>
                       </TouchableOpacity>
                     );
-                  })
-                )}
-              </View>
-            </>
-          )}
+                })
+              )}
+            </View>
+          </>
         </ScrollView>
       </View>
 
       {/* FIXED STICKY FOOTER BUTTON */}
-      <View style={styles.stickyFooterContainer}>
+      <View style={[styles.stickyFooterContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
         <TouchableOpacity
           style={[
             styles.launchButton,
@@ -1442,6 +1487,8 @@ const styles = StyleSheet.create({
   },
   hubChipDisabled: {
     opacity: 0.5,
+    backgroundColor: "#F3F4F6",
+    borderColor: "#E5E7EB",
   },
   hubChipText: {
     fontSize: 12,
@@ -1500,6 +1547,8 @@ const styles = StyleSheet.create({
   },
   corridorCardDisabled: {
     opacity: 0.6,
+    backgroundColor: "#F9FAFB",
+    borderColor: "#E5E7EB",
   },
   corridorCardHeader: {
     flexDirection: "row",

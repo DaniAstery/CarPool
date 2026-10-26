@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useRef } from "react";
 import {
   AppState,
+  BackHandler,
   View,
   Text,
   StyleSheet,
   ActivityIndicator,
+  Alert,
   Dimensions,
   Animated,
   Easing,
@@ -31,34 +33,22 @@ export default function MatchingScreen({ navigation, route }) {
   const [matchedCount, setMatchedCount] = useState(1);
   const [displayedPrice, setDisplayedPrice] = useState(route?.params?.ride?.price || "ETB 150");
   const [isCancelling, setIsCancelling] = useState(false);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [currentLocation, setCurrentLocation] = useState(null);
+  const [statusPollRestart, setStatusPollRestart] = useState(0);
 
   const mapRef = useRef(null);
   const radarAnim = useRef(new Animated.Value(0)).current;
   const prevCountRef = useRef(1);
   const isNavigatingRef = useRef(false);
+  const isCancellingRef = useRef(false);
+  const statusControllerRef = useRef(null);
   
   // 🛡️ SAFE CONFIGURATION UNPACKING MATRIX
   const routeId = route?.params?.routeId || route?.params?.route_id || null;
   const hubId = route?.params?.hubId || route?.params?.hub_id || null;
-  const userId = route?.params?.userId || route?.params?.user_id || "1"; 
-  const currentUserId = parseInt(userId, 10) || 1;
+  const userId = route?.params?.userId || route?.params?.user_id;
+  const currentUserId = Number.parseInt(String(userId ?? ""), 10);
   const ride = route?.params?.ride || { corridor: "Evaluating Corridor...", time: "Calculating..." };
-
-  // 1. ELAPSED SEARCH TIMER
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatSearchTime = (secs) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s < 10 ? "0" : ""}${s}`;
-  };
 
   // 2. REAL-TIME GPS RESOLUTION & MAP CENTERING
   useEffect(() => {
@@ -114,25 +104,37 @@ export default function MatchingScreen({ navigation, route }) {
     let socketRefreshTimer;
 
     const checkMyPoolStatus = async () => {
-      if (!isMounted || isCancelling || isNavigatingRef.current || statusRequestInFlight) return;
+      if (
+        !Number.isInteger(currentUserId) ||
+        currentUserId <= 0 ||
+        !isMounted ||
+        isCancellingRef.current ||
+        isNavigatingRef.current ||
+        statusRequestInFlight
+      ) return;
       statusRequestInFlight = true;
 
+      const controller = new AbortController();
+      statusControllerRef.current = controller;
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
-
         const response = await fetch(`${API_URL}/routes/status/${currentUserId}`, {
           signal: controller.signal,
         });
-        clearTimeout(timeoutId);
         
         if (!response.ok) return;
 
         const data = await response.json();
-        if (!isMounted) return;
+        if (!isMounted || isCancellingRef.current) return;
 
         const currentPoolStatus = (data.status || data.pool?.status || data.match_pipeline?.status || "searching").toLowerCase().trim();
         const targetRideOfferId = data.matched_ride_offer_id || data.pool?.matched_ride_offer_id || data.match_pipeline?.ride_offer_id || null;
+
+        if (["idle", "cancelled", "expired"].includes(currentPoolStatus)) {
+          isNavigatingRef.current = true;
+          navigation.replace("Passenger");
+          return;
+        }
         
         // 🛡️ ROBUST COUNT EXTRACTION (Checks backend count property and passenger arrays)
         const rawCount =
@@ -224,8 +226,10 @@ export default function MatchingScreen({ navigation, route }) {
         // Suppress temporary network drops during polling
         isNavigatingRef.current = false;
       } finally {
+        clearTimeout(timeoutId);
+        if (statusControllerRef.current === controller) statusControllerRef.current = null;
         statusRequestInFlight = false;
-        if (isMounted && !isCancelling && !isNavigatingRef.current) {
+        if (isMounted && !isCancellingRef.current && !isNavigatingRef.current) {
           timerId = setTimeout(checkMyPoolStatus, 2500);
         }
       }
@@ -255,6 +259,7 @@ export default function MatchingScreen({ navigation, route }) {
 
     return () => {
       isMounted = false;
+      statusControllerRef.current?.abort();
       if (timerId) clearTimeout(timerId);
       if (socketRefreshTimer) clearTimeout(socketRefreshTimer);
       appStateSubscription.remove();
@@ -263,23 +268,76 @@ export default function MatchingScreen({ navigation, route }) {
       socket.off("corridor_offer_updated", refreshForRoute);
       socket.disconnect();
     };
-  }, [routeId, hubId, userId, navigation, isCancelling]);
+  }, [routeId, hubId, userId, navigation, statusPollRestart]);
 
-  // 🛡️ HANDLE CANCELLATION VIA BACK ARROW (PATCH status to 'cancelled')
+  // Cancel the server-side pool entry before leaving the matching screen.
   const handleCancelPoolRequest = async () => {
+    if (isCancellingRef.current) return;
+    if (!Number.isInteger(currentUserId) || currentUserId <= 0) {
+      Alert.alert("Sign-in Required", "Please sign in again before cancelling this corridor request.");
+      return;
+    }
+    isCancellingRef.current = true;
     setIsCancelling(true);
+    statusControllerRef.current?.abort();
+
     try {
       console.log(`[Matching] Passenger ${currentUserId} cancelling pool request...`);
-      await fetch(`${API_URL}/routes/pool/${currentUserId}`, {
+      const response = await fetch(`${API_URL}/routes/pool/${currentUserId}`, {
         method: "PATCH",
       });
+      const responseText = await response.text();
+      let data;
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        const responseType = response.headers.get("content-type") || "";
+        if (response.status === 404 || responseType.includes("text/html")) {
+          throw new Error(
+            "The server does not have the corridor-cancellation endpoint yet. Deploy the latest backend, then try again."
+          );
+        }
+        throw new Error(`The server returned an invalid cancellation response (HTTP ${response.status}).`);
+      }
+      if (!response.ok || data.success !== true) {
+        throw new Error(data.message || `Cancellation failed (HTTP ${response.status}).`);
+      }
+
+      isNavigatingRef.current = true;
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.replace("Passenger");
+      }
     } catch (err) {
-      console.log("⚠️ Network note during cancellation cleanup:", err.message);
-    } finally {
+      console.error("Pool cancellation failed:", err);
+      isCancellingRef.current = false;
       setIsCancelling(false);
-      navigation.replace("Passenger");
+      setStatusPollRestart((restart) => restart + 1);
+      Alert.alert(
+        "Could Not Cancel Request",
+        err.message || "The server could not cancel your corridor request. Check your connection and try again."
+      );
     }
   };
+
+  useEffect(() => {
+    const handleBackPress = () => {
+      handleCancelPoolRequest();
+      return true;
+    };
+    const backHandler = BackHandler.addEventListener("hardwareBackPress", handleBackPress);
+    const removeListener = navigation.addListener("beforeRemove", (event) => {
+      if (isNavigatingRef.current) return;
+      event.preventDefault();
+      handleCancelPoolRequest();
+    });
+
+    return () => {
+      backHandler.remove();
+      removeListener();
+    };
+  }, [navigation]);
 
   const ringScaleOut = radarAnim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1.4] });
   const ringOpacityIn = radarAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 0.4, 0] });
@@ -291,7 +349,7 @@ export default function MatchingScreen({ navigation, route }) {
           <Text style={styles.backButton}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Corridor Smart Matching</Text>
-        <Text style={styles.timerBadge}>{formatSearchTime(elapsedSeconds)}</Text>
+        <Text style={styles.timerBadge}>{isCancelling ? "CANCELLING" : "SEARCHING"}</Text>
       </View>
       
       <View style={styles.mapContainer}>

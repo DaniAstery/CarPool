@@ -10,7 +10,8 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, PROVIDER_DEFAULT } from "react-native-maps";
+import MapViewDirections from "react-native-maps-directions";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import io from "socket.io-client";
@@ -19,8 +20,11 @@ import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinate
 
 const { width } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -69,9 +73,9 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   const socketRef = useRef(null);
 
   const rawRideData = ride?.ride || ride || {};
-  const currentRideId = rideId || rawRideData.id;
-  const currentDriverId = driverId || rawRideData.driver_id || 33;
-  const passengerId = rawRideData.user_id || 27;
+  const currentRideId = rideId || rawRideData.id || rawRideData.ride_id;
+  const currentDriverId = driverId || rawRideData.driver_id || rawRideData.driverId;
+  const passengerId = rawRideData.user_id || rawRideData.userId || rawRideData.passenger_id;
 
   // 1. Core State & Loading Control
   const [loading, setLoading] = useState(true);
@@ -91,8 +95,8 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   const [livePrice, setLivePrice] = useState(0);
 
   // Passenger & Metadata
-  const passengerName = rawRideData.passenger_name || `Passenger #${passengerId}`;
-  const passengerPhone = rawRideData.passenger_phone || "251998476704";
+  const passengerName = rawRideData.passenger_name || "Passenger";
+  const passengerPhone = rawRideData.passenger_phone || "";
   const destinationName = rawRideData.destination_name || "Bole Medhanialem";
   const destinationAddress = rawRideData.destination_address || "Bole Road, Addis Ababa";
 
@@ -128,6 +132,11 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
   }, [currentRideId]);
 
   const initTripSession = async () => {
+    if (!currentRideId || !currentDriverId || !passengerId) {
+      setError("Ride, driver, or passenger details are missing.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -235,6 +244,7 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ride_id: currentRideId,
+          driver_id: currentDriverId,
           actual_distance_km: distanceKm,
           elapsed_minutes: elapsedMinutes,
         }),
@@ -349,13 +359,17 @@ export default function DriverStandardTripInProgress({ route, navigation }) {
           </Marker>
         )}
 
-        {/* ROUTE POLYLINE */}
-        {isValidMapCoordinate(driverCoords) && isValidMapCoordinate(destinationCoords) && (
-          <Polyline
-            coordinates={[driverCoords, destinationCoords]}
+        {GOOGLE_MAPS_API_KEY && isValidMapCoordinate(driverCoords) && isValidMapCoordinate(destinationCoords) && (
+          <MapViewDirections
+            origin={driverCoords}
+            destination={destinationCoords}
+            apikey={GOOGLE_MAPS_API_KEY}
+            mode="DRIVING"
             strokeColor="#111827"
             strokeWidth={5}
-            geodesic={true}
+            lineCap="round"
+            resetOnChange={false}
+            onError={(message) => console.warn("Standard trip route directions failed:", message)}
           />
         )}
       </MapView>

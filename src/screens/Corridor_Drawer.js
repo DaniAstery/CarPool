@@ -14,6 +14,7 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../AuthContext";
 
 const { width, height } = Dimensions.get("window");
@@ -277,6 +278,7 @@ export default function CorridorDrawer({
   return (
     <Modal visible={visible} transparent={true} animationType="fade" onRequestClose={onClose}>
       <TouchableWithoutFeedback onPress={onClose}>
+        <SafeAreaView style={styles.modalSafeArea} edges={["top", "right", "bottom", "left"]}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback>
             <View style={[styles.drawerContainer, isDriver ? styles.darkDrawer : styles.lightDrawer]}>
@@ -671,6 +673,7 @@ export default function CorridorDrawer({
             </View>
           </TouchableWithoutFeedback>
         </View>
+        </SafeAreaView>
       </TouchableWithoutFeedback>
     </Modal>
   );
@@ -682,9 +685,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "flex-start",
     alignItems: "flex-start",
-    paddingTop: 60,
+    paddingTop: 12,
     paddingLeft: 12,
   },
+  modalSafeArea: { flex: 1 },
   drawerContainer: {
     width: width * 0.82,
     maxHeight: height * 0.82,

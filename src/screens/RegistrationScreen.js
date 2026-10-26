@@ -450,6 +450,7 @@ export default function RegistrationScreen() {
         visible={isRoleSelectionVisible}
         accounts={availableAccounts}
         onSelectRole={handleSelectRole}
+        onClose={() => setIsRoleSelectionVisible(false)}
       />
 
       {/* 🖼️ PROFILE PHOTO CAPTURE MODAL */}

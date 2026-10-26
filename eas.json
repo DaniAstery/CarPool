@@ -1,18 +1,20 @@
 {
   "cli": {
     "version": ">= 23.1.0",
-    "appVersionSource": "remote"
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
       "env": {
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyDZo26RtMEWndm5gPqMO9M2bcCZHOdpqao",
         "EXPO_PUBLIC_API_URL": "http://3.223.192.195:5000",
-        "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
         "EXPO_PUBLIC_SOCKET_URL": "http://3.223.192.195:5000",
         "EXPO_PUBLIC_API_URL_SignTG": "http://3.223.192.195:5000/api",
+        "EXPO_PUBLIC_API_URL_PASSENGER": "http://3.223.192.195:5000/api",
         "EXPO_PUBLIC_TELEGRAM_BOT_URL": "https://t.me/CorridorTelegrambot"
+
       }
     },
     "preview": {
@@ -29,8 +31,9 @@
       }
     },
     "production": {
-      "autoIncrement": true,
+      "autoIncrement": false,
       "android": {
+        "buildType": "app-bundle",
         "credentialsSource": "local"
       },
       "env": {

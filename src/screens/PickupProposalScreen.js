@@ -34,7 +34,7 @@ const DEFAULT_MAP_REGION = {
   longitudeDelta: 0.015,
 };
 
-// Fetch real street-level walking path from OSRM public walking router with urban grid fallback
+// Fetch a street-level walking path; omit the line if routing is unavailable.
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
   if (!isValidMapCoordinate(userLoc) || !isValidMapCoordinate(hubLoc)) {
     return { distance: null, duration: null, coordinates: [] };
@@ -66,14 +66,6 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
     console.log("⚠️ OSRM routing request failed, utilizing urban grid fallback");
   }
 
-  const midLat = (userLoc.latitude + hubLoc.latitude) / 2;
-  const gridCoordinates = [
-    userLoc,
-    { latitude: midLat, longitude: userLoc.longitude },
-    { latitude: midLat, longitude: hubLoc.longitude },
-    { latitude: hubLoc.latitude, longitude: hubLoc.longitude }
-  ];
-
   const toRad = (val) => (val * Math.PI) / 180;
   const R = 6371;
   const dLat = toRad(hubLoc.latitude - userLoc.latitude);
@@ -85,7 +77,7 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
   const durationMinutes = Math.max(1, Math.round((distanceKm / 4.8) * 60));
   const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
 
-  return { distance: distanceStr, duration: durationStr, coordinates: gridCoordinates };
+  return { distance: distanceStr, duration: durationStr, coordinates: [] };
 };
 
 // ------------------------------------------------------------------
@@ -578,16 +570,24 @@ export default function PickupProposalScreen({ navigation, route }) {
       <View style={styles.statusBarBanner}>
         <View style={styles.statusIndicatorWrapper}>
           <View style={styles.statusCenterCoreDot}>
-            <FontAwesome5 name="car-side" size={11} color="#FFFFFF" />
+            <FontAwesome5 name="car-side" size={14} color="#FFFFFF" />
           </View>
         </View>
         <View style={styles.statusTextContainer}>
-          <Text style={styles.statusPrimaryText}>Pickup Proposal Active</Text>
-          <Text style={styles.statusSecondaryText}>
-            {walkingDistance && walkingDuration 
-              ? `Walk ${walkingDistance} (~${walkingDuration}) to pickup hub` 
-              : "Review meeting hub & confirm participation"}
+          <Text style={styles.statusPrimaryText}>
+            {userAccepted ? "Pickup confirmed" : "Pickup proposal"}
           </Text>
+          <Text style={styles.statusSecondaryText}>
+            {userAccepted
+              ? "You're confirmed. Waiting for your driver."
+              : walkingDistance && walkingDuration
+                ? `Walk ${walkingDistance} · about ${walkingDuration} to pickup`
+                : "Review the pickup point and confirm your seat."}
+          </Text>
+        </View>
+        <View style={[styles.liveBadge, userAccepted && styles.confirmedBadge]}>
+          <View style={[styles.liveBadgeDot, userAccepted && styles.confirmedBadgeDot]} />
+          <Text style={styles.liveBadgeText}>{userAccepted ? "CONFIRMED" : "LIVE"}</Text>
         </View>
       </View>
 
@@ -603,6 +603,7 @@ export default function PickupProposalScreen({ navigation, route }) {
         ) : (
           <View style={styles.mapPlaceholder}>
             <ActivityIndicator size="small" color="#059669" />
+            <Text style={styles.mapPlaceholderText}>Preparing pickup map...</Text>
           </View>
         )}
       </View>
@@ -618,9 +619,9 @@ export default function PickupProposalScreen({ navigation, route }) {
           <View style={styles.dragHandle} />
           <View style={styles.headerRow}>
             <View style={styles.previewLeftCluster}>
-              <Text style={styles.title}>Corridor Match</Text>
+              <Text style={styles.title}>Pickup plan</Text>
               <Text style={styles.subtitle}>
-                Meet at <Text style={styles.boldText}>{meetupHub.name}</Text>
+                Meet your driver at <Text style={styles.boldText}>{meetupHub.name}</Text>
               </Text>
               {walkingDistance && walkingDuration && (
                 <View style={styles.walkingInfoPill}>
@@ -632,9 +633,11 @@ export default function PickupProposalScreen({ navigation, route }) {
               )}
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <View style={styles.timerBadge}>
-                <Ionicons name="time-outline" size={14} color="#059669" />
-                <Text style={styles.timerText}>{timeLeft}s</Text>
+              <View style={[styles.timerBadge, timeLeft <= 10 && styles.timerBadgeUrgent]}>
+                <Ionicons name="time-outline" size={14} color={timeLeft <= 10 ? "#D97706" : "#059669"} />
+                <Text style={[styles.timerText, timeLeft <= 10 && styles.timerTextUrgent]}>
+                  {timeLeft > 0 ? `${timeLeft}s` : "Ending"}
+                </Text>
               </View>
               <View style={styles.expandToggleBadge}>
                 <Text style={styles.expandToggleText}>{isDrawerExpanded ? "Collapse" : "Details"}</Text>
@@ -651,7 +654,7 @@ export default function PickupProposalScreen({ navigation, route }) {
           contentContainerStyle={{ paddingBottom: 8 }}
         >
           <View style={styles.rosterContainer}>
-            <Text style={styles.sectionHeader}>Matching Corridor Pool</Text>
+            <Text style={styles.sectionHeader}>Passengers on this ride</Text>
             
             <View style={styles.riderRow}>
               <View style={[styles.avatar, { backgroundColor: "#059669" }]}>
@@ -692,8 +695,9 @@ export default function PickupProposalScreen({ navigation, route }) {
 
           <View style={styles.driverCard}>
             <FontAwesome5 name="user-shield" size={16} color="#059669" />
-            <Text style={styles.driverText}>
-              Driver Status: <Text style={styles.boldText}>{driverState.toUpperCase()}</Text>
+            <Text style={styles.driverText}>Driver status</Text>
+            <Text style={styles.driverStatusTag}>
+              {driverState === "pending" ? "SEARCHING" : driverState.toUpperCase()}
             </Text>
           </View>
         </ScrollView>
@@ -726,7 +730,7 @@ export default function PickupProposalScreen({ navigation, route }) {
                     <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
                   )}
                   <Text style={styles.acceptButtonText}>
-                    {userAccepted ? "Waiting for driver..." : isAcceptingProposal ? "Accepting..." : "Accept Hub"}
+                    {userAccepted ? "Confirmed" : isAcceptingProposal ? "Confirming..." : "Accept pickup"}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -751,16 +755,22 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#FFFFFF" },
   
   // Status Bar Banner
-  statusBarBanner: { backgroundColor: "#059669", flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, zIndex: 20 },
-  statusIndicatorWrapper: { width: 24, height: 24, justifyContent: "center", alignItems: "center", marginRight: 14 },
-  statusCenterCoreDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#059669", justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: "#A7F3D0" },
+  statusBarBanner: { backgroundColor: "#0F172A", flexDirection: "row", alignItems: "center", paddingHorizontal: 18, paddingVertical: 14, zIndex: 20, elevation: 4 },
+  statusIndicatorWrapper: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(255,255,255,0.1)", justifyContent: "center", alignItems: "center", marginRight: 12 },
+  statusCenterCoreDot: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#059669", justifyContent: "center", alignItems: "center" },
   statusTextContainer: { flex: 1 },
-  statusPrimaryText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
-  statusSecondaryText: { color: "#A7F3D0", fontSize: 11, marginTop: 2 },
+  statusPrimaryText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700", letterSpacing: 0.1 },
+  statusSecondaryText: { color: "#CBD5E1", fontSize: 11, lineHeight: 16, marginTop: 3 },
+  liveBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "rgba(16,185,129,0.16)", borderRadius: 12, paddingHorizontal: 9, paddingVertical: 6, marginLeft: 8 },
+  confirmedBadge: { backgroundColor: "rgba(59,130,246,0.18)" },
+  liveBadgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#34D399", marginRight: 5 },
+  confirmedBadgeDot: { backgroundColor: "#60A5FA" },
+  liveBadgeText: { color: "#D1FAE5", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
   
   // Map Elements
   mapContainer: { flex: 1 },
-  mapPlaceholder: { flex: 1, backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center" },
+  mapPlaceholder: { flex: 1, backgroundColor: "#F8FAFC", justifyContent: "center", alignItems: "center" },
+  mapPlaceholderText: { color: "#64748B", fontSize: 12, fontWeight: "600", marginTop: 10 },
   
   // Circular Glowing Compass Arrow Passenger Marker
   userArrowOuterHalo: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(14, 165, 233, 0.25)", justifyContent: "center", alignItems: "center" },
@@ -777,13 +787,13 @@ const styles = StyleSheet.create({
     position: "absolute", 
     bottom: 0, 
     width: width, 
-    backgroundColor: "#F9FAFB", 
+    backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24, 
     borderTopRightRadius: 24, 
     paddingTop: 8, 
-    paddingHorizontal: 16, 
+    paddingHorizontal: 18,
     borderWidth: 1, 
-    borderColor: "#E5E7EB", 
+    borderColor: "#E2E8F0",
     elevation: 15,
     zIndex: 30 
   },
@@ -794,23 +804,25 @@ const styles = StyleSheet.create({
   dragHandle: { width: 40, height: 4, backgroundColor: "#D1D5DB", borderRadius: 2, alignSelf: "center", marginBottom: 10 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
   previewLeftCluster: { flex: 1 },
-  title: { fontSize: 18, fontWeight: "700", color: "#111111" },
-  subtitle: { fontSize: 13, color: "#6B7280", marginTop: 2 },
+  title: { fontSize: 19, fontWeight: "700", color: "#0F172A", letterSpacing: -0.2 },
+  subtitle: { fontSize: 13, color: "#64748B", marginTop: 3 },
   boldText: { fontWeight: "700", color: "#111111" },
   
   walkingInfoPill: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginTop: 4, borderWidth: 1, borderColor: "#A7F3D0" },
   walkingInfoText: { fontSize: 11, fontWeight: "600", color: "#059669", marginLeft: 4 },
 
-  timerBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 6 },
+  timerBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#ECFDF5", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1, borderColor: "#A7F3D0", marginBottom: 6 },
+  timerBadgeUrgent: { backgroundColor: "#FFFBEB", borderColor: "#FDE68A" },
   timerText: { fontSize: 12, fontWeight: "700", color: "#059669", marginLeft: 4 },
+  timerTextUrgent: { color: "#D97706" },
   
   expandToggleBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end" },
   expandToggleText: { fontSize: 11, fontWeight: "600", color: "#6B7280", marginRight: 4 },
   
   // Drawer Body
   drawerScrollBody: { flexGrow: 0 },
-  rosterContainer: { marginVertical: 6, backgroundColor: "#FFFFFF", borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", padding: 12 },
-  sectionHeader: { fontSize: 11, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 },
+  rosterContainer: { marginVertical: 6, backgroundColor: "#FFFFFF", borderRadius: 16, borderWidth: 1, borderColor: "#E2E8F0", padding: 14 },
+  sectionHeader: { fontSize: 11, fontWeight: "700", color: "#64748B", textTransform: "uppercase", letterSpacing: 0.7, marginBottom: 12 },
   riderRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   avatar: { width: 30, height: 30, borderRadius: 15, justifyContent: "center", alignItems: "center" },
   avatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
@@ -820,22 +832,23 @@ const styles = StyleSheet.create({
   statusMatched: { backgroundColor: "#EFF6FF", color: "#1D4ED8" },
   statusPending: { backgroundColor: "#FEF3C7", color: "#D97706" },
   
-  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "#E5E7EB", marginVertical: 8 },
-  driverText: { marginLeft: 10, fontSize: 13, color: "#4B5563" },
+  driverCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F8FAFC", padding: 13, borderRadius: 14, borderWidth: 1, borderColor: "#E2E8F0", marginVertical: 8 },
+  driverText: { marginLeft: 10, flex: 1, fontSize: 13, fontWeight: "600", color: "#475569" },
+  driverStatusTag: { fontSize: 10, fontWeight: "800", color: "#B45309", backgroundColor: "#FEF3C7", paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, overflow: "hidden", letterSpacing: 0.4 },
   
   // Footer & Action Buttons
   drawerFooterSticky: { 
     paddingVertical: 10, 
     borderTopWidth: 1, 
     borderTopColor: "#E5E7EB", 
-    backgroundColor: "#F9FAFB" 
+    backgroundColor: "#FFFFFF"
   },
   actionButtonsRow: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
   actionButton: { paddingVertical: 14, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   actionButtonDisabled: { backgroundColor: "#9CA3AF" },
-  declineButton: { flex: 1, backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FCA5A5" },
-  declineButtonText: { color: "#EF4444", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
-  acceptButton: { flex: 2, backgroundColor: "#059669" },
-  acceptButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", letterSpacing: 0.5 },
+  declineButton: { flex: 1, minHeight: 50, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#CBD5E1" },
+  declineButtonText: { color: "#475569", fontSize: 14, fontWeight: "700" },
+  acceptButton: { flex: 2, minHeight: 50, backgroundColor: "#059669" },
+  acceptButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800", letterSpacing: 0.1 },
   buttonInternalGroup: { flexDirection: "row", alignItems: "center" },
 });

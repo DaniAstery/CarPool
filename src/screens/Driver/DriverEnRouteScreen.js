@@ -10,15 +10,21 @@ import {
   Alert,
   ActivityIndicator,
 } from "react-native";
-import MapView, { Marker, Polyline, Circle, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, Circle, PROVIDER_DEFAULT } from "react-native-maps";
+import MapViewDirections from "react-native-maps-directions";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
+import io from "socket.io-client";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
 
 const { width } = Dimensions.get("window");
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000";
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || "http://3.223.192.195:5000";
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 // Clean Uber/Lyft Minimal Map Style
 const cleanMinimalMapStyle = [
@@ -47,12 +53,23 @@ const resolvePickupCoordinates = (params) => {
 };
 
 export default function DriverEnRouteScreen({ route, navigation }) {
-  const { rideId, ride, driverId } = route.params || {};
-  const mapRef = useRef(null);
-
+  const { rideId, ride, driverId, passengerId: routePassengerId } = route.params || {};
   const rawRideData = ride?.ride || ride || {};
-  const currentRideId = rideId || rawRideData.id;
-  const currentDriverId = driverId || rawRideData.driver_id || 33;
+  const currentRideId = rideId || rawRideData.id || rawRideData.ride_id;
+  const currentDriverId =
+    driverId || rawRideData.driver_id || rawRideData.driverId || rawRideData.driver?.id;
+  const passengerId =
+    rawRideData.user_id ||
+    rawRideData.userId ||
+    rawRideData.passenger_id ||
+    rawRideData.passengerId ||
+    routePassengerId;
+  const mapRef = useRef(null);
+  const socketRef = useRef(null);
+  const latestDriverCoordsRef = useRef(
+    toMapCoordinate(rawRideData.driver_lat, rawRideData.driver_lng)
+  );
+  const latestHeadingRef = useRef(0);
 
   // 1. Interactive Ride Status & Loading State
   const [rideStatus, setRideStatus] = useState(rawRideData.status || "accepted");
@@ -68,11 +85,45 @@ export default function DriverEnRouteScreen({ route, navigation }) {
   const [heading, setHeading] = useState(0);
 
   // Passenger & Ride Metadata
-  const passengerName = rawRideData.passenger_name || `Passenger #${rawRideData.user_id || ""}`;
+  const passengerName = rawRideData.passenger_name || "Passenger";
   const passengerPhone = rawRideData.passenger_phone || "";
   const destinationName = rawRideData.destination_name || "Destination";
   const farePrice = rawRideData.price || 150;
   const distanceKm = rawRideData.distance_km || 5.2;
+
+  useEffect(() => {
+    if (!currentRideId || !currentDriverId) return;
+
+    socketRef.current = io(SOCKET_URL, {
+      transports: ["websocket"],
+      reconnection: true,
+    });
+    const socket = socketRef.current;
+
+    socket.on("connect", () => {
+      socket.emit("join_ride_room", {
+        rideId: currentRideId,
+        userId: currentDriverId,
+      });
+
+      const location = latestDriverCoordsRef.current;
+      if (location) {
+        socket.emit("update_driver_location", {
+          driver_id: currentDriverId,
+          ride_id: currentRideId,
+          user_id: passengerId,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          heading: latestHeadingRef.current,
+        });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [currentRideId, currentDriverId, passengerId]);
 
   // 4. Live GPS Tracking
   useEffect(() => {
@@ -88,19 +139,31 @@ export default function DriverEnRouteScreen({ route, navigation }) {
           distanceInterval: 10,
         },
         (loc) => {
-          setDriverCoords({
-            latitude: Number(loc.coords.latitude),
-            longitude: Number(loc.coords.longitude),
-          });
-          if (loc.coords.heading) {
-            setHeading(Number(loc.coords.heading));
+          const location = toMapCoordinate(loc.coords.latitude, loc.coords.longitude);
+          if (!isValidMapCoordinate(location)) return;
+
+          const nextHeading = Number(loc.coords.heading) || 0;
+          latestDriverCoordsRef.current = location;
+          latestHeadingRef.current = nextHeading;
+          setDriverCoords(location);
+          setHeading(nextHeading);
+
+          if (socketRef.current?.connected) {
+            socketRef.current.emit("update_driver_location", {
+              driver_id: currentDriverId,
+              ride_id: currentRideId,
+              user_id: passengerId,
+              latitude: location.latitude,
+              longitude: location.longitude,
+              heading: nextHeading,
+            });
           }
         }
       );
     })();
 
     return () => locationSubscription?.remove();
-  }, []);
+  }, [currentDriverId, currentRideId, passengerId]);
 
   // 5. Auto-Fit Camera
   useEffect(() => {
@@ -122,6 +185,10 @@ export default function DriverEnRouteScreen({ route, navigation }) {
   // Handle Arrival API Action
 const handleMarkArrived = async () => {
   if (isSubmitting) return;
+  if (!currentRideId || !currentDriverId) {
+    Alert.alert("Ride unavailable", "Ride and driver details are required to update arrival.");
+    return;
+  }
   setIsSubmitting(true);
 
   try {
@@ -131,6 +198,7 @@ const handleMarkArrived = async () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        ride_id: currentRideId,
         driver_id: currentDriverId,
       }),
     });
@@ -142,10 +210,10 @@ const handleMarkArrived = async () => {
 
     const data = await response.json();
 
-    if (data.success) {
+    if (response.ok && data.success) {
       setRideStatus("arrived");
     } else {
-      Alert.alert("Notice", data.message || "Failed to notify arrival.");
+      Alert.alert("Notice", data.message || data.error || "Failed to notify arrival.");
     }
   } catch (err) {
     console.error("❌ Arrival API error:", err);
@@ -158,6 +226,10 @@ const handleMarkArrived = async () => {
  // Handle Start Trip Action
   const handleStartTrip = async () => {
     if (isSubmitting) return;
+    if (!currentRideId || !currentDriverId) {
+      Alert.alert("Ride unavailable", "Ride and driver details are required to start this trip.");
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -168,12 +240,13 @@ const handleMarkArrived = async () => {
         body: JSON.stringify({
           ride_id: currentRideId,
           status: "in_trip",
+          driver_id: currentDriverId,
         }),
       });
 
       const data = await response.json();
 
-      if (data.success) {
+      if (response.ok && data.success) {
         // 2. Navigate to DriverStandardTripInProgress with updated status
         navigation.navigate("DriverStandardTripInProgress", {
           rideId: currentRideId,
@@ -268,13 +341,17 @@ const handleMarkArrived = async () => {
           </Marker>
         )}
 
-        {/* ROUTE POLYLINE */}
-        {isValidMapCoordinate(driverCoords) && isValidMapCoordinate(passengerPickupCoords) && (
-          <Polyline
-            coordinates={[driverCoords, passengerPickupCoords]}
+        {GOOGLE_MAPS_API_KEY && isValidMapCoordinate(driverCoords) && isValidMapCoordinate(passengerPickupCoords) && (
+          <MapViewDirections
+            origin={driverCoords}
+            destination={passengerPickupCoords}
+            apikey={GOOGLE_MAPS_API_KEY}
+            mode="DRIVING"
             strokeColor={rideStatus === "arrived" ? "#2563EB" : "#059669"}
             strokeWidth={5}
-            geodesic={true}
+            lineCap="round"
+            resetOnChange={false}
+            onError={(message) => console.warn("Driver pickup route directions failed:", message)}
           />
         )}
       </MapView>
@@ -350,6 +427,7 @@ const handleMarkArrived = async () => {
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: "#2563EB" }]}
             onPress={handleStartTrip}
+            disabled={isSubmitting}
           >
             <Text style={styles.actionButtonText}>Start Trip</Text>
           </TouchableOpacity>
@@ -357,7 +435,7 @@ const handleMarkArrived = async () => {
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: "#059669" }]}
             onPress={handleMarkArrived}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !currentRideId || !currentDriverId}
           >
             {isSubmitting ? (
               <ActivityIndicator color="#FFFFFF" size="small" />

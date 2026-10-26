@@ -50,10 +50,10 @@ const fetchDrivingRoute = async (origin, destination) => {
       }));
     }
   } catch (err) {
-    console.log("⚠️ OSRM driving route request failed, utilizing direct path fallback");
+    console.warn("OSRM driving route request failed:", err.message);
   }
 
-  return [origin, destination];
+  return [];
 };
 
 // ------------------------------------------------------------------

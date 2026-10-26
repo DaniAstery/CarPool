@@ -43,16 +43,31 @@ const cleanMinimalMapStyle = [
 ];
 
 export default function TrackingDriverScreen({ route, navigation }) {
-  const { rideId, userId, initialStatus } = route.params || {};
+  const { rideId, userId, initialStatus, ride: initialRide } = route.params || {};
+  const initialRideData = initialRide?.ride || initialRide || {};
 
   const mapRef = useRef(null);
   const socketRef = useRef(null);
 
-  const [tripStatus, setTripStatus] = useState(initialStatus || "accepted");
-  const [driverLocation, setDriverLocation] = useState(null);
+  const [tripStatus, setTripStatus] = useState(
+    String(initialStatus || initialRideData.status || "accepted").toLowerCase()
+  );
+  const [driverLocation, setDriverLocation] = useState(() =>
+    toMapCoordinate(initialRideData.driver_lat, initialRideData.driver_lng)
+  );
   const [passengerLocation, setPassengerLocation] = useState(null);
-  const [pickupCoords, setPickupCoords] = useState(null);
-  const [destinationCoords, setDestinationCoords] = useState(null);
+  const [pickupCoords, setPickupCoords] = useState(() =>
+    toMapCoordinate(
+      initialRideData.pickup_lat ?? initialRideData.pickupLat,
+      initialRideData.pickup_lng ?? initialRideData.pickupLng
+    )
+  );
+  const [destinationCoords, setDestinationCoords] = useState(() =>
+    toMapCoordinate(
+      initialRideData.destination_lat ?? initialRideData.destinationLat,
+      initialRideData.destination_lng ?? initialRideData.destinationLng
+    )
+  );
   
   const [tripMetrics, setTripMetrics] = useState({
     destinationName: "Destination",
@@ -103,43 +118,69 @@ export default function TrackingDriverScreen({ route, navigation }) {
   }, []);
 
   useEffect(() => {
+    let isSubscribed = true;
+    let requestInFlight = false;
+    let refreshTimer;
+
     async function fetchRideDetails() {
+      if (!rideId || !isSubscribed || requestInFlight) return;
+      requestInFlight = true;
+
       try {
         const res = await fetch(`${API_URL}/rides/${rideId}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          throw new Error(`Ride details request failed (HTTP ${res.status}).`);
+        }
         const data = await res.json();
+        if (!isSubscribed) return;
         
-        const pickup = toMapCoordinate(data?.pickup_lat, data?.pickup_lng);
-        const destination = toMapCoordinate(data?.destination_lat, data?.destination_lng);
+        const rideData = data?.ride || data;
+        const pickup = toMapCoordinate(
+          rideData?.pickup_lat ?? rideData?.pickupLat,
+          rideData?.pickup_lng ?? rideData?.pickupLng
+        );
+        const destination = toMapCoordinate(
+          rideData?.destination_lat ?? rideData?.destinationLat,
+          rideData?.destination_lng ?? rideData?.destinationLng
+        );
         if (pickup) setPickupCoords(pickup);
         if (destination) setDestinationCoords(destination);
-        if (data?.status) {
-          setTripStatus(data.status);
+        if (rideData?.status) {
+          setTripStatus(String(rideData.status).toLowerCase());
         }
         setTripMetrics({
-          destinationName: data.destination_name || "Destination Arrival",
-          price: data.price || 0,
-          distanceKm: data.distance_km || 0,
+          destinationName: rideData.destination_name || "Destination Arrival",
+          price: rideData.price || 0,
+          distanceKm: rideData.distance_km || 0,
         });
-        if (data?.driver) {
+        if (rideData?.driver) {
           setDriverInfo({
-            name: data.driver.name || "Captain",
-            phone: data.driver.phone_number || "",
-            plateNumber: data.driver.plate_number || "3-45678",
-            vehicleModel: data.driver.vehicle_model || "Toyota Corolla",
-            vehicleColor: data.driver.vehicle_color || "White",
-            rating: data.driver.rating || "5.00",
-            bankName: data.driver.bank_name || "Commercial Bank of Ethiopia (CBE)",
-            bankAccount: data.driver.bank_account_number || "1000847291024",
-            telebirrNumber: data.driver.telebirr_number || data.driver.phone_number || "251998476704",
+            name: rideData.driver.name || "Captain",
+            phone: rideData.driver.phone_number || "",
+            plateNumber: rideData.driver.plate_number || "3-45678",
+            vehicleModel: rideData.driver.vehicle_model || "Toyota Corolla",
+            vehicleColor: rideData.driver.vehicle_color || "White",
+            rating: rideData.driver.rating || "5.00",
+            bankName: rideData.driver.bank_name || "Commercial Bank of Ethiopia (CBE)",
+            bankAccount: rideData.driver.bank_account_number || "1000847291024",
+            telebirrNumber: rideData.driver.telebirr_number || rideData.driver.phone_number || "251998476704",
           });
         }
       } catch (err) {
-        console.error("Error loading ride details:", err);
+        if (isSubscribed) console.warn("Ride tracking refresh failed:", err.message);
+      } finally {
+        requestInFlight = false;
+        if (isSubscribed && tripStatusRef.current !== "completed") {
+          refreshTimer = setTimeout(fetchRideDetails, 5000);
+        }
       }
     }
 
-    if (rideId) fetchRideDetails();
+    fetchRideDetails();
+    return () => {
+      isSubscribed = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, [rideId]);
 
   useEffect(() => {
@@ -152,25 +193,30 @@ export default function TrackingDriverScreen({ route, navigation }) {
     });
 
     socket.on("driver_location_update", (data) => {
-      if (data?.latitude && data?.longitude) {
+      const location = toMapCoordinate(
+        data?.latitude ?? data?.lat,
+        data?.longitude ?? data?.lng
+      );
+      if (isValidMapCoordinate(location)) {
         setDriverLocation({
-          latitude: parseFloat(data.latitude),
-          longitude: parseFloat(data.longitude),
-          heading: data.heading || 0,
+          ...location,
+          heading: Number(data?.heading) || 0,
         });
       }
     });
 
     socket.on("ride_status_changed", (data) => {
-      if (data?.status && data.status !== tripStatusRef.current) {
-        setTripStatus(data.status);
+      const status = String(data?.status || "").toLowerCase();
+      if (status && status !== tripStatusRef.current) {
+        setTripStatus(status);
         if (data?.price) setTripMetrics(prev => ({ ...prev, price: data.price }));
       }
     });
 
     socket.on("solo_ride_status_updated", (data) => {
-      if (data?.status && data.status !== tripStatusRef.current) {
-        setTripStatus(data.status);
+      const status = String(data?.status || "").toLowerCase();
+      if (status && status !== tripStatusRef.current) {
+        setTripStatus(status);
         if (data?.price) setTripMetrics(prev => ({ ...prev, price: data.price }));
       }
     });
@@ -198,7 +244,13 @@ export default function TrackingDriverScreen({ route, navigation }) {
         animated: true,
       });
     }
-  }, [activeRouteOrigin?.latitude, activeRouteDestination?.latitude, tripStatus]);
+  }, [
+    activeRouteOrigin?.latitude,
+    activeRouteOrigin?.longitude,
+    activeRouteDestination?.latitude,
+    activeRouteDestination?.longitude,
+    tripStatus,
+  ]);
 
   const handleCallDriver = () => {
     if (driverInfo.phone) {
@@ -270,14 +322,17 @@ export default function TrackingDriverScreen({ route, navigation }) {
             </Marker>
           )}
 
-          {isValidMapCoordinate(activeRouteOrigin) && isValidMapCoordinate(activeRouteDestination) && tripStatus !== "completed" && (
+          {GOOGLE_MAPS_API_KEY && isValidMapCoordinate(activeRouteOrigin) && isValidMapCoordinate(activeRouteDestination) && tripStatus !== "completed" && (
             <MapViewDirections
               origin={activeRouteOrigin}
               destination={activeRouteDestination}
               apikey={GOOGLE_MAPS_API_KEY}
+              mode="DRIVING"
               strokeWidth={5}
               strokeColor="#111827"
-              geodesic={true}
+              lineCap="round"
+              resetOnChange={false}
+              onError={(message) => console.warn("Passenger tracking route directions failed:", message)}
             />
           )}
         </MapView>

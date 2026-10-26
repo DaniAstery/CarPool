@@ -169,7 +169,7 @@ export default function ProposalDriver({ navigation, route }) {
 
     async function fetchRoadPath() {
       try {
-        const url = `http://router.project-osrm.org/route/v1/driving/${currentLocation.longitude},${currentLocation.latitude};${startCoords.longitude},${startCoords.latitude}?overview=full&geometries=geojson`;
+        const url = `https://router.project-osrm.org/route/v1/driving/${currentLocation.longitude},${currentLocation.latitude};${startCoords.longitude},${startCoords.latitude}?overview=full&geometries=geojson`;
         
         const res = await fetch(url);
         const data = await res.json();

@@ -7,52 +7,67 @@ import {
   Modal,
   Dimensions,
   Image,
+  ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
 const { width } = Dimensions.get("window");
 
-export default function RoleSelectionModal({ visible, accounts, onSelectRole }) {
+export default function RoleSelectionModal({ visible, accounts, onSelectRole, onClose }) {
   if (!visible || !accounts) return null;
 
   return (
-    <Modal visible={visible} transparent={true} animationType="fade">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContainer}>
-          
-          <View style={styles.headerRow}>
-            <Text style={styles.modalTitle}>CHOOSE WORKSPACE</Text>
-            <Ionicons name="phone-portrait-outline" size={20} color="#059669" />
+        <SafeAreaView style={styles.modalSafeArea} edges={["top", "right", "bottom", "left"]}>
+          <View style={styles.modalContainer}>
+            <View style={styles.headerRow}>
+              <Text style={styles.modalTitle}>CHOOSE WORKSPACE</Text>
+              <Ionicons name="phone-portrait-outline" size={20} color="#059669" />
+            </View>
+
+            <Text style={styles.modalSubtitle}>
+              This phone number is registered with multiple roles. Select which account you want to sign into:
+            </Text>
+
+            <ScrollView
+              style={styles.accountsList}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {accounts.map((account) => {
+                const isDriver = account.role === "driver";
+                return (
+                  <TouchableOpacity
+                    key={`account-${account.id}`}
+                    style={[styles.roleCard, isDriver ? styles.driverCard : styles.riderCard]}
+                    onPress={() => onSelectRole(account)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Continue as ${isDriver ? "driver" : "passenger"}, ${account.full_name}`}
+                  >
+                    <Image
+                      source={{ uri: account.profile_photo_url || "https://placehold.co/150" }}
+                      style={styles.avatar}
+                    />
+                    <View style={styles.roleInfo}>
+                      <Text style={styles.roleName}>{account.full_name}</Text>
+                      <Text style={styles.roleType}>
+                        {isDriver ? "🚖 Driver Workspace" : "🎒 Passenger Workspace"}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={isDriver ? "#FFFFFF" : "#111111"} />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
-
-          <Text style={styles.modalSubtitle}>
-            This phone number is registered with multiple roles. Select which account you want to sign into:
-          </Text>
-
-          {accounts.map((account) => {
-            const isDriver = account.role === "driver";
-            return (
-              <TouchableOpacity
-                key={`account-${account.id}`}
-                style={[styles.roleCard, isDriver ? styles.driverCard : styles.riderCard]}
-                onPress={() => onSelectRole(account)}
-              >
-                <Image
-                  source={{ uri: account.profile_photo_url || "https://placehold.co/150" }}
-                  style={styles.avatar}
-                />
-                <View style={styles.roleInfo}>
-                  <Text style={styles.roleName}>{account.full_name}</Text>
-                  <Text style={styles.roleType}>
-                    {isDriver ? "🚖 Driver Workspace" : "🎒 Passenger Workspace"}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={isDriver ? "#FFFFFF" : "#111111"} />
-              </TouchableOpacity>
-            );
-          })}
-
-        </View>
+        </SafeAreaView>
       </View>
     </Modal>
   );
@@ -66,8 +81,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
   },
+  modalSafeArea: {
+    flex: 1,
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   modalContainer: {
     width: width * 0.88,
+    maxHeight: "90%",
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
     paddingVertical: 24,
@@ -86,6 +108,7 @@ const styles = StyleSheet.create({
   },
   modalTitle: { fontSize: 13, fontWeight: "800", color: "#111111", letterSpacing: 1 },
   modalSubtitle: { fontSize: 13, color: "#64748B", marginBottom: 20, lineHeight: 18 },
+  accountsList: { flexGrow: 0, flexShrink: 1, maxHeight: "60%" },
 
   roleCard: {
     flexDirection: "row",

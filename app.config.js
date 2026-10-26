@@ -5,7 +5,7 @@ module.exports = {
     name: "Corridor",
     slug: "corridor-mobility-app",
     owner: "danieas",
-    version: "1.0.21",
+    version: "1.0.23",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
@@ -33,13 +33,12 @@ module.exports = {
       },
       edgeToEdgeEnabled: true,
       permissions: [
-        "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
       package: "com.corridor.mobility",
-      versionCode: 22,
+      versionCode: 26,
       config: {
         googleMaps: {
           apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY 
@@ -50,7 +49,13 @@ module.exports = {
       favicon: "./assets/favicon.png"
     },
     plugins: [
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
       "expo-asset",
       "expo-location",
       [

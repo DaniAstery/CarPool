@@ -71,7 +71,7 @@ const DEFAULT_LOCATION = {
   longitudeDelta: 0.02,
 };
 
-// Fetch real street-level walking path from OSRM public walking router with urban grid fallback
+// Fetch a street-level walking path; omit the line if routing is unavailable.
 const fetchWalkingRoute = async (userLoc, hubLoc) => {
   if (!isValidMapCoordinate(userLoc) || !isValidMapCoordinate(hubLoc)) {
     return { distance: null, duration: null, coordinates: [] };
@@ -103,14 +103,6 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
     console.log("⚠️ OSRM walking route request failed, utilizing urban grid fallback");
   }
 
-  const midLat = (userLoc.latitude + hubLoc.latitude) / 2;
-  const gridCoordinates = [
-    userLoc,
-    { latitude: midLat, longitude: userLoc.longitude },
-    { latitude: midLat, longitude: hubLoc.longitude },
-    { latitude: hubLoc.latitude, longitude: hubLoc.longitude }
-  ];
-
   const toRad = (val) => (val * Math.PI) / 180;
   const R = 6371;
   const dLat = toRad(hubLoc.latitude - userLoc.latitude);
@@ -122,7 +114,7 @@ const fetchWalkingRoute = async (userLoc, hubLoc) => {
   const durationMinutes = Math.max(1, Math.round((distanceKm / 4.8) * 60));
   const durationStr = `${durationMinutes} min${durationMinutes > 1 ? 's' : ''}`;
 
-  return { distance: distanceStr, duration: durationStr, coordinates: gridCoordinates };
+  return { distance: distanceStr, duration: durationStr, coordinates: [] };
 };
 
 // Fetch real street-level driving route from OSRM public driving router
@@ -143,10 +135,10 @@ const fetchDrivingRoute = async (origin, destination) => {
       }));
     }
   } catch (err) {
-    console.log("⚠️ OSRM driving route request failed, utilizing direct path fallback");
+    console.warn("OSRM driving route request failed:", err.message);
   }
 
-  return [origin, destination];
+  return [];
 };
 
 // ------------------------------------------------------------------
