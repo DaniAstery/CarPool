@@ -16,6 +16,8 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import io from "socket.io-client";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
+import { useAuth } from "../AuthContext";
+import UserAvatar from "../components/UserAvatar";
 
 const API_URL = `${(
   process.env.EXPO_PUBLIC_API_URL_PASSENGER || "http://3.223.192.195:5000"
@@ -43,6 +45,7 @@ const cleanMinimalMapStyle = [
 ];
 
 export default function TrackingDriverScreen({ route, navigation }) {
+  const { user } = useAuth();
   const { rideId, userId, initialStatus, ride: initialRide } = route.params || {};
   const initialRideData = initialRide?.ride || initialRide || {};
 
@@ -75,16 +78,19 @@ export default function TrackingDriverScreen({ route, navigation }) {
     distanceKm: 0,
   });
 
+  const [manifestPassengers, setManifestPassengers] = useState([]);
+
   const [driverInfo, setDriverInfo] = useState({
-    name: "Captain",
-    phone: "",
-    plateNumber: "3-45678",
-    vehicleModel: "Toyota Corolla",
-    vehicleColor: "White",
-    rating: "5.00",
-    bankName: "Commercial Bank of Ethiopia (CBE)",
-    bankAccount: "1000847291024",
-    telebirrNumber: "251998476704",
+    name: initialRideData?.driver?.name || "Captain",
+    phone: initialRideData?.driver?.phone_number || "",
+    plateNumber: initialRideData?.driver?.plate_number || "3-45678",
+    vehicleModel: initialRideData?.driver?.vehicle_model || "Toyota Corolla",
+    vehicleColor: initialRideData?.driver?.vehicle_color || "White",
+    rating: initialRideData?.driver?.rating || "5.00",
+    bankName: initialRideData?.driver?.bank_name || "Commercial Bank of Ethiopia (CBE)",
+    bankAccount: initialRideData?.driver?.bank_account_number || "1000847291024",
+    telebirrNumber: initialRideData?.driver?.telebirr_number || initialRideData?.driver?.phone_number || "251998476704",
+    photoUrl: initialRideData?.driver?.profile_photo_url || initialRideData?.driver?.photo_url || initialRideData?.driver_photo || null,
   });
 
   const tripStatusRef = useRef(tripStatus);
@@ -154,6 +160,14 @@ export default function TrackingDriverScreen({ route, navigation }) {
           distanceKm: rideData.distance_km || 0,
         });
         if (rideData?.driver) {
+          const dPhoto =
+            rideData.driver.profile_photo_url ||
+            rideData.driver.photo_url ||
+            rideData.driver.profile_photo ||
+            rideData.driver.avatar ||
+            rideData.driver_photo ||
+            null;
+
           setDriverInfo({
             name: rideData.driver.name || "Captain",
             phone: rideData.driver.phone_number || "",
@@ -164,7 +178,24 @@ export default function TrackingDriverScreen({ route, navigation }) {
             bankName: rideData.driver.bank_name || "Commercial Bank of Ethiopia (CBE)",
             bankAccount: rideData.driver.bank_account_number || "1000847291024",
             telebirrNumber: rideData.driver.telebirr_number || rideData.driver.phone_number || "251998476704",
+            photoUrl: dPhoto,
           });
+        }
+
+        const rawPassengers = Array.isArray(rideData?.passengers)
+          ? rideData.passengers
+          : Array.isArray(rideData?.route_pool_passengers)
+          ? rideData.route_pool_passengers
+          : [];
+
+        if (rawPassengers.length > 0) {
+          const parsed = rawPassengers.map((p, idx) => ({
+            id: p.user_id || p.userId || p.id || idx + 1,
+            name: p.passenger_name || p.full_name || p.name || `Rider ${p.user_id || p.userId || p.id || idx + 1}`,
+            status: p.status || "matched",
+            photoUrl: p.profile_photo_url || p.profile_photo || p.profilePhoto || p.avatar || p.photo_url || null,
+          }));
+          setManifestPassengers(parsed);
         }
       } catch (err) {
         if (isSubscribed) console.warn("Ride tracking refresh failed:", err.message);
@@ -276,8 +307,19 @@ export default function TrackingDriverScreen({ route, navigation }) {
             ? "Trip In Progress"
             : "Captain En Route"}
         </Text>
-        <View style={styles.headerBadge}>
-          <Text style={styles.headerBadgeText}>#{rideId || "---"}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <UserAvatar
+            photoUrl={user?.profile_photo_url || user?.profile_photo || user?.avatar || user?.photo_url}
+            name={user?.full_name || "Passenger"}
+            id={userId}
+            size={30}
+            fallbackBgColor="#ECFDF5"
+            textColor="#059669"
+            style={{ marginRight: 8 }}
+          />
+          <View style={styles.headerBadge}>
+            <Text style={styles.headerBadgeText}>#{rideId || "---"}</Text>
+          </View>
         </View>
       </View>
 
@@ -364,6 +406,21 @@ export default function TrackingDriverScreen({ route, navigation }) {
 
             {/* FARE & VEHICLE SUMMARY BOX */}
             <View style={styles.receiptCardBox}>
+              <View style={styles.receiptDriverRow}>
+                <UserAvatar
+                  photoUrl={driverInfo.photoUrl}
+                  name={driverInfo.name}
+                  size={40}
+                  fallbackIcon="person"
+                  fallbackBgColor="#ECFDF5"
+                  textColor="#059669"
+                />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={styles.receiptDriverName}>{driverInfo.name}</Text>
+                  <Text style={styles.receiptDriverSub}>Assigned Driver • {driverInfo.vehicleModel}</Text>
+                </View>
+              </View>
+              <View style={styles.receiptDivider} />
               <View style={styles.receiptRow}>
                 <Text style={styles.receiptLabel}>Vehicle</Text>
                 <Text style={styles.receiptValue}>{driverInfo.vehicleModel} ({driverInfo.vehicleColor})</Text>
@@ -420,11 +477,18 @@ export default function TrackingDriverScreen({ route, navigation }) {
           /* ACTIVE DRIVER & STATUS ROW */
           <>
             <View style={styles.driverProfileRow}>
-              <View style={styles.avatarCircle}>
-                <Ionicons name="person" size={22} color="#059669" />
-              </View>
+              <UserAvatar
+                photoUrl={driverInfo.photoUrl}
+                name={driverInfo.name}
+                size={46}
+                fallbackIcon="person"
+                fallbackBgColor="#ECFDF5"
+                textColor="#059669"
+                showStatusDot={true}
+                statusColor={tripStatus === "arrived" ? "#10B981" : "#3B82F6"}
+              />
 
-              <View style={styles.driverTextGroup}>
+              <View style={[styles.driverTextGroup, { marginLeft: 12 }]}>
                 <Text style={styles.driverName}>{driverInfo.name}</Text>
                 <Text style={styles.vehicleText}>
                   {driverInfo.vehicleModel} • <Text style={styles.plateText}>{driverInfo.plateNumber}</Text>
@@ -435,6 +499,28 @@ export default function TrackingDriverScreen({ route, navigation }) {
                 <Ionicons name="call" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
+
+            {manifestPassengers.length > 0 && (
+              <View style={styles.manifestCardBox}>
+                <Text style={styles.manifestHeading}>Co-Riders on Route ({manifestPassengers.length})</Text>
+                {manifestPassengers.map((p, idx) => (
+                  <View key={`rider-${p.id}-${idx}`} style={styles.manifestRiderRow}>
+                    <UserAvatar
+                      photoUrl={p.photoUrl}
+                      name={p.name}
+                      id={p.id}
+                      size={28}
+                      fallbackBgColor="#059669"
+                      textColor="#FFFFFF"
+                    />
+                    <View style={{ marginLeft: 8, flex: 1 }}>
+                      <Text style={styles.manifestRiderName}>{p.name}</Text>
+                      <Text style={styles.manifestRiderSub}>{p.status.toUpperCase()}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
 
             <View style={styles.statusBadgeRow}>
               <View style={[styles.statusStep, tripStatus === "accepted" && styles.statusStepActive]}>
@@ -608,6 +694,21 @@ const styles = StyleSheet.create({
     borderColor: "#E2E8F0",
     marginBottom: 10,
   },
+  receiptDriverRow: { flexDirection: "row", alignItems: "center", marginBottom: 6 },
+  receiptDriverName: { fontSize: 13, fontWeight: "700", color: "#1E293B" },
+  receiptDriverSub: { fontSize: 11, color: "#64748B", marginTop: 1 },
+  manifestCardBox: {
+    backgroundColor: "#F8FAFC",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 8,
+    marginBottom: 10,
+  },
+  manifestHeading: { fontSize: 11, fontWeight: "700", color: "#64748B", marginBottom: 6 },
+  manifestRiderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 4 },
+  manifestRiderName: { fontSize: 12, fontWeight: "600", color: "#1E293B" },
+  manifestRiderSub: { fontSize: 10, color: "#059669", fontWeight: "700" },
   receiptRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 2 },
   receiptDivider: { height: 1, backgroundColor: "#E2E8F0", marginVertical: 6 },
   receiptLabel: { fontSize: 12, color: "#64748B", fontWeight: "600" },

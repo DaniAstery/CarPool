@@ -13,6 +13,7 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { useAuth } from '../../AuthContext';
 import { playSound } from "../../utils/soundPlayer";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import UserAvatar from "../../components/UserAvatar";
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
   .replace(/\/api\/?$/, "")
@@ -31,6 +32,7 @@ export default function WaitingForRidersScreen({ route, navigation }) {
   );
   const [statusText, setStatusText] = useState("Waiting for riders to join");
   const [activityLogs, setActivityLogs] = useState([]);
+  const [matchedRidersList, setMatchedRidersList] = useState([]);
 
   const [hubNameDisplay, setHubNameDisplay] = useState("Loading Hub...");
   const [destinationDisplay, setDestinationDisplay] = useState("Loading Destination...");
@@ -108,23 +110,37 @@ export default function WaitingForRidersScreen({ route, navigation }) {
         setSeatsFilled(Math.min(totalMatched, capacity));
         setLoading(false);
 
-        // Populate recent activity logs dynamically
+        // Populate recent activity logs and matched riders manifest dynamically
         if (matchedRiders.length > 0) {
-          const formattedLogs = matchedRiders.map((rider, idx) => {
+          const parsedRiders = matchedRiders.map((rider, idx) => {
             const rId = rider.userId || rider.user_id || rider.id || idx + 1;
+            const rName = rider.passenger_name || rider.full_name || rider.name || `Rider ${rId}`;
+            const rPhoto = rider.profile_photo_url || rider.profile_photo || rider.profilePhoto || rider.avatar || rider.photo_url || null;
             return {
               id: String(rId),
-              message: `Passenger ID ${rId} matched`,
+              name: rName,
+              photoUrl: rPhoto,
+              status: rider.status || "matched",
               time: "Just now",
             };
           });
+          setMatchedRidersList(parsedRiders);
+
+          const formattedLogs = parsedRiders.map((rider) => ({
+            id: rider.id,
+            message: `${rider.name} joined corridor pool`,
+            time: "Just now",
+          }));
           setActivityLogs(formattedLogs);
           setStatusText(`${totalMatched} matched, ${totalSearching} searching...`);
         } else if (totalMatched > 0) {
+          setMatchedRidersList([]);
           setStatusText(`${totalMatched} rider(s) joined, ${totalSearching} searching...`);
         } else if (totalSearching > 0) {
+          setMatchedRidersList([]);
           setStatusText(`${totalSearching} rider(s) searching nearby...`);
         } else {
+          setMatchedRidersList([]);
           setStatusText("Waiting for riders to join");
         }
 
@@ -231,9 +247,17 @@ export default function WaitingForRidersScreen({ route, navigation }) {
 
       <ScrollView style={styles.contentBody} showsVerticalScrollIndicator={false}>
         <View style={styles.statusBannerCard}>
-          <View style={[styles.greenPulseIndicator, seatsFilled > 0 && styles.orangePulseIndicator]} />
-          <View style={styles.statusTextFrame}>
-            <Text style={styles.statusMainText}>You are Online</Text>
+          <UserAvatar
+            photoUrl={user?.profile_photo_url || user?.profile_photo || user?.avatar || user?.photo_url}
+            name={user?.full_name || "Captain Driver"}
+            size={46}
+            fallbackBgColor="#059669"
+            textColor="#FFFFFF"
+            showStatusDot={true}
+            statusColor={seatsFilled > 0 ? "#F59E0B" : "#10B981"}
+          />
+          <View style={[styles.statusTextFrame, { marginLeft: 12 }]}>
+            <Text style={styles.statusMainText}>{user?.full_name ? `${user.full_name} (Online)` : "You are Online"}</Text>
             <Text style={styles.statusSubText}>{statusText}</Text>
           </View>
         </View>
@@ -255,7 +279,41 @@ export default function WaitingForRidersScreen({ route, navigation }) {
           </View>
         </View>
 
-        {activityLogs.length > 0 && (
+        {matchedRidersList.length > 0 && (
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.activityHeadingText}>
+              Matched Passenger Manifest ({matchedRidersList.length}/{totalSeats})
+            </Text>
+            <View style={styles.activityCard}>
+              {matchedRidersList.map((rider, idx) => (
+                <View key={rider.id}>
+                  <View style={styles.activityItemRow}>
+                    <UserAvatar
+                      photoUrl={rider.photoUrl}
+                      name={rider.name}
+                      id={rider.id}
+                      size={36}
+                      fallbackBgColor="#059669"
+                      textColor="#FFFFFF"
+                      showStatusDot={true}
+                      statusColor="#10B981"
+                    />
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.activityLogText}>{rider.name}</Text>
+                      <Text style={styles.activitySubText}>Corridor passenger • ID: {rider.id}</Text>
+                    </View>
+                    <View style={styles.matchedBadge}>
+                      <Text style={styles.matchedBadgeText}>MATCHED</Text>
+                    </View>
+                  </View>
+                  {idx < matchedRidersList.length - 1 && <View style={styles.horizontalDivider} />}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {activityLogs.length > 0 && matchedRidersList.length === 0 && (
           <View style={{ marginTop: 12 }}>
             <Text style={styles.activityHeadingText}>Recent Activity</Text>
             <View style={styles.activityCard}>
@@ -318,6 +376,16 @@ const styles = StyleSheet.create({
   activityHeadingText: { fontSize: 11, fontWeight: "700", color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, marginLeft: 2 },
   activityCard: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, marginBottom: 20 },
   activityItemRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
+  activitySubText: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+  matchedBadge: {
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  matchedBadgeText: { fontSize: 10, fontWeight: "800", color: "#059669", letterSpacing: 0.5 },
   userIconFrame: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#E6F4EA", alignItems: "center", justifyContent: "center", marginRight: 12 },
   activityLogText: { fontSize: 14, fontWeight: "500", color: "#111827", flex: 1 },
   activityTimeText: { fontSize: 12, color: "#9CA3AF" },

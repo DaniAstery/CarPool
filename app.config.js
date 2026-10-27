@@ -38,7 +38,7 @@ module.exports = {
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
       package: "com.corridor.mobility",
-      versionCode: 26,
+      versionCode: 27,
       config: {
         googleMaps: {
           apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY 

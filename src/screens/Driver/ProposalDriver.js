@@ -15,6 +15,7 @@ import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer";
 import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
+import UserAvatar from "../../components/UserAvatar";
 
 const { width, height } = Dimensions.get("window");
 
@@ -337,8 +338,9 @@ export default function ProposalDriver({ navigation, route }) {
           let rawDbStatus = rider?.status ? rider.status.toString().trim().toLowerCase() : "matched";
           let finalStatus = cleanAcceptedIds.includes(userId) ? "accepted" : rawDbStatus;
           const passengerName = rider?.passenger_name || rider?.full_name || rider?.name || `Passenger ${userId}`;
+          const passengerPhoto = rider?.profile_photo_url || rider?.profile_photo || rider?.profilePhoto || rider?.avatar || rider?.photo_url || null;
 
-          return { user_id: userId, status: finalStatus, name: passengerName };
+          return { user_id: userId, status: finalStatus, name: passengerName, profile_photo_url: passengerPhoto };
         });
 
         cleanAcceptedIds.forEach((acceptedId) => {
@@ -664,8 +666,24 @@ export default function ProposalDriver({ navigation, route }) {
                 return (
                   <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
                     <View style={styles.tableUserLabelGroup}>
-                      <Ionicons name="person-outline" size={14} color={isAccepted ? "#10B981" : "#0284C7"} />
-                      <Text style={styles.tableUserText}>{passenger.name || `Passenger ${pId}`}</Text>
+                      <UserAvatar
+                        photoUrl={passenger.profile_photo_url}
+                        name={passenger.name}
+                        id={pId}
+                        size={36}
+                        fallbackBgColor={isAccepted ? "#059669" : "#0284C7"}
+                        textColor="#FFFFFF"
+                        showStatusDot={true}
+                        statusColor={isAccepted ? "#10B981" : "#38BDF8"}
+                      />
+                      <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={[styles.tableUserText, isAccepted && { color: "#059669", fontWeight: "700" }]}>
+                          {passenger.name || `Passenger ${pId}`}
+                        </Text>
+                        <Text style={styles.tableUserSubText}>
+                          {isAccepted ? "Accepted • Ready for dispatch" : "Matched in pool"}
+                        </Text>
+                      </View>
                     </View>
                     {renderStatusBadge(passenger.status)}
                   </View>

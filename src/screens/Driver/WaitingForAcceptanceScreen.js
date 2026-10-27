@@ -12,6 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext"; 
 import { playSound } from "../../utils/soundPlayer";
+import UserAvatar from "../../components/UserAvatar";
 
 const { width } = Dimensions.get("window");
 // Automatically use your production URL if set, otherwise fallback to local/Tailscale for development
@@ -138,10 +139,12 @@ export default function ProposalDriver({ navigation, route }) {
               const isExplicitlyAccepted =
                 acceptedIds.includes(uId) ||
                 ["accepted", "arrived", "in_trip", "inprogress", "completed"].includes(passengerStatus);
+              const pPhoto = passenger.profile_photo_url || passenger.profile_photo || passenger.profilePhoto || passenger.avatar || passenger.photo_url || null;
               return [uId, {
                 user_id: uId,
-                name: passenger.passenger_name || passenger.name || `Passenger Slot ${uId}`,
-                status: isExplicitlyAccepted ? "accepted" : "matched"
+                name: passenger.passenger_name || passenger.full_name || passenger.name || `Passenger Slot ${uId}`,
+                status: isExplicitlyAccepted ? "accepted" : "matched",
+                profile_photo_url: pPhoto,
               }];
             }));
             const visibleRoster = Array.from(rosterByUserId.values());
@@ -152,7 +155,8 @@ export default function ProposalDriver({ navigation, route }) {
                 visibleRoster.push({
                   user_id: userId,
                   name: `Passenger ${userId}`,
-                  status: "accepted"
+                  status: "accepted",
+                  profile_photo_url: null,
                 });
               }
             });
@@ -301,6 +305,25 @@ export default function ProposalDriver({ navigation, route }) {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
+          {/* Driver Profile Header Card */}
+          <View style={styles.driverProfileHeaderCard}>
+            <UserAvatar
+              photoUrl={user?.profile_photo_url || offerDetails?.driver_photo || offerDetails?.driver?.profile_photo_url}
+              name={user?.full_name || "Captain Driver"}
+              size={46}
+              fallbackBgColor="#059669"
+              textColor="#FFFFFF"
+              showStatusDot={true}
+              statusColor="#10B981"
+            />
+            <View style={styles.driverProfileTextGroup}>
+              <Text style={styles.driverProfileName}>{user?.full_name || "Captain Driver"}</Text>
+              <Text style={styles.driverProfileSub}>Corridor Captain • Route #{routeId}</Text>
+            </View>
+            <View style={styles.driverStatusBadge}>
+              <Text style={styles.driverStatusBadgeText}>ONLINE</Text>
+            </View>
+          </View>
           
           <View style={styles.priceTierCard}>
             <Text style={styles.priceTierHeading}>CURRENT RUN DISPATCH PAYOUT</Text>
@@ -384,10 +407,24 @@ export default function ProposalDriver({ navigation, route }) {
                 return (
                   <View key={`manifest-rider-row-${pId}`} style={styles.tableRow}>
                     <View style={styles.tableUserLabelGroup}>
-                      <Ionicons name="person-outline" size={14} color={isAccepted ? "#059669" : "#0284C7"} />
-                      <Text style={[styles.tableUserText, isAccepted && { color: "#059669", fontWeight: "700" }]}>
-                        {passenger.name || `Passenger ${pId}`}
-                      </Text>
+                      <UserAvatar
+                        photoUrl={passenger.profile_photo_url}
+                        name={passenger.name}
+                        id={pId}
+                        size={36}
+                        fallbackBgColor={isAccepted ? "#059669" : "#0284C7"}
+                        textColor="#FFFFFF"
+                        showStatusDot={true}
+                        statusColor={isAccepted ? "#10B981" : "#38BDF8"}
+                      />
+                      <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={[styles.tableUserText, isAccepted && { color: "#059669", fontWeight: "700" }]}>
+                          {passenger.name || `Passenger ${pId}`}
+                        </Text>
+                        <Text style={styles.tableUserSubText}>
+                          {isAccepted ? "Accepted • Ready for dispatch" : "Matched in pool"}
+                        </Text>
+                      </View>
                     </View>
                     <View style={[styles.badge, isAccepted ? styles.badgeAccepted : styles.badgeMatched]}>
                       <Text style={[styles.badgeText, isAccepted ? styles.textAccepted : styles.textMatched]}>
@@ -482,8 +519,31 @@ const styles = StyleSheet.create({
   emptyManifestTitle: { color: "#374151", fontSize: 13, fontWeight: "700", marginTop: 7 },
   emptyManifestText: { color: "#6B7280", fontSize: 11, textAlign: "center", marginTop: 3 },
   tableRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#F3F4F6" },
-  tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
-  tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500" },
+  tableUserLabelGroup: { flexDirection: "row", alignItems: "center", flex: 1, marginRight: 10 },
+  tableUserText: { fontSize: 13, fontWeight: "600", color: "#111827" },
+  tableUserSubText: { fontSize: 11, color: "#9CA3AF", marginTop: 2 },
+  driverProfileHeaderCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    padding: 12,
+    marginBottom: 12,
+  },
+  driverProfileTextGroup: { flex: 1, marginLeft: 12 },
+  driverProfileName: { fontSize: 14, fontWeight: "700", color: "#111827" },
+  driverProfileSub: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+  driverStatusBadge: {
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  driverStatusBadgeText: { color: "#059669", fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
   badge: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, minWidth: 95, alignItems: "center" },
   badgeMatched: { backgroundColor: "#E0F2FE" },
   badgeAccepted: { backgroundColor: "#ECFDF5" },

@@ -20,6 +20,7 @@ import { useAuth } from "../AuthContext";
 import { playSound } from "../utils/soundPlayer";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import UserAvatar from "../components/UserAvatar";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
@@ -307,6 +308,7 @@ export default function LiveTrackingScreen({ route, navigation }) {
   const [myStatus, setMyStatus] = useState("accepted");
   const [driverState, setDriverState] = useState("accepted");
   const [driverName, setDriverName] = useState("Assigned Driver");
+  const [driverPhoto, setDriverPhoto] = useState(null);
   const [vehicleInfo, setVehicleInfo] = useState("Corridor Shuttle");
   const [coRiders, setCoRiders] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -514,6 +516,15 @@ const navigateToDeparture = useCallback(() => {
           }
           if (data.driverName) setDriverName(data.driverName);
           if (data.vehicleInfo) setVehicleInfo(data.vehicleInfo);
+          const dPhoto =
+            data.driverPhoto ||
+            data.driver_photo ||
+            data.driver_photo_url ||
+            data.driver?.profile_photo_url ||
+            data.driver?.photo_url ||
+            data.driver?.avatar ||
+            null;
+          if (dPhoto) setDriverPhoto(dPhoto);
           
           const dLat = parseFloat(data.driver_latitude || data.driver_lat);
           const dLng = parseFloat(data.driver_longitude || data.driver_lng);
@@ -600,11 +611,20 @@ const navigateToDeparture = useCallback(() => {
                 coRiderStatusChangedToArrived = true;
               }
 
+              const pPhoto =
+                p.profile_photo_url ||
+                p.profile_photo ||
+                p.profilePhoto ||
+                p.avatar ||
+                p.photo_url ||
+                null;
+
               return {
                 id: pId,
-                name: p.full_name || `Rider ${pId}`,
+                name: p.full_name || p.passenger_name || p.name || `Rider ${pId}`,
                 status: pStatus.toUpperCase(),
                 color: colorPalette[idx % colorPalette.length],
+                photoUrl: pPhoto,
               };
             });
 
@@ -832,8 +852,17 @@ const navigateToDeparture = useCallback(() => {
 
           {/* Driver Card with Distinct Arrival Status Highlighting */}
           <View style={[styles.driverCard, isDriverArrived && styles.driverCardArrived]}>
-            <Ionicons name="car" size={22} color={isDriverArrived ? "#059669" : "#2F4F4F"} />
-            <View style={{ marginLeft: 10, flex: 1 }}>
+            <UserAvatar
+              photoUrl={driverPhoto}
+              name={driverName}
+              size={44}
+              fallbackIcon="car"
+              fallbackBgColor={isDriverArrived ? "#ECFDF5" : "#E2E8F0"}
+              textColor={isDriverArrived ? "#059669" : "#1E293B"}
+              showStatusDot={true}
+              statusColor={isDriverArrived ? "#10B981" : "#3B82F6"}
+            />
+            <View style={{ marginLeft: 12, flex: 1 }}>
               <Text style={styles.driverLabel}>{driverName} • {vehicleInfo}</Text>
               <Text style={styles.driverSub}>
                 Driver Status: <Text style={[styles.boldText, isDriverArrived && styles.driverArrivedText]}>{driverState.toUpperCase()}</Text>
@@ -851,10 +880,20 @@ const navigateToDeparture = useCallback(() => {
             <Text style={styles.sectionHeader}>Co-Riders Presence Matrix</Text>
             
             <View style={styles.riderRow}>
-              <View style={[styles.avatar, { backgroundColor: "#2F4F4F" }]}>
-                <Text style={styles.avatarText}>YOU</Text>
+              <UserAvatar
+                photoUrl={user?.profile_photo_url || user?.profile_photo || user?.avatar || user?.photo_url}
+                name={user?.full_name || "You"}
+                id={currentUserId}
+                size={34}
+                fallbackBgColor="#2F4F4F"
+                textColor="#FFFFFF"
+                showStatusDot={true}
+                statusColor={isArrived ? "#10B981" : "#059669"}
+              />
+              <View style={{ marginLeft: 10, flex: 1 }}>
+                <Text style={styles.riderName}>{user?.full_name || `You (User ${currentUserId})`}</Text>
+                <Text style={styles.riderSubText}>You • Current Passenger</Text>
               </View>
-              <Text style={styles.riderName}>{user?.full_name || `You (User ${currentUserId})`}</Text>
               <Text style={[styles.statusTag, isArrived ? styles.tagArrived : styles.tagAccepted]}>
                 {myStatus.toUpperCase()}
               </Text>
@@ -862,10 +901,20 @@ const navigateToDeparture = useCallback(() => {
 
             {coRiders.map((rider) => (
               <View key={rider.id} style={styles.riderRow}>
-                <View style={[styles.avatar, { backgroundColor: rider.color }]}>
-                  <Text style={styles.avatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
+                <UserAvatar
+                  photoUrl={rider.photoUrl}
+                  name={rider.name}
+                  id={rider.id}
+                  size={34}
+                  fallbackBgColor={rider.color}
+                  textColor="#FFFFFF"
+                  showStatusDot={true}
+                  statusColor={rider.status === "ARRIVED" ? "#10B981" : "#38BDF8"}
+                />
+                <View style={{ marginLeft: 10, flex: 1 }}>
+                  <Text style={styles.riderName}>{rider.name}</Text>
+                  <Text style={styles.riderSubText}>Co-Passenger • ID: {rider.id}</Text>
                 </View>
-                <Text style={styles.riderName}>{rider.name}</Text>
                 <Text style={[
                   styles.statusTag, 
                   rider.status === "ARRIVED" ? styles.tagArrived :
@@ -971,7 +1020,8 @@ const styles = StyleSheet.create({
 
   rosterContainer: { backgroundColor: "#F8FAFC", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#E2E8F0", marginBottom: 16 },
   sectionHeader: { fontSize: 12, fontWeight: "700", color: "#475569", marginBottom: 8 },
-  riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  riderRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#F1F5F9" },
+  riderSubText: { fontSize: 11, color: "#64748B", marginTop: 1 },
   avatar: { width: 28, height: 28, borderRadius: 14, justifyContent: "center", alignItems: "center", marginRight: 10 },
   avatarText: { color: "#FFFFFF", fontSize: 10, fontWeight: "700" },
   riderName: { flex: 1, fontSize: 13, fontWeight: "600", color: "#1E293B" },

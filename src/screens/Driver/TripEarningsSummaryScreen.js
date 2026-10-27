@@ -13,6 +13,7 @@ import {
 import { MaterialCommunityIcons, Ionicons, FontAwesome5, FontAwesome } from "@expo/vector-icons"; // <--- Ensure FontAwesome is included here
 import { useAuth } from "../../AuthContext";
 import { SafeAreaView } from "react-native-safe-area-context";
+import UserAvatar from "../../components/UserAvatar";
 
 const { width } = Dimensions.get("window");
 
@@ -218,15 +219,16 @@ export default function TripEarningsSummaryScreen({ navigation, route }) {
                   <View key={`summary-passenger-${idx}`} style={styles.passengerSummaryRow}>
                     
                     {/* Passenger Avatar / Fallback Initial */}
-                    {p.profilePhotoUrl ? (
-                      <Image source={{ uri: p.profilePhotoUrl }} style={styles.passengerAvatar} />
-                    ) : (
-                      <View style={styles.passengerAvatarFallback}>
-                        <Text style={styles.fallbackInitialText}>
-                          {p.fullName ? p.fullName.charAt(0).toUpperCase() : "R"}
-                        </Text>
-                      </View>
-                    )}
+                    <UserAvatar
+                      photoUrl={p.profilePhotoUrl || p.profile_photo_url || p.profile_photo || p.photo_url || p.avatar}
+                      name={p.fullName || p.full_name || p.name}
+                      id={p.userId || p.user_id || p.id}
+                      size={40}
+                      fallbackBgColor="#2563EB"
+                      textColor="#FFFFFF"
+                      showStatusDot={true}
+                      statusColor="#10B981"
+                    />
 
                     {/* Name & Phone Number */}
                     <View style={{ flex: 1, marginLeft: 12, marginRight: 8 }}>

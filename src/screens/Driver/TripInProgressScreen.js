@@ -21,6 +21,7 @@ import { MaterialCommunityIcons, Ionicons, FontAwesome5 } from "@expo/vector-ico
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer"; // 👈 1. Import sound player here
 import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
+import UserAvatar from "../../components/UserAvatar";
 
 const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || "http://3.223.192.195:5000")
   .replace(/\/api\/?$/, "")
@@ -449,7 +450,16 @@ export default function TripInProgressScreen({ navigation, route }) {
     <SafeAreaView style={styles.container} edges={["top", "right", "left"]}>
       <View style={styles.headerBlock}>
         <View style={styles.statusBarIndicator}>
-          <View style={styles.pulseLiveDot} />
+          <UserAvatar
+            photoUrl={user?.profile_photo_url || user?.profile_photo || user?.avatar || user?.photo_url}
+            name={user?.full_name || "Captain Driver"}
+            size={34}
+            fallbackBgColor="#2563EB"
+            textColor="#FFFFFF"
+            showStatusDot={true}
+            statusColor="#10B981"
+            style={{ marginRight: 10 }}
+          />
           <View>
             <Text style={styles.headerTitleText}>Trip in progress</Text>
             <Text style={styles.headerSubtitle}>Navigation to {destinationLocation?.name || "destination"}</Text>
@@ -586,13 +596,17 @@ export default function TripInProgressScreen({ navigation, route }) {
               passengerStates.map((passenger, index) => (
                 <View key={`transit-rider-${passenger.id}-${index}`} style={styles.passengerRow}>
                   <View style={styles.passengerIdentityRow}>
-                    {passenger.profilePhoto ? (
-                      <Image source={{ uri: passenger.profilePhoto }} style={styles.avatarImage} />
-                    ) : (
-                      <View style={styles.avatarWrapperCircle}>
-                        <FontAwesome5 name="user" size={11} color="#2563EB" />
-                      </View>
-                    )}
+                    <UserAvatar
+                      photoUrl={passenger.profilePhoto}
+                      name={passenger.name}
+                      id={passenger.id}
+                      size={36}
+                      fallbackBgColor="#2563EB"
+                      textColor="#FFFFFF"
+                      showStatusDot={true}
+                      statusColor="#10B981"
+                      style={{ marginRight: 10 }}
+                    />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.passengerNameText} numberOfLines={1}>{passenger.name}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>

@@ -17,6 +17,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "../../AuthContext";
 import { playSound } from "../../utils/soundPlayer"; // 👈 Sound Player imported
 import { isValidMapCoordinate, toMapCoordinate } from "../../utils/mapCoordinates";
+import UserAvatar from "../../components/UserAvatar";
 
 const { width, height } = Dimensions.get("window");
 
@@ -317,6 +318,7 @@ export default function NavigateToPickup({ navigation, route }) {
                 : status,
             name: rider.passenger_name || rider.full_name || rider.name || current?.name || `Passenger ${userId}`,
             phone_number: rider.phone_number || current?.phone_number,
+            profile_photo_url: rider.profile_photo_url || rider.profile_photo || rider.profilePhoto || rider.avatar || rider.photo_url || current?.profile_photo_url || null,
           });
         });
 
@@ -585,14 +587,24 @@ export default function NavigateToPickup({ navigation, route }) {
                 return (
                   <View key={`pickup-rider-row-${pId}`} style={styles.tableRow}>
                     <View style={styles.tableUserLabelGroup}>
-                      <Ionicons
-                        name="person-outline"
-                        size={14}
-                        color={isArrived ? "#D97706" : "#059669"}
+                      <UserAvatar
+                        photoUrl={passenger.profile_photo_url}
+                        name={passenger.name}
+                        id={pId}
+                        size={36}
+                        fallbackBgColor={isArrived ? "#D97706" : "#059669"}
+                        textColor="#FFFFFF"
+                        showStatusDot={true}
+                        statusColor={isArrived ? "#F59E0B" : "#10B981"}
                       />
-                      <Text style={styles.tableUserText}>
-                        {passenger.name}
-                      </Text>
+                      <View style={{ marginLeft: 10, flex: 1 }}>
+                        <Text style={styles.tableUserText}>
+                          {passenger.name}
+                        </Text>
+                        <Text style={styles.tableUserSubText}>
+                          {isArrived ? "Arrived at Pickup Hub" : "En Route / Confirmed"}
+                        </Text>
+                      </View>
                     </View>
                     {renderStatusBadge(passenger.status)}
                   </View>
@@ -659,8 +671,9 @@ const styles = StyleSheet.create({
   sectionHeading: { fontSize: 13, fontWeight: "700", marginBottom: 8, color: "#374151" },
   statusTable: { marginBottom: 16 },
   tableRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#F3F4F6" },
-  tableUserLabelGroup: { flexDirection: "row", alignItems: "center" },
-  tableUserText: { fontSize: 13, marginLeft: 10, fontWeight: "500", color: "#1F2937" },
+  tableUserLabelGroup: { flexDirection: "row", alignItems: "center", flex: 1, marginRight: 10 },
+  tableUserText: { fontSize: 13, fontWeight: "600", color: "#111827" },
+  tableUserSubText: { fontSize: 11, color: "#6B7280", marginTop: 2 },
   badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, minWidth: 85, alignItems: "center" },
   badgeAccepted: { backgroundColor: "#E0F2FE" },
   badgeArrived: { backgroundColor: "#FEF3C7" },

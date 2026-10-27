@@ -16,6 +16,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../AuthContext";
+import UserAvatar from "../components/UserAvatar";
 
 const { width, height } = Dimensions.get("window");
 const API_URL_PASSENGER =
@@ -285,18 +286,13 @@ export default function CorridorDrawer({
               
               {/* 👤 USER PROFILE HEADER WITH EARNINGS BADGE */}
               <View style={[styles.profileHeader, isDriver ? styles.darkBorder : styles.lightBorder]}>
-                {photoUrl && !avatarError && !photoUrl.includes("placehold.co") ? (
-                  <Image
-                    source={{ uri: photoUrl }}
-                    style={styles.avatar}
-                    resizeMode="cover"
-                    onError={() => setAvatarError(true)}
-                  />
-                ) : (
-                  <View style={[styles.avatarFallback, isDriver && { backgroundColor: "#0F172A" }]}>
-                    <Text style={styles.avatarInitials}>{userInitials}</Text>
-                  </View>
-                )}
+                <UserAvatar
+                  photoUrl={photoUrl}
+                  name={displayName}
+                  size={54}
+                  fallbackBgColor={isDriver ? "#0F172A" : "#059669"}
+                  textColor="#FFFFFF"
+                />
 
                 <View style={styles.profileInfo}>
                   <Text style={[styles.profileName, isDriver ? styles.darkText : styles.lightText]} numberOfLines={1}>
@@ -407,14 +403,14 @@ export default function CorridorDrawer({
                                   </View>
                                 ) : (
                                   <View style={styles.driverMetaBadge}>
-                                    <Image
-                                      source={{
-                                        uri:
-                                          trip.driver_photo && !trip.driver_photo.includes("placehold.co")
-                                            ? trip.driver_photo
-                                            : "https://placehold.co/100",
-                                      }}
-                                      style={styles.tripDriverAvatar}
+                                    <UserAvatar
+                                      photoUrl={trip.driver_photo}
+                                      name={trip.driver_name || "Driver"}
+                                      size={26}
+                                      fallbackIcon="car"
+                                      fallbackBgColor="#059669"
+                                      textColor="#FFFFFF"
+                                      style={{ marginRight: 6 }}
                                     />
                                     <Text style={styles.tripMetaText} numberOfLines={1}>
                                       Driver: {trip.driver_name || "Assigned Driver"}

@@ -9,11 +9,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
+import { useAuth } from "../../AuthContext";
+import UserAvatar from "../../components/UserAvatar";
 
-export default function WaitingForPassengersScreen({ navigation }) {
+export default function WaitingForPassengersScreen({ navigation, route }) {
   // 🚖 Real-world Driver Profile Context
-  const currentDriverId = 101; 
-  const currentDriverHub = "Megenagna"; // Filter token matched against passenger rows
+  const { user } = useAuth();
+  const currentDriverId = route?.params?.driverId || user?.id || user?.driver_id || 101; 
+  const currentDriverHub = route?.params?.hubName || "Megenagna"; // Filter token matched against passenger rows
 
   const [loading, setLoading] = useState(true);
   const [passengers, setPassengers] = useState([]);
@@ -37,8 +40,17 @@ export default function WaitingForPassengersScreen({ navigation }) {
 
         const data = await response.json();
         
-        setPassengers(data.passengers || []);
-        setRideStatus(data.status); // 'pooling' or 'ready'
+        const riderList = Array.isArray(data.passengers) ? data.passengers : Array.isArray(data.riders) ? data.riders : [];
+        const normalized = riderList.map((p, idx) => ({
+          userId: p.userId || p.user_id || p.id || idx + 1,
+          name: p.passenger_name || p.full_name || p.name || `Rider ${p.userId || p.user_id || p.id || idx + 1}`,
+          status: String(p.status || "matched").toLowerCase(),
+          profilePhoto: p.profile_photo_url || p.profile_photo || p.profilePhoto || p.avatar || p.photo_url || null,
+          rating: p.rating || null,
+        }));
+
+        setPassengers(normalized);
+        setRideStatus(data.status || (normalized.length >= 2 ? "ready" : "pooling")); // 'pooling' or 'ready'
         if (data.rideOfferId) {
           setActiveRideOfferId(data.rideOfferId);
         }
@@ -103,6 +115,26 @@ export default function WaitingForPassengersScreen({ navigation }) {
 
       <ScrollView style={styles.contentBody} showsVerticalScrollIndicator={false}>
         
+        {/* Driver Profile Bar */}
+        <View style={styles.driverProfileBar}>
+          <UserAvatar
+            photoUrl={user?.profile_photo_url || user?.profile_photo || user?.avatar || user?.photo_url}
+            name={user?.full_name || "Captain Driver"}
+            size={44}
+            fallbackBgColor="#059669"
+            textColor="#FFFFFF"
+            showStatusDot={true}
+            statusColor="#10B981"
+          />
+          <View style={styles.driverInfoText}>
+            <Text style={styles.driverNameLabel}>{user?.full_name || "Assigned Driver"}</Text>
+            <Text style={styles.driverSubLabel}>Corridor Captain • Hub: {currentDriverHub}</Text>
+          </View>
+          <View style={styles.driverRolePill}>
+            <Text style={styles.driverRoleText}>ONLINE</Text>
+          </View>
+        </View>
+        
         <View style={styles.locationContextBar}>
           <View style={[styles.contextDot, rideStatus === "ready" && { backgroundColor: "#10B981" }]} />
           <Text style={styles.contextBarText}>
@@ -118,27 +150,37 @@ export default function WaitingForPassengersScreen({ navigation }) {
           {passengers.length === 0 ? (
             <Text style={styles.emptyManifestText}>Searching for matched riders at {currentDriverHub}...</Text>
           ) : (
-            passengers.map((passenger, index) => (
-              <View key={passenger.userId}>
-                <View style={styles.passengerRow}>
-                  <View style={[styles.avatarCircle, rideStatus === "ready" && styles.avatarCircleArrived]}>
-                    <FontAwesome5 
-                      name="user" 
-                      size={11} 
-                      color={rideStatus === "ready" ? "#10B981" : "#4B5563"} 
+            passengers.map((passenger, index) => {
+              const isReady = rideStatus === "ready" || passenger.status === "ready" || passenger.status === "accepted";
+              return (
+                <View key={`passenger-item-${passenger.userId}-${index}`}>
+                  <View style={styles.passengerRow}>
+                    <UserAvatar
+                      photoUrl={passenger.profilePhoto}
+                      name={passenger.name}
+                      id={passenger.userId}
+                      size={38}
+                      fallbackBgColor={isReady ? "#059669" : "#2563EB"}
+                      textColor="#FFFFFF"
+                      showStatusDot={true}
+                      statusColor={isReady ? "#10B981" : "#F59E0B"}
                     />
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.passengerNameText}>{passenger.name}</Text>
+                      <Text style={styles.passengerMetaText}>
+                        Status: {passenger.status.toUpperCase()} • Hub verified
+                      </Text>
+                    </View>
+                    <View style={[styles.statusBadge, isReady && styles.statusBadgeArrived]}>
+                      <Text style={[styles.statusBadgeText, isReady && styles.statusBadgeTextArrived]}>
+                        {isReady ? "Matched" : "Pending"}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.passengerNameText}>Rider (ID: {passenger.userId})</Text>
-                    <Text style={styles.passengerMetaText}>Status: {passenger.status.toUpperCase()} • Hub verified</Text>
-                  </View>
-                  <Text style={[styles.statusBadgeText, rideStatus === "ready" && styles.statusBadgeTextArrived]}>
-                    {rideStatus === "ready" ? "Matched" : "Pending"}
-                  </Text>
+                  {index < passengers.length - 1 && <View style={styles.horizontalDivider} />}
                 </View>
-                {index < passengers.length - 1 && <View style={styles.horizontalDivider} />}
-              </View>
-            ))
+              );
+            })
           )}
         </View>
 
@@ -185,6 +227,28 @@ const styles = StyleSheet.create({
   timerLocked: { backgroundColor: "#D1FAE5" },
   timerText: { color: "#E11D48", fontSize: 13, fontWeight: "700" },
   contentBody: { flex: 1, paddingHorizontal: 16, paddingTop: 14 },
+  driverProfileBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    padding: 12,
+    marginBottom: 14,
+  },
+  driverInfoText: { flex: 1, marginLeft: 12 },
+  driverNameLabel: { fontSize: 14, fontWeight: "700", color: "#111827" },
+  driverSubLabel: { fontSize: 12, color: "#6B7280", marginTop: 2 },
+  driverRolePill: {
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  driverRoleText: { color: "#059669", fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
   locationContextBar: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 8, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 18 },
   contextDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#F59E0B", marginRight: 8 },
   contextBarText: { fontSize: 12, color: "#4B5563", fontWeight: "500" },
@@ -196,7 +260,16 @@ const styles = StyleSheet.create({
   avatarCircleArrived: { backgroundColor: "#D1FAE5" },
   passengerNameText: { fontSize: 14, fontWeight: "600", color: "#111827" },
   passengerMetaText: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  statusBadgeText: { fontSize: 12, color: "#4B5563", fontWeight: "500" },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "#F3F4F6",
+  },
+  statusBadgeArrived: {
+    backgroundColor: "#ECFDF5",
+  },
+  statusBadgeText: { fontSize: 12, color: "#4B5563", fontWeight: "600" },
   statusBadgeTextArrived: { color: "#10B981", fontWeight: "700" },
   horizontalDivider: { height: 1, backgroundColor: "#F3F4F6" },
   financialCardGrid: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E5E7EB", paddingHorizontal: 16, marginBottom: 16 },

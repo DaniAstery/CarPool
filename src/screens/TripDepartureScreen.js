@@ -19,6 +19,7 @@ import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 import { playSound } from "../utils/soundPlayer";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { isValidMapCoordinate, toMapCoordinate } from "../utils/mapCoordinates";
+import UserAvatar from "../components/UserAvatar";
 
 const { width, height } = Dimensions.get("window");
 const API_URL = `${(
@@ -332,16 +333,26 @@ export default function TripDepartureScreen({ route, navigation }) {
                 name: p.full_name || p.name || `Rider ${p.user_id || idx}`,
                 status: p.status || "accepted",
                 color: colorPalette[idx % colorPalette.length],
+                photoUrl: p.profile_photo_url || p.profile_photo || p.profilePhoto || p.avatar || p.photo_url || null,
                 isCurrentUser: Number(p.user_id) === Number(userId),
               }));
 
               const formattedCoRiders = formattedPassengers.filter(p => !p.isCurrentUser);
               const computedPassengerCount = Math.max(1, rawPassengers.length);
 
+              const dPhoto =
+                trackData.driverPhoto ||
+                trackData.driver_photo ||
+                trackData.driver_photo_url ||
+                trackData.driver?.profile_photo_url ||
+                trackData.driver?.photo_url ||
+                null;
+
               setRideDetails(prev => ({
                 ...prev,
                 corridor: trackData.corridor || prev.corridor,
                 driverName: trackData.driverName || prev.driverName,
+                driverPhoto: dPhoto || prev.driverPhoto,
                 vehicleInfo: trackData.vehicleInfo || prev.vehicleInfo,
                 driverRating: trackData.driverRating || prev.driverRating,
                 totalPrice: trackData.finalPrice || trackData.totalPrice || statusData.totalPrice || prev.totalPrice,
@@ -515,8 +526,15 @@ export default function TripDepartureScreen({ route, navigation }) {
 
           {/* Driver & Vehicle Card */}
           <View style={styles.driverCard}>
-            <FontAwesome5 name="car-side" size={20} color="#2F4F4F" />
-            <View style={{ marginLeft: 10, flex: 1 }}>
+            <UserAvatar
+              photoUrl={rideDetails.driverPhoto}
+              name={rideDetails.driverName}
+              size={42}
+              fallbackIcon="car"
+              fallbackBgColor="#E2E8F0"
+              textColor="#1E293B"
+            />
+            <View style={{ marginLeft: 12, flex: 1 }}>
               <Text style={styles.driverLabel}>{rideDetails.driverName} • {rideDetails.vehicleInfo}</Text>
               <Text style={styles.driverSub}>Corridor Axis: <Text style={styles.boldText}>{rideDetails.corridor}</Text></Text>
             </View>
@@ -539,12 +557,20 @@ export default function TripDepartureScreen({ route, navigation }) {
               <View style={styles.coRidersListContainer}>
                 {rideDetails.passengers.map((rider) => (
                   <View key={rider.id} style={styles.coRiderRowItem}>
-                    <View style={[styles.miniAvatar, { backgroundColor: rider.color }]}>
-                      <Text style={styles.miniAvatarText}>{rider.name.charAt(0).toUpperCase()}</Text>
+                    <UserAvatar
+                      photoUrl={rider.photoUrl}
+                      name={rider.name}
+                      id={rider.id}
+                      size={34}
+                      fallbackBgColor={rider.color}
+                      textColor="#FFFFFF"
+                    />
+                    <View style={{ marginLeft: 10, flex: 1 }}>
+                      <Text style={styles.coRiderNameText}>
+                        {rider.name} {rider.isCurrentUser && <Text style={styles.youBadgeText}>(You)</Text>}
+                      </Text>
+                      <Text style={styles.coRiderSubText}>Seat Occupied • ID: {rider.id}</Text>
                     </View>
-                    <Text style={styles.coRiderNameText}>
-                      {rider.name} {rider.isCurrentUser && <Text style={styles.youBadgeText}>(You)</Text>}
-                    </Text>
                     <Text style={styles.coRiderStatusTag}>ON BOARD</Text>
                   </View>
                 ))}
